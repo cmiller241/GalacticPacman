@@ -1,0 +1,1756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galactic Pac-Man</title>
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #000050, #000010);
+        }
+        canvas {
+            display: block;
+            border: 1px solid #000;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        // Set initial canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        let sceneWidth = canvas.width * 2;
+        let sceneHeight = canvas.height * 2;
+        // Add resize listener
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            sceneWidth = canvas.width * 2;
+            sceneHeight = canvas.height * 2;
+            stars.length = 0;
+            for (let i = 0; i < STAR_COUNT; i++) {
+                stars.push({
+                    x: Math.random() * sceneWidth,
+                    y: Math.random() * sceneHeight,
+                    size: Math.random() * 2 + 1
+                });
+            }
+        });
+
+        // Audio setup
+        const eatDotAudio0 = new Audio('sounds/eat_dot_0.wav');
+        const eatDotAudio1 = new Audio('sounds/eat_dot_1.wav');
+        const deathAudio = new Audio('sounds/death_0.wav');
+        const jumpAudio = new Audio('sounds/jump.wav');
+        const jumpSmallAudio = new Audio('sounds/jumpsmall.wav');
+        [eatDotAudio0, eatDotAudio1, deathAudio, jumpAudio, jumpSmallAudio].forEach(audio => {
+            audio.volume = 0.5;
+            audio.preload = 'auto';
+            audio.load();
+        });
+        let eatDotIndex = 0;
+        function playEatDot() {
+            const source = eatDotIndex === 0 ? eatDotAudio0 : eatDotAudio1;
+            eatDotIndex = 1 - eatDotIndex; // Toggle between 0 and 1
+            const audio = source.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playDeath() {
+            const audio = deathAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playJump() {
+            const audio = jumpAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playJumpSmall() {
+            const audio = jumpSmallAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+
+        const planetTexture = new Image();
+        planetTexture.src = "img/planet_texture_2.jpg";
+        planetTexture.onload = () => {
+            initGame();
+            gameLoop();
+        };
+
+        // =======================
+        // Constants
+        // =======================
+        const GRAVITY_STRENGTH = 0.35;
+        const GROUND_POUND_GRAV_MULTIPLIER = 3;
+        const GROUND_POUND_PUSH_STRENGTH = 0.05;
+        const JUMP_STRENGTH = 9;
+        const MOVE_SPEED = 0.05;
+        const PLAYER_RADIUS = 20;
+        const ENEMY_RADIUS = 20;
+        const COIN_RADIUS = 5;
+        const COIN_ORBIT_OFFSET = 18;
+        const INFLUENCE_PADDING = 140;
+        const SURFACE_TOLERANCE = 4;
+        const DRAG = 0.995;
+        const PLANET_SPEED = 0.8;
+        const ENEMY_JUMP_PROB = 0.0005;
+        const STAR_COUNT = 800; // Increased for larger scene
+
+        // Maze constants (classic Pac-Man proportions)
+        const MAZE_TILE_SIZE = 12;
+        const MAZE_COLS = 28;
+        const MAZE_ROWS = 29;
+        const MAZE_EXIT_COL_LEFT = 13;
+        const MAZE_EXIT_COL_RIGHT = 14;
+        const MAZE_EXIT_ROW = 13;
+        const mazeLayout = [
+            "     ##################     ",
+            "     #.......##.......#     ",
+            "     #.#####.##.#####.#     ",
+            "     #.#####.##.#####.#     ",
+            "######.#####.##.#####.######",
+            "#..........................#",
+            "#.####.##.########.##.####.#",
+            "#.####.##.########.##.####.#",
+            "#......##....##....##......#",
+            "#.####.#####.##.#####.####.#",
+            "#.####.#####.##.#####.####.#",
+            "#.####.##          ##.####.#",
+            "#......## ######## ##......#",
+            "#.####.## #      # ##.####.#",
+            "#.####.   #      #   .####.#",
+            "#......## #      # ##......#",
+            "#.####.## ###--### ##.####.#",
+            "#.####.##          ##.####.#",
+            "#.####.## ######## ##.####.#",
+            "#.####.##.########.##.####.#",
+            "#............##............#",
+            "#.####.#####.##.#####.####.#",
+            "#.####.#####.##.#####.####.#",
+            "#.####.#####.##.#####.####.#",
+            "#..........................#",
+            "######.##.########.##.######",
+            "     #.##.########.##.#     ",
+            "     #................#     ",
+            "     ##################     "
+        ];
+
+        // =======================
+        // Vector2
+        // =======================
+        class Vector2 {
+            constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+            add(v) { this.x += v.x; this.y += v.y; return this; }
+            subtract(v) { return new Vector2(this.x - v.x, this.y - v.y); }
+            multiply(s) { return new Vector2(this.x * s, this.y * s); }
+            length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            normalize() { const len = this.length(); if (len > 0) { this.x /= len; this.y /= len; } return this; }
+            clone() { return new Vector2(this.x, this.y); }
+            dot(v) { return this.x * v.x + this.y * v.y; }
+        }
+        // =======================
+        // Planetoid
+        // =======================
+        class Planetoid {
+            constructor(x, y, radius, color) {
+                this.pos = new Vector2(x, y);
+                this.radius = radius;
+                this.mass = radius * radius;
+                this.influenceRadius = radius + INFLUENCE_PADDING;
+                this.color = color;
+                let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+                this.vel = direction.multiply(PLANET_SPEED);
+                this.cachedAlpha = 0.3;         //Only calculating alpha for influence radius every so often
+                this.lastAlphaUpdate = 0;       //Only calculating alpha for influence radius every so often
+                this.isSpikey = false;
+            }
+
+            // In the Planetoid class, add this method after the constructor:
+
+            createOffscreen() {
+                this.offscreen = document.createElement('canvas');
+                this.offscreen.width = this.radius * 2;
+                this.offscreen.height = this.radius * 2;
+                const offCtx = this.offscreen.getContext('2d');
+
+                // 1. Draw textured base (clipped to circle, tiled seamlessly)
+                offCtx.save();
+                offCtx.beginPath();
+                offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+                offCtx.clip();
+                const tiles = 2.5; // Adjust for texture detail (higher = smaller/more tiles)
+                const texSize = this.radius * 2 * tiles;
+                const texOffset = this.radius * tiles;
+                offCtx.drawImage(planetTexture, this.radius - texOffset, this.radius - texOffset, texSize, texSize);
+                offCtx.restore();
+
+                // 2. Apply color tint (multiply)
+                offCtx.save();
+                offCtx.globalCompositeOperation = 'multiply';
+                offCtx.beginPath();
+                offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+                offCtx.fillStyle = this.color;
+                offCtx.fill();
+                offCtx.globalCompositeOperation = 'source-over';
+                offCtx.restore();
+
+                // 3. Apply radial lighting/shading (white->black multiply)
+                offCtx.save();
+                offCtx.globalCompositeOperation = 'multiply';
+                const offsetX = -this.radius * 0.5;
+                const offsetY = -this.radius * 0.5;
+                const lightGradient = offCtx.createRadialGradient(
+                    this.radius + offsetX, this.radius + offsetY, 0,
+                    this.radius + offsetX, this.radius + offsetY, this.radius * 1.5
+                );
+                lightGradient.addColorStop(0, 'white');
+                lightGradient.addColorStop(1, 'black');
+                offCtx.beginPath();
+                offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+                offCtx.fillStyle = lightGradient;
+                offCtx.fill();
+                offCtx.globalCompositeOperation = 'source-over';
+                offCtx.restore();
+            }
+
+            draw() {
+                // Influence radius
+                const now = Date.now();
+                if (now - this.lastAlphaUpdate > 500) {
+                    const dist = this.pos.subtract(player.pos).length();
+                    this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
+                    this.lastAlphaUpdate = now;
+                }               
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 5]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Set glow shadow
+                ctx.shadowColor = 'rgba(173,216,230,0.3)';
+                ctx.shadowBlur = 25;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+
+                // Draw pre-rendered offscreen canvas
+                ctx.shadowColor = 'rgba(173,216,230,0.3)';
+                ctx.shadowBlur = 25;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+
+                if (this.offscreen) {
+                    ctx.drawImage(this.offscreen, this.pos.x - this.radius, this.pos.y - this.radius);
+                } else {
+                    // Fallback: original gradient if offscreen not ready
+                    const offsetX = -this.radius * 0.5;
+                    const offsetY = -this.radius * 0.5;
+                    const gradient = ctx.createRadialGradient(
+                        this.pos.x + offsetX, this.pos.y + offsetY, 0,
+                        this.pos.x + offsetX, this.pos.y + offsetY, this.radius * 1.5
+                    );
+                    gradient.addColorStop(0, this.color);
+                    gradient.addColorStop(1, 'black');
+                    ctx.beginPath();
+                    ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+                }
+
+                // Reset shadow
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+            }
+        }
+
+        class SpikeyPlanetoid extends Planetoid {
+            constructor(x, y, radius) {
+                super(x, y, radius, 'gray');
+                this.isSpikey = true;
+                this.spikeHeight = 8;
+                this.spikeSpacing = 6;
+                this.padding = this.spikeHeight;
+            }
+
+            createOffscreen() {
+                const padding = this.padding;
+                this.offscreen = document.createElement('canvas');
+                this.offscreen.width = 2 * (this.radius + padding);
+                this.offscreen.height = 2 * (this.radius + padding);
+                const offCtx = this.offscreen.getContext('2d');
+                const cx = this.radius + padding;
+                const cy = this.radius + padding;
+
+                // Draw base circle
+                offCtx.beginPath();
+                offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
+                offCtx.fillStyle = this.color;
+                offCtx.fill();
+
+                // Apply radial lighting/shading (white->black multiply)
+                offCtx.save();
+                offCtx.globalCompositeOperation = 'multiply';
+                const offsetX = -this.radius * 0.5;
+                const offsetY = -this.radius * 0.5;
+                const lightGradient = offCtx.createRadialGradient(
+                    cx + offsetX, cy + offsetY, 0,
+                    cx + offsetX, cy + offsetY, this.radius * 1.5
+                );
+                lightGradient.addColorStop(0, 'white');
+                lightGradient.addColorStop(1, 'black');
+                offCtx.beginPath();
+                offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
+                offCtx.fillStyle = lightGradient;
+                offCtx.fill();
+                offCtx.globalCompositeOperation = 'source-over';
+                offCtx.restore();
+
+                // Draw spikes
+                const numSpikes = Math.floor(2 * Math.PI * this.radius / this.spikeSpacing);
+                const angleStep = 2 * Math.PI / numSpikes;
+                const halfBaseAngle = angleStep / 2;
+                for (let i = 0; i < numSpikes; i++) {
+                    const angle = i * angleStep;
+                    const leftAngle = angle - halfBaseAngle;
+                    const rightAngle = angle + halfBaseAngle;
+                    const baseLeftX = cx + Math.cos(leftAngle) * this.radius;
+                    const baseLeftY = cy + Math.sin(leftAngle) * this.radius;
+                    const baseRightX = cx + Math.cos(rightAngle) * this.radius;
+                    const baseRightY = cy + Math.sin(rightAngle) * this.radius;
+                    const tipX = cx + Math.cos(angle) * (this.radius + this.spikeHeight);
+                    const tipY = cy + Math.sin(angle) * (this.radius + this.spikeHeight);
+                    offCtx.beginPath();
+                    offCtx.moveTo(baseLeftX, baseLeftY);
+                    offCtx.lineTo(tipX, tipY);
+                    offCtx.lineTo(baseRightX, baseRightY);
+                    offCtx.closePath();
+                    offCtx.fillStyle = 'darkgray';
+                    offCtx.fill();
+                }
+            }
+
+            draw() {
+                // Influence radius
+                const now = Date.now();
+                if (now - this.lastAlphaUpdate > 500) {
+                    const dist = this.pos.subtract(player.pos).length();
+                    this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
+                    this.lastAlphaUpdate = now;
+                }               
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 5]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Set glow shadow
+                ctx.shadowColor = 'rgba(173,216,230,0.3)';
+                ctx.shadowBlur = 25;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+
+                if (this.offscreen) {
+                    ctx.drawImage(this.offscreen, this.pos.x - (this.radius + this.padding), this.pos.y - (this.radius + this.padding));
+                } else {
+                    // Fallback: gray circle
+                    ctx.beginPath();
+                    ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                }
+
+                // Reset shadow
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+            }
+        }
+
+        class BeamParticle {
+            constructor(pos, vel, life = 40) {
+                this.pos = pos.clone();
+                this.vel = vel;
+                this.life = life;
+                this.maxLife = life;
+            }
+
+            update() {
+                this.pos.add(this.vel);
+                this.life--;
+            }
+
+            draw() {
+                if (this.life <= 0) return;
+
+                const alpha = this.life / this.maxLife;
+
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+                ctx.fill();
+            }
+        }
+
+        class PortalParticle {
+            constructor(pos, vel, life = 35) {
+                this.pos = pos.clone();
+                this.vel = vel;
+                this.life = life;
+                this.maxLife = life;
+            }
+
+            update() {
+                this.pos.add(this.vel);
+                this.life--;
+            }
+
+            draw() {
+                if (this.life <= 0) return;
+
+                const alpha = this.life / this.maxLife;
+                const size = 3 * alpha;
+
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+                ctx.fill();
+            }
+        }
+
+        // =======================
+        // MazePlanetoid
+        // =======================
+        class MazePlanetoid extends Planetoid {
+            constructor(x, y, radius) {
+                super(x, y, radius, '#8A2BE2'); // vivid purple
+                this.beamAngle = -Math.PI / 2; // top
+                this.beamLength = 140;
+                this.beamWidth = 14;
+                this.beamParticles = [];
+                this.portalParticles = [];
+            }
+
+            draw() {
+                // Normal planet + influence glow
+                super.draw();
+
+                // === DRAW CLASSIC PAC-MAN MAZE OVERLAY ===
+                const offsetX = this.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
+                const offsetY = this.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
+
+                ctx.save();
+                ctx.globalAlpha = 0.5;  // Set transparency (0.5 = 50% opaque; adjust as needed)
+
+                // Walls
+                ctx.fillStyle = '#cc00cc';
+                ctx.strokeStyle = '#330033';
+                ctx.lineWidth = 4;
+                for (let row = 0; row < MAZE_ROWS; row++) {
+                    for (let col = 0; col < MAZE_COLS; col++) {
+                        if (mazeWalls[row][col]) {
+                            ctx.fillRect(offsetX + col * MAZE_TILE_SIZE, offsetY + row * MAZE_TILE_SIZE, MAZE_TILE_SIZE, MAZE_TILE_SIZE);
+                        }
+                    }
+                }
+
+                ctx.globalAlpha = 1.0;
+
+                // Dots
+                ctx.fillStyle = '#FFFFFF';
+                for (let dot of mazeDots) {
+                    const x = offsetX + dot.x * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                    const y = offsetY + dot.y * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Power pellets
+                ctx.fillStyle = '#FFFF00';
+                for (let pp of powerPellets) {
+                    const x = offsetX + pp.x * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                    const y = offsetY + pp.y * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // === DRAW EXIT PORTAL ===
+                const portalX = offsetX + (MAZE_EXIT_COL_LEFT+0.5) * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                const portalY = offsetY + MAZE_EXIT_ROW * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+
+                const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
+
+                ctx.beginPath();
+                ctx.arc(portalX, portalY, 10 + pulse * 4, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 0, 255, ${0.7 + pulse * 0.3})`;
+                ctx.fill();
+
+                ctx.strokeStyle = '#ffaaff';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                // Draw maze ghosts (on top of maze overlay)
+                mazeGhosts.forEach(g => g.draw());
+
+                ctx.restore();
+
+                // === SPAWN PORTAL PARTICLES ===
+                if (Math.random() < 0.5) {
+
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 1 + Math.random() * 2;
+
+                    const vel = new Vector2(
+                        Math.cos(angle) * speed,
+                        Math.sin(angle) * speed
+                    );
+
+                    const spawnPos = new Vector2(portalX, portalY);
+
+                    this.portalParticles.push(
+                        new PortalParticle(spawnPos, vel, 40)
+                    );
+                }
+
+                // === FUCHSIA BEAM ON TOP ===
+                const beamStartX = this.pos.x + Math.cos(this.beamAngle) * this.radius;
+                const beamStartY = this.pos.y + Math.sin(this.beamAngle) * this.radius;
+                const beamEndX = beamStartX + Math.cos(this.beamAngle) * this.beamLength;
+                const beamEndY = beamStartY + Math.sin(this.beamAngle) * this.beamLength;
+
+                // === SPAWN BEAM PARTICLES ===
+                if (Math.random() < 0.6) {
+
+                    const beamDir = new Vector2(
+                        Math.cos(this.beamAngle),
+                        Math.sin(this.beamAngle)
+                    );
+
+                    // Slight sideways drift
+                    const side = new Vector2(
+                        -beamDir.y,
+                        beamDir.x
+                    ).multiply((Math.random() - 0.5) * 1.5);
+
+                    const speed = 2 + Math.random() * 2;
+
+                    const vel = beamDir.multiply(speed).add(side);
+
+                    const spawnPos = new Vector2(beamStartX, beamStartY);
+
+                    this.beamParticles.push(new BeamParticle(spawnPos, vel, 50));
+                }
+
+                // Create a linear gradient for the beam (opaque at base, transparent at top)
+                const gradient = ctx.createLinearGradient(beamStartX, beamStartY, beamEndX, beamEndY);
+                gradient.addColorStop(0, 'rgba(255, 0, 255, 1)');  // Fully opaque fuchsia at base
+                gradient.addColorStop(1, 'rgba(255, 0, 255, 0)');  // Fully transparent at top
+
+                ctx.shadowColor = '#FF00FF';
+                ctx.shadowBlur = 60;
+                ctx.strokeStyle = gradient;  // Use gradient instead of solid color
+                ctx.lineWidth = this.beamWidth;
+                ctx.beginPath();
+                ctx.moveTo(beamStartX, beamStartY);
+                ctx.lineTo(beamEndX, beamEndY);
+                ctx.stroke();
+
+                // Extra glow lines (using the same gradient for consistent fading)
+                ctx.lineWidth = 4;
+                ctx.shadowBlur = 20;
+                ctx.strokeStyle = gradient;  // Reuse or recreate if needed for precision
+                ctx.beginPath();
+                ctx.moveTo(beamStartX - 8, beamStartY);
+                ctx.lineTo(beamEndX - 8, beamEndY);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(beamStartX + 8, beamStartY);
+                ctx.lineTo(beamEndX + 8, beamEndY);
+                ctx.stroke();
+
+                ctx.shadowBlur = 0;
+                
+                // === UPDATE & DRAW BEAM PARTICLES ===
+                for (let i = this.beamParticles.length - 1; i >= 0; i--) {
+                    const p = this.beamParticles[i];
+                    p.update();
+                    p.draw();
+
+                    if (p.life <= 0) {
+                        this.beamParticles.splice(i, 1);
+                    }
+                }
+
+                // === UPDATE & DRAW PORTAL PARTICLES ===
+                for (let i = this.portalParticles.length - 1; i >= 0; i--) {
+
+                    const p = this.portalParticles[i];
+                    p.update();
+                    p.draw();
+
+                    if (p.life <= 0) {
+                        this.portalParticles.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        // =======================
+        // MazeGhost (Miniature ghosts in maze)
+        // =======================
+        class MazeGhost {
+            constructor(col, row, color) {
+                this.mazeCol = col;
+                this.mazeRow = row;
+                this.color = color;
+                this.radius = 10; // Miniature size
+                this.dir = new Vector2(1, 0); // Initial direction (right)
+                this.lastMoveTime = Date.now();
+            }
+            update() {
+                const now = Date.now();
+                if (now - this.lastMoveTime < 110) return; // Match player move speed
+                this.lastMoveTime = now;
+
+                // Define all 4 directions
+                const dirs = [
+                    new Vector2(1, 0),   // right
+                    new Vector2(0, 1),   // down
+                    new Vector2(-1, 0),  // left
+                    new Vector2(0, -1)   // up
+                ];
+
+                // Find possible directions: open paths, excluding immediate reverse
+                let possible = [];
+                for (let d of dirs) {
+                    let testCol = this.mazeCol + d.x;
+                    // Wrap columns for tunnels
+                    if (testCol < 0) testCol = MAZE_COLS - 1;
+                    if (testCol >= MAZE_COLS) testCol = 0;
+                    let testRow = this.mazeRow + d.y;
+                    const isReverse = (d.x === -this.dir.x && d.y === -this.dir.y);
+                    if (!isWall(testCol, testRow) && !isReverse) {
+                        possible.push(d.clone());
+                    }
+                }
+
+                // If no options (rare dead-end), allow reverse as fallback
+                if (possible.length === 0) {
+                    for (let d of dirs) {
+                        let testCol = this.mazeCol + d.x;
+                        if (testCol < 0) testCol = MAZE_COLS - 1;
+                        if (testCol >= MAZE_COLS) testCol = 0;
+                        let testRow = this.mazeRow + d.y;
+                        if (!isWall(testCol, testRow)) {
+                            possible.push(d.clone());
+                        }
+                    }
+                }
+
+                // Check if straight ahead is possible
+                const straightOpen = possible.some(d => d.x === this.dir.x && d.y === this.dir.y);
+
+                // Prefer straight 80% of the time if open, else random turn
+                if (straightOpen && Math.random() < 0.8) {
+                    // Keep current dir (straight)
+                } else {
+                    // Pick random from possible (turn or forced)
+                    this.dir = possible[Math.floor(Math.random() * possible.length)];
+                }
+
+                // Move forward in chosen dir
+                let newCol = this.mazeCol + this.dir.x;
+                let newRow = this.mazeRow + this.dir.y;
+                // Wrap columns
+                if (newCol < 0) newCol = MAZE_COLS - 1;
+                if (newCol >= MAZE_COLS) newCol = 0;
+                this.mazeCol = newCol;
+                this.mazeRow = newRow;
+            }
+            draw() {
+                const offsetX = mazePlanet.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
+                const offsetY = mazePlanet.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
+                const x = offsetX + this.mazeCol * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+                const y = offsetY + this.mazeRow * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.globalAlpha = 1; // Match maze overlay transparency
+
+                // Body: semicircle on top, wavy bottom
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, Math.PI, 0, false);
+                ctx.lineTo(this.radius, this.radius);
+                ctx.lineTo(this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius, this.radius);
+                ctx.closePath();
+                ctx.fill();
+
+                // Eyes (facing "up" for simplicity)
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.globalAlpha = 1.0;
+                ctx.restore();
+            }
+        }
+
+        // =======================
+        // Asteroid
+        // =======================
+        class Asteroid {
+            constructor(x, y, radius) {
+                this.pos = new Vector2(x, y);
+                this.radius = radius;
+                this.mass = radius * radius;
+                let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+                this.vel = direction.multiply(PLANET_SPEED);
+                this.angularSpeed = (Math.random() * 2 - 1) * 0.05;
+                this.angle = Math.random() * Math.PI * 2;
+                this.color = '#8B4513'; // Dark (but not too dark) brown
+                this.points = this.generatePoints();
+            }
+            generatePoints() {
+                const numSides = 6 + Math.floor(Math.random() * 6); // 6-11 sides
+                const points = [];
+                const angleStep = 2 * Math.PI / numSides;
+                for (let i = 0; i < numSides; i++) {
+                    const a = i * angleStep + (Math.random() - 0.5) * angleStep * 0.5;
+                    const r = this.radius * (0.7 + Math.random() * 0.6);
+                    points.push(new Vector2(Math.cos(a) * r, Math.sin(a) * r));
+                }
+                return points;
+            }
+            update() {
+                this.vel = this.vel.multiply(DRAG); // Add drag to prevent excessive speedup
+                this.pos.add(this.vel);
+                this.angle += this.angularSpeed;
+                // Bounce off walls
+                if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
+                if (this.pos.x + this.radius > sceneWidth) { this.pos.x = sceneWidth - this.radius; this.vel.x = -this.vel.x; }
+                if (this.pos.y - this.radius < 0) { this.pos.y = this.radius; this.vel.y = -this.vel.y; }
+                if (this.pos.y + this.radius > sceneHeight) { this.pos.y = sceneHeight - this.radius; this.vel.y = -this.vel.y; }
+            }
+            draw() {
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(this.angle);
+                ctx.beginPath();
+                ctx.moveTo(this.points[0].x, this.points[0].y);
+                for (let i = 1; i < this.points.length; i++) {
+                    ctx.lineTo(this.points[i].x, this.points[i].y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.strokeStyle = 'black'; // Outline
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+        // =======================
+        // Particle
+        // =======================
+        class Particle {
+            constructor(pos, vel, life = 40) {
+                this.pos = pos.clone();
+                this.vel = vel;
+                this.life = life;
+            }
+            update() {
+                this.pos.add(this.vel);
+                this.life--;
+            }
+            draw() {
+                if (this.life <= 0) return;
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 0, ${this.life / 40})`;
+                ctx.fill();
+            }
+        }
+        // =======================
+        // Player (Pac-Man)
+        // =======================
+        class Player {
+            constructor(x, y) {
+                this.pos = new Vector2(x, y);
+                this.vel = new Vector2(0, 0);
+                this.radius = PLAYER_RADIUS;
+                this.onSurface = false;
+                this.currentPlanet = null;
+                this.lastInfluencePlanet = null;
+                this.angle = 0;
+                this.mouthAngle = 0; // For animating mouth
+                this.facingDirection = 1; // 1 for right (increasing angle), -1 for left
+                this.isGroundPounding = false;
+                this.inMaze = false;
+                this.mazeCol = 14;
+                this.mazeRow = 15;
+                this.mazeDir = new Vector2(1, 0);
+                this.lastMoveTime = 0;
+                this.isTeleporting = false;
+                this.teleportStartTime = 0;
+                this.teleportDuration = 900; // milliseconds
+                this.teleportScale = 1;
+                this.teleportGlow = 0;
+            }
+            findDominantPlanet(planets) {
+                let closest = null, minDist = Infinity;
+                for (const planet of planets) {
+                    const dist = this.pos.subtract(planet.pos).length();
+                    if (dist < planet.influenceRadius && dist < minDist) {
+                        minDist = dist;
+                        closest = planet;
+                    }
+                }
+                return closest;
+            }
+            applyGravity(planets) {
+                if (this.onSurface) return;
+                let planet = this.findDominantPlanet(planets);
+                if (!planet && this.lastInfluencePlanet) planet = this.lastInfluencePlanet;
+                if (planet) {
+                    this.lastInfluencePlanet = planet;
+                    const direction = planet.pos.subtract(this.pos).normalize();
+                    let grav = GRAVITY_STRENGTH;
+                    if (this.isGroundPounding) grav *= GROUND_POUND_GRAV_MULTIPLIER;
+                    this.vel.add(direction.multiply(grav));
+                }
+            }
+            checkCollision(planets) {
+                // First, check for collision with spikey planetoids (death)
+                for (const planet of planets.filter(p => p.isSpikey)) {
+                    const dist = this.pos.subtract(planet.pos).length();
+                    if (dist <= planet.radius + this.radius + SURFACE_TOLERANCE) {
+                        playDeath();
+                        gameOver = true;
+                        return;
+                    }
+                }
+                
+                if (this.onSurface) return;
+
+                // If not dead, check for landing on non-spikey planetoids
+                for (const planet of planets.filter(p => !p.isSpikey)) {
+                    const offset = this.pos.subtract(planet.pos);
+                    const dist = offset.length();
+                    const surfaceDist = planet.radius + this.radius;
+                    if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+                        const normal = offset.normalize();
+                        this.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
+                        this.onSurface = true;
+                        this.currentPlanet = planet;
+                        this.lastInfluencePlanet = planet;
+                        const impactVel = this.vel.clone();
+                        this.vel.x = 0; this.vel.y = 0;
+                        this.angle = Math.atan2(this.pos.y - planet.pos.y, this.pos.x - planet.pos.x);
+                        if (this.isGroundPounding) {
+                            this.isGroundPounding = false;
+                            const pushDir = normal.multiply(-1);
+                            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+                            createParticles(this.pos, 20);
+                        }
+                        return;
+                    }
+                }
+                this.onSurface = false; this.currentPlanet = null;
+            }
+            move(keys) {
+                if (this.inMaze) {
+                    const now = Date.now();
+                    if (now - this.lastMoveTime < 110) return;
+
+                    let dx = 0, dy = 0;
+                    if (keys['ArrowLeft']) dx = -1;
+                    if (keys['ArrowRight']) dx = 1;
+                    if (keys['ArrowUp']) dy = -1;
+                    if (keys['ArrowDown']) dy = 1;
+
+                    if (dx !== 0 || dy !== 0) {
+                        const newCol = this.mazeCol + dx;
+                        const newRow = this.mazeRow + dy;
+                        if (dy === -1 && this.mazeRow === (MAZE_EXIT_ROW) && (this.mazeCol === MAZE_EXIT_COL_LEFT || this.mazeCol === MAZE_EXIT_COL_RIGHT)) {
+                            startTeleportFromMaze();
+                            return;
+                        }
+                        if (!isWall(newCol, newRow)) {
+                            this.mazeCol = newCol;
+                            this.mazeRow = newRow;
+                            this.mazeDir = new Vector2(dx || this.mazeDir.x, dy || this.mazeDir.y).normalize();
+                            this.lastMoveTime = now;
+                            updatePlayerMazePosition();
+                        }
+                    }
+                    return;
+                }
+
+                if (this.onSurface && this.currentPlanet) {
+                    if (keys['ArrowLeft']) {
+                        this.angle -= MOVE_SPEED;
+                        this.facingDirection = -1;
+                    }
+                    if (keys['ArrowRight']) {
+                        this.angle += MOVE_SPEED;
+                        this.facingDirection = 1;
+                    }
+                    const surfaceDist = this.currentPlanet.radius + this.radius;
+                    this.pos.x = this.currentPlanet.pos.x + Math.cos(this.angle) * surfaceDist;
+                    this.pos.y = this.currentPlanet.pos.y + Math.sin(this.angle) * surfaceDist;
+                }
+            }
+            jump() {
+                if (this.onSurface && this.currentPlanet) {
+                    const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
+                    this.vel = direction.multiply(JUMP_STRENGTH);
+                    this.onSurface = false;
+                    this.currentPlanet = null;
+                    playJump();
+                }
+            }
+            tryGroundPound() {
+                if (this.isGroundPounding) return;
+                let planet = this.findDominantPlanet(planetoids) || this.lastInfluencePlanet;
+                if (planet) {
+                    const outwardDir = this.pos.subtract(planet.pos).normalize();
+                    const radialVel = this.vel.dot(outwardDir);
+                    if (radialVel > 0) {
+                        this.isGroundPounding = true;
+                    }
+                }
+            }
+            update() {
+                if (this.isTeleporting) {
+                    const elapsed = Date.now() - this.teleportStartTime;
+                    const t = elapsed / this.teleportDuration;
+                    if (t >= 1) {
+                        this.isTeleporting = false;
+                        if (this.inMaze) {
+                            exitMazeMode();
+                        } else {
+                            enterMazeMode();
+                        }
+                        return;
+                    }
+                    const pulse = Math.sin(t * Math.PI);
+                    this.teleportScale = 1 + pulse * 1.2;
+                    this.teleportGlow = pulse;
+                    // 🔥 PARTICLES SHOOTING INTO BEAM (works for both entry/exit)
+                    if (Math.random() < 0.6) {
+                        // Direction of the maze beam
+                        const beamDir = new Vector2(
+                            Math.cos(mazePlanet.beamAngle),
+                            Math.sin(mazePlanet.beamAngle)
+                        );
+                        // Slight sideways drift
+                        const side = new Vector2(
+                            -beamDir.y,
+                            beamDir.x
+                        ).multiply((Math.random() - 0.5) * 1.5);
+                        const speed = 2 + Math.random() * 2;
+                        const vel = beamDir.multiply(speed).add(side);
+                        particles.push(new Particle(this.pos.clone(), vel));
+                    }
+                    return;
+                }
+
+                if (this.inMaze) {
+                    this.vel = new Vector2(0, 0);
+                    this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+                    return;
+                }
+                if (!this.onSurface) {
+                    this.vel = this.vel.multiply(DRAG);
+                    this.pos.add(this.vel);
+                    // Bound to scene
+                    if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
+                    if (this.pos.x + this.radius > sceneWidth) { this.pos.x = sceneWidth - this.radius; this.vel.x = -this.vel.x; }
+                    if (this.pos.y - this.radius < 0) { this.pos.y = this.radius; this.vel.y = -this.vel.y; }
+                    if (this.pos.y + this.radius > sceneHeight) { this.pos.y = sceneHeight - this.radius; this.vel.y = -this.vel.y; }
+                }
+                // Animate mouth
+                this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+            }
+
+            draw() {
+
+                let scale = 1;
+                let glow = 0;
+
+                if (this.isTeleporting) {
+                    scale = this.teleportScale;
+                    glow = this.teleportGlow;
+                }
+
+                // ==================================================
+                // MAZE MODE
+                // ==================================================
+                if (this.inMaze) {
+
+                    const mazeScale = 0.4;
+
+                    ctx.save();
+                    ctx.translate(this.pos.x, this.pos.y);
+
+                    // Apply teleport glow
+                    if (this.isTeleporting) {
+                        ctx.shadowColor = 'yellow';
+                        ctx.shadowBlur = 40 * glow;
+                    }
+
+                    const rot = Math.atan2(this.mazeDir.y, this.mazeDir.x);
+                    ctx.rotate(rot);
+
+                    // Apply BOTH teleport scale AND maze scale
+                    ctx.scale(scale * mazeScale, scale * mazeScale);
+
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.radius,
+                        this.mouthAngle / 2,
+                        2 * Math.PI - this.mouthAngle / 2
+                    );
+                    ctx.lineTo(0, 0);
+                    ctx.fillStyle = 'yellow';
+                    ctx.fill();
+
+                    ctx.shadowBlur = 0;
+                    ctx.restore();
+                    return;
+                }
+
+                // ==================================================
+                // NORMAL PLANET MODE
+                // ==================================================
+
+                let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+
+                let downDir = new Vector2(0, 1);
+                if (planet) {
+                    downDir = planet.pos.subtract(this.pos).normalize();
+                }
+
+                const downAngle = Math.atan2(downDir.y, downDir.x);
+                const rotation = downAngle - Math.PI / 2;
+
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(rotation);
+
+                // Face direction
+                if (this.facingDirection < 0) {
+                    ctx.rotate(Math.PI);
+                }
+
+                // Apply teleport glow
+                if (this.isTeleporting) {
+                    ctx.shadowColor = 'yellow';
+                    ctx.shadowBlur = 40 * glow;
+                }
+
+                // Apply teleport scaling
+                ctx.scale(scale, scale);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius,
+                    this.mouthAngle / 2,
+                    2 * Math.PI - this.mouthAngle / 2
+                );
+                ctx.lineTo(0, 0);
+                ctx.fillStyle = 'yellow';
+                ctx.fill();
+
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            }
+        }
+        // =======================
+        // Enemy (Ghosts)
+        // =======================
+        class Enemy {
+            constructor(planet, color) {
+                this.planet = planet;
+                this.angularSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.02;
+                this.angle = Math.random() * Math.PI * 2;
+                this.radius = ENEMY_RADIUS;
+                this.pos = new Vector2();
+                this.onSurface = true;
+                this.color = color;
+                this.lastInfluencePlanet = planet;
+                this.updatePosition();
+            }
+            updatePosition() {
+                const surfaceDist = this.planet.radius + this.radius;
+                this.pos.x = this.planet.pos.x + Math.cos(this.angle) * surfaceDist;
+                this.pos.y = this.planet.pos.y + Math.sin(this.angle) * surfaceDist;
+            }
+            update(planets) {
+                // Normal rotation on current planet
+                if (this.onSurface) {
+                    this.angle += this.angularSpeed;
+                    this.updatePosition();
+                    // 10% chance to jump to a nearby planet
+                    if (Math.random() < ENEMY_JUMP_PROB) {
+                        for (const p of planets) {
+                            if (p !== this.planet && !p.isSpikey) {
+                                const dist = this.pos.subtract(p.pos).length();
+                                if (dist < p.influenceRadius) {
+                                    const direction = this.pos.subtract(this.planet.pos).normalize();
+                                    this.vel = direction.multiply(JUMP_STRENGTH);
+                                    this.onSurface = false;
+                                    this.planet = p;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                // Apply gravity if in jump
+                if (!this.onSurface) {
+                    if (!this.vel) this.vel = new Vector2();
+                    let dominant = this.findDominantPlanet(planets);
+                    if (dominant) {
+                        this.lastInfluencePlanet = dominant;
+                        const dir = dominant.pos.subtract(this.pos).normalize();
+                        this.vel.add(dir.multiply(GRAVITY_STRENGTH));
+                    }
+                    this.vel = this.vel.multiply(DRAG);
+                    this.pos.add(this.vel);
+                    // Bound to scene
+                    if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
+                    if (this.pos.x + this.radius > sceneWidth) { this.pos.x = sceneWidth - this.radius; this.vel.x = -this.vel.x; }
+                    if (this.pos.y - this.radius < 0) { this.pos.y = this.radius; this.vel.y = -this.vel.y; }
+                    if (this.pos.y + this.radius > sceneHeight) { this.pos.y = sceneHeight - this.radius; this.vel.y = -this.vel.y; }
+                    if (dominant) {
+                        // Check landing
+                        const offset = this.pos.subtract(dominant.pos);
+                        const dist = offset.length();
+                        if (dist <= dominant.radius + this.radius + SURFACE_TOLERANCE) {
+                            if (!dominant.isSpikey) {
+                                const normal = offset.normalize();
+                                this.pos = dominant.pos.clone().add(normal.multiply(dominant.radius + this.radius));
+                                this.onSurface = true;
+                                this.angle = Math.atan2(this.pos.y - dominant.pos.y, this.pos.x - dominant.pos.x);
+                                this.planet = dominant;
+                                this.vel = new Vector2();
+                            } else {
+                                // Bounce off spikey
+                                const normal = offset.normalize();
+                                const dot = this.vel.dot(normal);
+                                this.vel.subtract(normal.multiply(2 * dot));
+                                this.pos.add(normal.multiply(dominant.radius + this.radius + SURFACE_TOLERANCE - dist));
+                            }
+                        }
+                    }
+                }
+            }
+            findDominantPlanet(planets) {
+                let closest = null, minDist = Infinity;
+                for (const planet of planets) {
+                    const dist = this.pos.subtract(planet.pos).length();
+                    if (dist < planet.influenceRadius && dist < minDist) {
+                        minDist = dist;
+                        closest = planet;
+                    }
+                }
+                return closest;
+            }
+            draw() {
+                // Determine down direction (towards planet center)
+                let planet = this.onSurface ? this.planet : this.lastInfluencePlanet;
+                let downDir = new Vector2(0, 1); // Default
+                if (planet) {
+                    downDir = planet.pos.subtract(this.pos).normalize();
+                }
+                const downAngle = Math.atan2(downDir.y, downDir.x);
+                const rotation = downAngle - Math.PI / 2;
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(rotation);
+                // Draw ghost shape
+                ctx.fillStyle = this.color;
+                // Body: semicircle on top, wavy bottom
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, Math.PI, 0, false); // Top semicircle
+                ctx.lineTo(this.radius, this.radius);
+                ctx.lineTo(this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius, this.radius);
+                ctx.closePath();
+                ctx.fill();
+                // Eyes
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+        // =======================
+        // Coin
+        // =======================
+        class Coin {
+            constructor(planet) {
+                this.planet = planet;
+                this.angularSpeed = (Math.random() - 0.5) * 0.04;
+                this.angle = 0;
+                this.radius = COIN_RADIUS;
+                this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
+                this.pos = new Vector2();
+                this.updatePosition();
+            }
+            updatePosition() {
+                this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
+                this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+            }
+            update() { this.angle += this.angularSpeed; this.updatePosition(); }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'gold';
+                ctx.fill();
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(Date.now() * 0.01);
+                ctx.beginPath();
+                ctx.arc(-this.radius*0.4,-this.radius*0.4,this.radius*0.4,0,Math.PI*2);
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // =======================
+        // Maze helpers
+        // =======================
+        let mazeWalls = [];
+        let mazeDots = [];
+        let powerPellets = [];
+        let mazeGhosts = [];
+        let inMaze = false;
+        let mazePlanet;
+
+        function getRandomOpenMazePos() {
+            const opens = [];
+            for (let row = 0; row < MAZE_ROWS; row++) {
+                for (let col = 0; col < MAZE_COLS; col++) {
+                    if (!isWall(col, row)) {
+                        opens.push({ col, row });
+                    }
+                }
+            }
+            return opens[Math.floor(Math.random() * opens.length)];
+        }
+
+        function buildMazeData() {
+            mazeWalls = Array.from({length: MAZE_ROWS}, () => Array(MAZE_COLS).fill(false));
+            mazeDots = [];
+            powerPellets = [];
+
+            for (let row = 0; row < MAZE_ROWS; row++) {
+                for (let col = 0; col < MAZE_COLS; col++) {
+                    const ch = mazeLayout[row][col];
+                    if (ch === '#') mazeWalls[row][col] = true;
+                    if (ch === '.' || ch === 'o') {
+                        const dot = {x: col, y: row};
+                        if (ch === 'o') powerPellets.push(dot);
+                        else mazeDots.push(dot);
+                    }
+                }
+            }
+        }
+
+        function isWall(col, row) {
+            if (row < 0 || row >= MAZE_ROWS) return true;
+            if (col < 0) col = MAZE_COLS - 1;
+            if (col >= MAZE_COLS) col = 0;
+            return mazeWalls[row][col];
+        }
+
+        function updatePlayerMazePosition() {
+            const offsetX = mazePlanet.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
+            const offsetY = mazePlanet.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
+            player.pos.x = offsetX + player.mazeCol * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+            player.pos.y = offsetY + player.mazeRow * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+        }
+
+        function enterMazeMode() {
+            inMaze = true;
+            player.inMaze = true;
+            player.onSurface = false;
+            player.currentPlanet = null;
+            player.mazeCol = 14;
+            player.mazeRow = 15;
+            player.mazeDir = new Vector2(1, 0);
+            player.lastMoveTime = Date.now();
+            updatePlayerMazePosition();
+        }
+
+        function startTeleportToMaze() {
+            player.isTeleporting = true;
+            player.teleportStartTime = Date.now();
+            player.vel = new Vector2(0, 0);
+            player.onSurface = false; // freeze motion
+        }
+
+        function startTeleportFromMaze() {
+            player.isTeleporting = true;
+            player.teleportStartTime = Date.now();
+            player.vel = new Vector2(0, 0);
+            player.onSurface = false;
+        }
+
+        function exitMazeMode() {
+            inMaze = false;
+            player.inMaze = false;
+            if (mazePlanet) {
+                const surfaceDist = mazePlanet.radius + PLAYER_RADIUS;
+                player.pos.x = mazePlanet.pos.x + Math.cos(mazePlanet.beamAngle) * surfaceDist;
+                player.pos.y = mazePlanet.pos.y + Math.sin(mazePlanet.beamAngle) * surfaceDist;
+                player.angle = mazePlanet.beamAngle;
+                player.onSurface = true;
+                player.currentPlanet = mazePlanet;
+                player.lastInfluencePlanet = mazePlanet;
+            }
+        }
+
+        function checkMazeDots() {
+            if (!inMaze) return;
+            for (let i = mazeDots.length - 1; i >= 0; i--) {
+                const d = mazeDots[i];
+                if (d.x === player.mazeCol && d.y === player.mazeRow) {
+                    playEatDot();
+                    mazeDots.splice(i, 1);
+                    score += 10;
+                }
+            }
+            for (let i = powerPellets.length - 1; i >= 0; i--) {
+                const p = powerPellets[i];
+                if (p.x === player.mazeCol && p.y === player.mazeRow) {
+                    playEatDot();
+                    powerPellets.splice(i, 1);
+                    score += 50;
+                }
+            }
+        }
+
+        // =======================
+        // Game Setup
+        // =======================
+        let planetoids;
+        let asteroids;
+        let player;
+        let enemies;
+        let coins;
+        let particles = [];
+        let gameOver = false;
+        let levelComplete = false;
+        let level = 1;
+        let score = 0;
+        const enemyColors = ['red', 'pink', 'cyan', 'orange'];
+        const planetColors = ['blue', 'green', 'purple', 'orange', 'yellow', 'red', 'cyan'];
+        const keys = {};
+        // Generate stars
+        const stars = [];
+        for (let i = 0; i < STAR_COUNT; i++) {
+            stars.push({
+                x: Math.random() * sceneWidth,
+                y: Math.random() * sceneHeight,
+                size: Math.random() * 2 + 1
+            });
+        }
+        function initGame() {
+            planetoids = [];
+            // Create regular planetoids
+            for (let i = 0; i < 44; i++) {
+                const radius = 30 + Math.random() * 40; // 30-70
+                const x = radius + Math.random() * (sceneWidth - 2 * radius);
+                const y = radius + Math.random() * (sceneHeight - 2 * radius);
+                const color = planetColors[Math.floor(Math.random() * planetColors.length)];
+                planetoids.push(new Planetoid(x, y, radius, color));
+            }
+            // Create spikey planetoids
+            for (let i = 0; i < 16; i++) {
+                const radius = 25 + Math.random() * 15; // 25-40
+                const x = radius + Math.random() * (sceneWidth - 2 * radius);
+                const y = radius + Math.random() * (sceneHeight - 2 * radius);
+                planetoids.push(new SpikeyPlanetoid(x, y, radius));
+            }
+
+            // === SPECIAL MAZE PLANET ===
+            buildMazeData();
+            mazePlanet = new MazePlanetoid(sceneWidth * 0.55, sceneHeight * 0.45, 250);
+            planetoids.push(mazePlanet);
+
+            // Initialize two miniature maze ghosts at random open positions
+            let pos1 = getRandomOpenMazePos();
+            let pos2 = getRandomOpenMazePos();
+            while (pos2.col === pos1.col && pos2.row === pos1.row) {
+                pos2 = getRandomOpenMazePos();
+            }
+            mazeGhosts = [
+                new MazeGhost(pos1.col, pos1.row, 'red'),
+                new MazeGhost(pos2.col, pos2.row, 'pink')
+            ];
+
+            asteroids = [];
+            for (let i = 0; i < 24; i++) {
+                const radius = 20 + Math.random() * 25; // 20-45
+                const x = radius + Math.random() * (sceneWidth - 2 * radius);
+                const y = radius + Math.random() * (sceneHeight - 2 * radius);
+                asteroids.push(new Asteroid(x, y, radius));
+            }
+            const regularPlanets = planetoids.filter(p => !p.isSpikey && p !== mazePlanet);
+            const startingPlanet = regularPlanets[Math.floor(Math.random() * regularPlanets.length)];
+            const surfaceDist = startingPlanet.radius + PLAYER_RADIUS;
+            player = new Player(startingPlanet.pos.x, startingPlanet.pos.y - surfaceDist);
+            player.onSurface = true;
+            player.currentPlanet = startingPlanet;
+            player.lastInfluencePlanet = startingPlanet;
+            player.angle = Math.atan2(player.pos.y - startingPlanet.pos.y, player.pos.x - startingPlanet.pos.x);
+            enemies = [];
+            const numEnemies = (2 + level) * 2;
+            for (let i = 0; i < numEnemies; i++) {
+                let planetIndex = Math.floor(Math.random() * regularPlanets.length);
+                let selectedPlanet = regularPlanets[planetIndex];
+                while (selectedPlanet === startingPlanet) {
+                    planetIndex = Math.floor(Math.random() * regularPlanets.length);
+                    selectedPlanet = regularPlanets[planetIndex];
+                }
+                const color = enemyColors[i % enemyColors.length];
+                enemies.push(new Enemy(selectedPlanet, color));
+            }
+            // Ensure asteroids not too close to player
+            for (let a of asteroids) {
+                let dist = a.pos.subtract(player.pos).length();
+                while (dist < 200) {
+                    a.pos.x = a.radius + Math.random() * (sceneWidth - 2 * a.radius);
+                    a.pos.y = a.radius + Math.random() * (sceneHeight - 2 * a.radius);
+                    dist = a.pos.subtract(player.pos).length();
+                }
+            }
+            coins = [];
+            regularPlanets.forEach((planet) => {
+                const numCoins = 4 + Math.floor(planet.radius / 10);
+                for (let i = 0; i < numCoins; i++) {
+                    const coin = new Coin(planet);
+                    coin.angle = (i / numCoins) * Math.PI * 2 + Math.random() * 0.2;
+                    coins.push(coin);
+                }
+            });
+            planetoids.forEach(p => p.createOffscreen());
+            particles = [];
+            gameOver = false;
+            levelComplete = false;
+            inMaze = false;
+            eatDotIndex = 0; // Reset sound index on restart
+        }
+        function createParticles(atPos, count) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 2;
+                const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+                particles.push(new Particle(atPos, vel));
+            }
+        }
+        function breakAsteroid(ast) {
+            const index = asteroids.indexOf(ast);
+            if (index > -1) {
+                asteroids.splice(index, 1);
+            }
+            createParticles(ast.pos, 150);
+            if (ast.radius < 15) return; 
+            const numSmall = ast.radius > 30 ? 3 : 2;
+            for (let i = 0; i < numSmall; i++) {
+                const smallR = ast.radius / 2;
+                const small = new Asteroid(ast.pos.x, ast.pos.y, smallR);
+                const randVel = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize().multiply(2 + Math.random() * 3);
+                small.vel = ast.vel.clone().add(randVel);
+                small.angle = Math.random() * Math.PI * 2;
+                small.angularSpeed = (Math.random() * 2 - 1) * 0.1;
+                asteroids.push(small);
+            }
+            createParticles(ast.pos, 10);
+        }
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ') {
+                if (player.onSurface && !player.inMaze) player.jump();
+                else if (!player.inMaze) player.tryGroundPound();
+            }
+            if (e.key === 'ArrowDown' && !player.inMaze) {
+                if (player.onSurface && player.currentPlanet === mazePlanet) {
+                    const diff = Math.abs(((player.angle - mazePlanet.beamAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
+                    if (diff < Math.PI / 5) {
+                        startTeleportToMaze();
+                    }
+                }
+            }
+            if (e.key === 'Enter') {
+                if (gameOver) {
+                    score = 0;
+                    level = 1;
+                    initGame();
+                } else if (levelComplete) {
+                    level++;
+                    initGame();
+                    levelComplete = false;
+                }
+            }
+        });
+        window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+        // =======================
+        // Update Functions
+        // =======================
+        function updatePlanetoids() {
+            for (const p of planetoids) {
+                p.pos.add(p.vel);
+                if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
+                if (p.pos.x + p.radius > sceneWidth) { p.pos.x = sceneWidth - p.radius; p.vel.x = -p.vel.x; }
+                if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
+                if (p.pos.y + p.radius > sceneHeight) { p.pos.y = sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+            }
+        }
+        function updateAsteroids() {
+            for (const a of asteroids) {
+                a.update();
+            }
+        }
+        function handleCollisions() {
+            // Planet-planet collisions
+            for (let i = 0; i < planetoids.length; i++) {
+                for (let j = i + 1; j < planetoids.length; j++) {
+                    const p1 = planetoids[i], p2 = planetoids[j];
+                    const offset = p1.pos.subtract(p2.pos);
+                    const dist = offset.length();
+                    if (dist < p1.radius + p2.radius) {
+                        const overlap = p1.radius + p2.radius - dist;
+                        const normal = offset.normalize();
+                        const tangent = new Vector2(-normal.y, normal.x);
+                        const m1 = p1.mass, m2 = p2.mass, totalMass = m1 + m2;
+                        const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+                        p1.pos.add(normal.multiply(sep1));
+                        p2.pos.add(normal.multiply(-sep2));
+                        const v1 = p1.vel.clone(), v2 = p2.vel.clone();
+                        const v1n = normal.dot(v1), v2n = normal.dot(v2);
+                        const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+                        const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+                        const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+                        p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+                        p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+                    }
+                }
+            }
+            // Asteroid-asteroid collisions
+            for (let i = 0; i < asteroids.length; i++) {
+                for (let j = i + 1; j < asteroids.length; j++) {
+                    const p1 = asteroids[i], p2 = asteroids[j];
+                    const offset = p1.pos.subtract(p2.pos);
+                    const dist = offset.length();
+                    if (dist < p1.radius + p2.radius) {
+                        const overlap = p1.radius + p2.radius - dist;
+                        const normal = offset.normalize();
+                        const tangent = new Vector2(-normal.y, normal.x);
+                        const m1 = p1.mass, m2 = p2.mass, totalMass = m1 + m2;
+                        const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+                        p1.pos.add(normal.multiply(sep1));
+                        p2.pos.add(normal.multiply(-sep2));
+                        const v1 = p1.vel.clone(), v2 = p2.vel.clone();
+                        const v1n = normal.dot(v1), v2n = normal.dot(v2);
+                        const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+                        const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+                        const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+                        p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+                        p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+                    }
+                }
+            }
+            // Planet-asteroid collisions
+            let toBreak = new Set();
+            for (let p of planetoids) {
+                for (let a of asteroids) {
+                    const offset = p.pos.subtract(a.pos);
+                    const dist = offset.length();
+                    if (dist < p.radius + a.radius) {
+                        const overlap = p.radius + a.radius - dist;
+                        const normal = offset.normalize();
+                        const tangent = new Vector2(-normal.y, normal.x);
+                        const m1 = p.mass, m2 = a.mass, totalMass = m1 + m2;
+                        const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+                        p.pos.add(normal.multiply(sep1));
+                        a.pos.add(normal.multiply(-sep2));
+                        const v1 = p.vel.clone(), v2 = a.vel.clone();
+                        const v1n = normal.dot(v1), v2n = normal.dot(v2);
+                        const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+                        const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+                        const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+                        p.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+                        a.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+                        toBreak.add(a);
+                    }
+                }
+            }
+            // Break asteroids after all collisions
+            for (let a of toBreak) {
+                breakAsteroid(a);
+            }
+        }
+        function checkCoinCollisions() {
+            for (let i = coins.length-1;i>=0;i--){
+                const coin=coins[i];
+                const dist=player.pos.subtract(coin.pos).length();
+                if(dist<=PLAYER_RADIUS+COIN_RADIUS){
+                    playEatDot();
+                    coins.splice(i,1);
+                    score++;
+                }
+            }
+        }
+        function checkPlayerEnemyCollisions() {
+            for(const enemy of enemies){
+                const dist=player.pos.subtract(enemy.pos).length();
+                if(dist<=PLAYER_RADIUS+ENEMY_RADIUS){
+                    playDeath();
+                    gameOver=true;
+                    break;
+                }
+            }
+        }
+        function checkPlayerAsteroidCollisions() {
+            for (const a of asteroids) {
+                const dist = player.pos.subtract(a.pos).length();
+                if (dist <= PLAYER_RADIUS + a.radius) {
+                    playDeath();
+                    gameOver = true;
+                    break;
+                }
+            }
+        }
+        // =======================
+        // Game Loop
+        // =======================
+        function gameLoop(){
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            if(gameOver){
+                ctx.fillStyle='white';
+                ctx.font='48px Arial';
+                ctx.textAlign='center';
+                ctx.fillText('Game Over',canvas.width/2,canvas.height/2-20);
+                ctx.font='32px Arial';
+                ctx.fillText(`Final Score: ${score}`,canvas.width/2,canvas.height/2+30);
+                ctx.font='24px Arial';
+                ctx.fillText('Press Enter to Restart',canvas.width/2,canvas.height/2+70);
+                requestAnimationFrame(gameLoop);
+                return;
+            } else if (levelComplete) {
+                ctx.fillStyle='white';
+                ctx.font='48px Arial';
+                ctx.textAlign='center';
+                ctx.fillText('You beat the level!',canvas.width/2,canvas.height/2-20);
+                ctx.font='32px Arial';
+                ctx.fillText(`Score: ${score}`,canvas.width/2,canvas.height/2+30);
+                ctx.font='24px Arial';
+                ctx.fillText('Press Enter to start next level',canvas.width/2,canvas.height/2+70);
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+            updatePlanetoids();
+            if (inMaze) updatePlayerMazePosition();
+            updateAsteroids();
+            handleCollisions();
+            player.move(keys); 
+            if (!player.inMaze) player.applyGravity(planetoids); 
+            player.update(); 
+            if (!player.inMaze) player.checkCollision(planetoids);
+            enemies.forEach(e=>e.update(planetoids));
+            mazeGhosts.forEach(g => g.update());
+            coins.forEach(c=>c.update());
+            particles.forEach(p => p.update());
+            particles = particles.filter(p => p.life > 0);
+            checkCoinCollisions(); checkPlayerEnemyCollisions(); checkPlayerAsteroidCollisions();
+            checkMazeDots();
+            if (inMaze) {
+                for (let i = 0; i < mazeGhosts.length; i++) {
+                    const g = mazeGhosts[i];
+                    if (g.mazeCol === player.mazeCol && g.mazeRow === player.mazeRow) {
+                        playDeath();
+                        gameOver = true;
+                        break;
+                    }
+                }
+            }
+            if (coins.length === 0 && !player.inMaze) {
+                levelComplete = true;
+            }
+            // Camera follows player
+            const camera = new Vector2();
+            camera.x = player.pos.x - canvas.width / 2;
+            camera.y = player.pos.y - canvas.height / 2;
+            // Clamp camera to scene bounds
+            if (camera.x < 0) camera.x = 0;
+            if (camera.y < 0) camera.y = 0;
+            if (camera.x > sceneWidth - canvas.width) camera.x = sceneWidth - canvas.width;
+            if (camera.y > sceneHeight - canvas.height) camera.y = sceneHeight - canvas.height;
+            ctx.save();
+            ctx.translate(-camera.x, -camera.y);
+            // Draw stars
+            ctx.fillStyle = 'white';
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            planetoids.forEach(p=>p.draw());
+            asteroids.forEach(a => a.draw());
+            player.draw();
+            enemies.forEach(e=>e.draw());
+            coins.forEach(c=>c.draw());
+            particles.forEach(p => p.draw());
+            ctx.restore();
+            // HUD
+            ctx.fillStyle='white';
+            ctx.font='24px Arial';
+            ctx.textAlign='left';
+            ctx.fillText(`Level ${level} - Score: ${score}`,20,40);
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
