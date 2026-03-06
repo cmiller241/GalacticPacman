@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stable Multi-Planetoid Platformer</title>
+<style>
+body {
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: #fff;
+}
+canvas {
+    border: 1px solid #000;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="900" height="650"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+// =======================
+// Constants
+// =======================
+const GRAVITY_STRENGTH = 0.35;
+const JUMP_STRENGTH = 9;
+const MOVE_SPEED = 0.05;
+const PLAYER_RADIUS = 10;
+const ENEMY_RADIUS = 10;
+const COIN_RADIUS = 5;
+const COIN_ORBIT_OFFSET = 18;
+const INFLUENCE_PADDING = 140;
+const SURFACE_TOLERANCE = 4;
+const DRAG = 0.995;
+const PLANET_SPEED = 0.5;
+const ENEMY_JUMP_PROB = 0.001;
+// =======================
+// Vector2
+// =======================
+class Vector2 {
+    constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+    add(v) { this.x += v.x; this.y += v.y; return this; }
+    subtract(v) { return new Vector2(this.x - v.x, this.y - v.y); }
+    multiply(s) { return new Vector2(this.x * s, this.y * s); }
+    length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+    normalize() { const len = this.length(); if (len > 0) { this.x /= len; this.y /= len; } return this; }
+    clone() { return new Vector2(this.x, this.y); }
+    dot(v) { return this.x * v.x + this.y * v.y; }
+}
+// =======================
+// Planetoid
+// =======================
+class Planetoid {
+    constructor(x, y, radius, color) {
+        this.pos = new Vector2(x, y);
+        this.radius = radius;
+        this.mass = radius * radius;
+        this.influenceRadius = radius + INFLUENCE_PADDING;
+        this.color = color;
+        let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+        this.vel = direction.multiply(PLANET_SPEED);
+    }
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
+}
+// =======================
+// Player
+// =======================
+class Player {
+    constructor(x, y) {
+        this.pos = new Vector2(x, y);
+        this.vel = new Vector2(0, 0);
+        this.radius = PLAYER_RADIUS;
+        this.onSurface = false;
+        this.currentPlanet = null;
+        this.lastInfluencePlanet = null;
+        this.angle = 0;
+    }
+    findDominantPlanet(planets) {
+        let closest = null, minDist = Infinity;
+        for (const planet of planets) {
+            const dist = this.pos.subtract(planet.pos).length();
+            if (dist < planet.influenceRadius && dist < minDist) {
+                minDist = dist;
+                closest = planet;
+            }
+        }
+        return closest;
+    }
+    applyGravity(planets) {
+        if (this.onSurface) return;
+        let planet = this.findDominantPlanet(planets);
+        if (!planet && this.lastInfluencePlanet) planet = this.lastInfluencePlanet;
+        if (planet) {
+            this.lastInfluencePlanet = planet;
+            const direction = planet.pos.subtract(this.pos).normalize();
+            this.vel.add(direction.multiply(GRAVITY_STRENGTH));
+        }
+    }
+    checkCollision(planets) {
+        for (const planet of planets) {
+            const offset = this.pos.subtract(planet.pos);
+            const dist = offset.length();
+            const surfaceDist = planet.radius + this.radius;
+            if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+                const normal = offset.normalize();
+                this.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
+                this.onSurface = true;
+                this.currentPlanet = planet;
+                this.lastInfluencePlanet = planet;
+                this.vel.x = 0; this.vel.y = 0;
+                this.angle = Math.atan2(this.pos.y - planet.pos.y, this.pos.x - planet.pos.x);
+                return;
+            }
+        }
+        this.onSurface = false; this.currentPlanet = null;
+    }
+    move(keys) {
+        if (this.onSurface && this.currentPlanet) {
+            if (keys['ArrowLeft']) this.angle -= MOVE_SPEED;
+            if (keys['ArrowRight']) this.angle += MOVE_SPEED;
+            const surfaceDist = this.currentPlanet.radius + this.radius;
+            this.pos.x = this.currentPlanet.pos.x + Math.cos(this.angle) * surfaceDist;
+            this.pos.y = this.currentPlanet.pos.y + Math.sin(this.angle) * surfaceDist;
+        }
+    }
+    jump() {
+        if (this.onSurface && this.currentPlanet) {
+            const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
+            this.vel = direction.multiply(JUMP_STRENGTH);
+            this.onSurface = false;
+            this.currentPlanet = null;
+        }
+    }
+    update() {
+        if (!this.onSurface) {
+            this.vel = this.vel.multiply(DRAG);
+            this.pos.add(this.vel);
+        }
+    }
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+    }
+}
+// =======================
+// Enemy (jumping version)
+// =======================
+class Enemy {
+    constructor(planet) {
+        this.planet = planet;
+        this.angularSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.02;
+        this.angle = Math.random() * Math.PI * 2;
+        this.radius = ENEMY_RADIUS;
+        this.pos = new Vector2();
+        this.onSurface = true;
+        this.updatePosition();
+    }
+    updatePosition() {
+        const surfaceDist = this.planet.radius + this.radius;
+        this.pos.x = this.planet.pos.x + Math.cos(this.angle) * surfaceDist;
+        this.pos.y = this.planet.pos.y + Math.sin(this.angle) * surfaceDist;
+    }
+    update(planets) {
+        // Normal rotation on current planet
+        if (this.onSurface) {
+            this.angle += this.angularSpeed;
+            this.updatePosition();
+            // 10% chance to jump to a nearby planet
+            if (Math.random() < ENEMY_JUMP_PROB) {
+                for (const p of planets) {
+                    if (p !== this.planet) {
+                        const dist = this.pos.subtract(p.pos).length();
+                        if (dist < p.influenceRadius) {
+                            const direction = this.pos.subtract(this.planet.pos).normalize();
+                            this.vel = direction.multiply(JUMP_STRENGTH);
+                            this.onSurface = false;
+                            this.currentPlanet = this.planet;
+                            this.planet = p;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Apply gravity if in jump
+        if (!this.onSurface) {
+            if (!this.vel) this.vel = new Vector2();
+            let dominant = this.findDominantPlanet(planets);
+            if (dominant) {
+                const dir = dominant.pos.subtract(this.pos).normalize();
+                this.vel.add(dir.multiply(GRAVITY_STRENGTH));
+            }
+            this.vel = this.vel.multiply(DRAG);
+            this.pos.add(this.vel);
+            if (dominant) {
+                // Check landing
+                const offset = this.pos.subtract(dominant.pos);
+                const dist = offset.length();
+                if (dist <= dominant.radius + this.radius + SURFACE_TOLERANCE) {
+                    const normal = offset.normalize();
+                    this.pos = dominant.pos.clone().add(normal.multiply(dominant.radius + this.radius));
+                    this.onSurface = true;
+                    this.angle = Math.atan2(this.pos.y - dominant.pos.y, this.pos.x - dominant.pos.x);
+                    this.planet = dominant;
+                    this.vel = new Vector2();
+                }
+            }
+        }
+    }
+    findDominantPlanet(planets) {
+        let closest = null, minDist = Infinity;
+        for (const planet of planets) {
+            const dist = this.pos.subtract(planet.pos).length();
+            if (dist < planet.influenceRadius && dist < minDist) {
+                minDist = dist;
+                closest = planet;
+            }
+        }
+        return closest;
+    }
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'green';
+        ctx.fill();
+    }
+}
+// =======================
+// Coin
+// =======================
+class Coin {
+    constructor(planet) {
+        this.planet = planet;
+        this.angularSpeed = (Math.random() - 0.5) * 0.04;
+        this.angle = 0;
+        this.radius = COIN_RADIUS;
+        this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
+        this.pos = new Vector2();
+        this.updatePosition();
+    }
+    updatePosition() {
+        this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
+        this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+    }
+    update() { this.angle += this.angularSpeed; this.updatePosition(); }
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'gold';
+        ctx.fill();
+        ctx.save();
+        ctx.translate(this.pos.x, this.pos.y);
+        ctx.rotate(Date.now() * 0.01);
+        ctx.beginPath();
+        ctx.arc(-this.radius*0.4,-this.radius*0.4,this.radius*0.4,0,Math.PI*2);
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fill();
+        ctx.restore();
+    }
+}
+// =======================
+// Game Setup
+// =======================
+const planetoids = [
+    new Planetoid(300, 350, 60, 'blue'),
+    new Planetoid(600, 250, 45, 'green'),
+    new Planetoid(700, 500, 35, 'purple'),
+    new Planetoid(150, 200, 50, 'orange'),
+    new Planetoid(450, 500, 70, 'yellow'),
+    new Planetoid(800, 100, 30, 'red'),
+    new Planetoid(200, 500, 40, 'cyan')
+];
+const player = new Player(300, 350 - 60 - PLAYER_RADIUS);
+player.lastInfluencePlanet = planetoids[0];
+const enemies = [];
+for (let i = 0; i < 3; i++) {
+    const planetIndex = Math.floor(Math.random() * planetoids.length);
+    enemies.push(new Enemy(planetoids[planetIndex]));
+}
+const coins = [];
+planetoids.forEach((planet) => {
+    const numCoins = 4 + Math.floor(planet.radius / 10);
+    for (let i = 0; i < numCoins; i++) {
+        const coin = new Coin(planet);
+        coin.angle = (i / numCoins) * Math.PI * 2 + Math.random() * 0.2;
+        coins.push(coin);
+    }
+});
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.key] = true; if(e.key===' ') player.jump(); });
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+let gameOver = false;
+let score = 0;
+// =======================
+// Update Functions
+// =======================
+function updatePlanetoids() {
+    for (const p of planetoids) {
+        p.pos.add(p.vel);
+        if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
+        if (p.pos.x + p.radius > canvas.width) { p.pos.x = canvas.width - p.radius; p.vel.x = -p.vel.x; }
+        if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
+        if (p.pos.y + p.radius > canvas.height) { p.pos.y = canvas.height - p.radius; p.vel.y = -p.vel.y; }
+    }
+    for (let i=0;i<planetoids.length;i++){
+        for(let j=i+1;j<planetoids.length;j++){
+            const p1=planetoids[i],p2=planetoids[j];
+            const offset=p1.pos.subtract(p2.pos); const dist=offset.length();
+            if(dist<p1.radius+p2.radius){
+                const overlap=p1.radius+p2.radius-dist;
+                const normal=offset.normalize();
+                const tangent=new Vector2(-normal.y,normal.x);
+                const m1=p1.mass,m2=p2.mass,totalMass=m1+m2;
+                const sep1=overlap*(m2/totalMass), sep2=overlap*(m1/totalMass);
+                p1.pos.add(normal.multiply(sep1));
+                p2.pos.add(normal.multiply(-sep2));
+                const v1=p1.vel.clone(),v2=p2.vel.clone();
+                const v1n=normal.dot(v1),v2n=normal.dot(v2);
+                const v1t=tangent.dot(v1),v2t=tangent.dot(v2);
+                const new_v1n=(v1n*(m1-m2)+2*m2*v2n)/totalMass;
+                const new_v2n=(v2n*(m2-m1)+2*m1*v1n)/totalMass;
+                p1.vel=normal.multiply(new_v1n).add(tangent.multiply(v1t));
+                p2.vel=normal.multiply(new_v2n).add(tangent.multiply(v2t));
+            }
+        }
+    }
+}
+function checkCoinCollisions() {
+    for (let i = coins.length-1;i>=0;i--){
+        const coin=coins[i];
+        const dist=player.pos.subtract(coin.pos).length();
+        if(dist<=PLAYER_RADIUS+COIN_RADIUS){ coins.splice(i,1); score++; }
+    }
+}
+function checkPlayerEnemyCollisions() {
+    for(const enemy of enemies){
+        const dist=player.pos.subtract(enemy.pos).length();
+        if(dist<=PLAYER_RADIUS+ENEMY_RADIUS){ gameOver=true; break; }
+    }
+}
+// =======================
+// Game Loop
+// =======================
+function gameLoop(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle='black';
+    ctx.font='24px Arial';
+    ctx.textAlign='left';
+    ctx.fillText(`Score: ${score}`,20,40);
+    if(gameOver){
+        ctx.fillStyle='black';
+        ctx.font='48px Arial';
+        ctx.textAlign='center';
+        ctx.fillText('Game Over',canvas.width/2,canvas.height/2-20);
+        ctx.font='32px Arial';
+        ctx.fillText(`Final Score: ${score}`,canvas.width/2,canvas.height/2+30);
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+    updatePlanetoids();
+    player.move(keys); player.applyGravity(planetoids); player.update(); player.checkCollision(planetoids);
+    enemies.forEach(e=>e.update(planetoids));
+    coins.forEach(c=>c.update());
+    checkCoinCollisions(); checkPlayerEnemyCollisions();
+    planetoids.forEach(p=>p.draw());
+    player.draw();
+    enemies.forEach(e=>e.draw());
+    coins.forEach(c=>c.draw());
+    requestAnimationFrame(gameLoop);
+}
+gameLoop();
+</script>
+</body>
+</html>

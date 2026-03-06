@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sheep Sprite Animation</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        canvas {
+            border: 8px solid #4CAF50;
+            border-radius: 16px;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+            image-rendering: pixelated;     /* CSS pixel-perfect fallback */
+            image-rendering: crisp-edges;   /* extra crisp for Firefox/Safari */
+        }
+        .info {
+            margin-top: 15px;
+            color: #555;
+            font-size: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐑 Sheep Animation</h1>
+    <canvas id="canvas" width="560" height="440"></canvas>
+    <div class="info">8-frame walking cycle • 200ms per frame • 4× scale • TRUE PIXEL ART (nearest-neighbor)</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // FORCE PIXEL-PERFECT SCALING (this is the magic line!)
+        ctx.imageSmoothingEnabled = false;
+
+        // Sprite settings
+        const spriteWidth = 70;
+        const spriteHeight = 70;
+        const cols = 4;
+        const totalFrames = 8;
+        const frameInterval = 200; // ms per frame
+
+        // Canvas & drawing settings
+        const canvasWidth = 560;
+        const canvasHeight = 440;
+        const scale = 4;                    // 70px → 280px sheep
+        const drawWidth = spriteWidth * scale;
+        const drawHeight = spriteHeight * scale;
+
+        let frameIndex = 0;
+        let lastFrameTime = 0;
+
+        const img = new Image();
+        img.src = 'img/sheep.png';
+
+        function drawBackground() {
+            // Sky
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+            // Grass
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, canvasHeight - 80, canvasWidth, 80);
+
+            // Retro grass blades (still crisp because they're drawn vectors)
+            ctx.strokeStyle = '#2E8B57';
+            ctx.lineWidth = 4;
+            for (let i = 25; i < canvasWidth; i += 38) {
+                ctx.beginPath();
+                ctx.moveTo(i, canvasHeight - 80);
+                ctx.quadraticCurveTo(i - 10, canvasHeight - 120, i + 8, canvasHeight - 145);
+                ctx.stroke();
+            }
+        }
+
+        function drawSprite() {
+            const row = Math.floor(frameIndex / cols);
+            const col = frameIndex % cols;
+            const sx = col * spriteWidth;
+            const sy = row * spriteHeight;
+
+            const dx = (canvasWidth - drawWidth) / 2;
+            const dy = canvasHeight - drawHeight - 55;
+
+            ctx.drawImage(
+                img,
+                sx, sy, spriteWidth, spriteHeight,   // source rect
+                dx, dy, drawWidth, drawHeight        // destination (scaled 4×)
+            );
+        }
+
+        function animate(timestamp) {
+            if (!lastFrameTime) lastFrameTime = timestamp;
+
+            if (timestamp - lastFrameTime >= frameInterval) {
+                frameIndex = (frameIndex + 1) % totalFrames;
+                lastFrameTime = timestamp;
+            }
+
+            drawBackground();
+            drawSprite();
+
+            requestAnimationFrame(animate);
+        }
+
+        img.onload = function() {
+            console.log('✅ Sheep spritesheet loaded – now 100% pixel-perfect!');
+            requestAnimationFrame(animate);
+        };
+
+        img.onerror = function() {
+            ctx.fillStyle = '#fff';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('❌ Could not load img/sheep.png', canvasWidth/2, canvasHeight/2);
+        };
+    </script>
+</body>
+</html>

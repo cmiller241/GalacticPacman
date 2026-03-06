@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shepherd Sprite Animation</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA);
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        canvas {
+            border: 8px solid #4CAF50;
+            border-radius: 16px;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.3);
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        .info {
+            margin-top: 15px;
+            color: #555;
+            font-size: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>👨‍🌾 Shepherd Animation</h1>
+    <canvas id="canvas" width="560" height="440"></canvas>
+    <div class="info">7-frame walking cycle (frames 1–7) • 200ms per frame • 4× scale • TRUE PIXEL ART</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        ctx.imageSmoothingEnabled = false;
+
+        // Sprite settings
+        const spriteWidth = 70;
+        const spriteHeight = 70;
+        const cols = 10;                    // full sheet = 10 frames
+        const totalWalkingFrames = 6;       // walking = frames 1–7 (skip frame 0 = standing)
+        const frameInterval = 200;
+
+        // Canvas settings (identical to sheep)
+        const canvasWidth = 560;
+        const canvasHeight = 440;
+        const scale = 4;
+        const drawWidth = spriteWidth * scale;
+        const drawHeight = spriteHeight * scale;
+
+        let frameIndex = 0;                 // 0–6 internally → maps to sprite columns 1–7
+        let lastFrameTime = 0;
+
+        const img = new Image();
+        img.src = 'img/shepherd.png';
+
+        function drawBackground() {
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(0, canvasHeight - 80, canvasWidth, 80);
+
+            ctx.strokeStyle = '#2E8B57';
+            ctx.lineWidth = 4;
+            for (let i = 25; i < canvasWidth; i += 38) {
+                ctx.beginPath();
+                ctx.moveTo(i, canvasHeight - 80);
+                ctx.quadraticCurveTo(i - 10, canvasHeight - 120, i + 8, canvasHeight - 145);
+                ctx.stroke();
+            }
+        }
+
+        function drawSprite() {
+            const row = 0;
+            const col = frameIndex + 1;         // +1 skips the standing frame (column 0)
+
+            const sx = col * spriteWidth;
+            const sy = row * spriteHeight;
+
+            const dx = (canvasWidth - drawWidth) / 2;
+            const dy = canvasHeight - drawHeight - 55;
+
+            ctx.drawImage(
+                img,
+                sx, sy, spriteWidth, spriteHeight,
+                dx, dy, drawWidth, drawHeight
+            );
+        }
+
+        function animate(timestamp) {
+            if (!lastFrameTime) lastFrameTime = timestamp;
+
+            if (timestamp - lastFrameTime >= frameInterval) {
+                frameIndex = (frameIndex + 1) % totalWalkingFrames;
+                lastFrameTime = timestamp;
+            }
+
+            drawBackground();
+            drawSprite();
+
+            requestAnimationFrame(animate);
+        }
+
+        img.onload = function() {
+            console.log('✅ Shepherd spritesheet loaded – walking cycle (frames 1–7) ready!');
+            requestAnimationFrame(animate);
+        };
+
+        img.onerror = function() {
+            ctx.fillStyle = '#fff';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('❌ Could not load img/shepherd.png', canvasWidth/2, canvasHeight/2);
+        };
+    </script>
+</body>
+</html>
