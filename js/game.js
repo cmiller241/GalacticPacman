@@ -11,13 +11,13 @@ import {
     enemyColors
 } from './constants.js';
 import { Vector2 } from './vector2.js';
-import { Planetoid, SpikeyPlanetoid, MazePlanetoid } from './planetoid.js';
+import { Planetoid, SpikeyPlanetoid, MazePlanetoid, PlatformPlanetoid } from './planetoid.js';
 import { Asteroid } from './asteroid.js';
 import { Player } from './player.js';
 import { Enemy } from './enemy.js';
 import { Coin } from './coin.js';
 import { MazeGhost } from './mazeghost.js';
-import { initAudio, playDeath, playEatDot, initResizeListener, buildMazeData, getRandomPelletMazePos, getRandomOpenMazePos, checkMazeDots, createParticles, startTeleportToMaze, updatePlayerMazePosition, playBang } from './utils.js';
+import { initAudio, angleDiff, playDeath, playEatDot, initResizeListener, buildMazeData, getRandomPelletMazePos, getRandomOpenMazePos, checkMazeDots, createParticles, startTeleportToMaze, updatePlayerMazePosition, playBang } from './utils.js';
 
 // Setup canvas and ctx
 state.canvas = document.getElementById('gameCanvas');
@@ -54,17 +54,34 @@ for (let i = 0; i < STAR_COUNT; i++) {
 window.addEventListener('keydown', (e) => {
     state.keys[e.key] = true;
     if (e.key === ' ') {
-        if (state.player.onSurface && !state.player.inMaze) state.player.jump();
-        else if (!state.player.inMaze) state.player.tryGroundPound();
+        if (state.player.onSurface && state.player.mode != "maze") state.player.jump();
+        else if (state.player.mode != "maze") state.player.tryGroundPound();
     }
-    if (e.key === 'ArrowDown' && !state.player.inMaze) {
-        if (state.player.onSurface && state.player.currentPlanet === state.mazePlanet) {
-            const diff = Math.abs(((state.player.angle - state.mazePlanet.beamAngle + Math.PI) % (2 * Math.PI)) - Math.PI);
-            if (diff < Math.PI / 5) {
-                startTeleportToMaze();
-            }
+if (e.key === 'ArrowDown' && state.player.mode != "maze") {
+    console.log("ArrowDown pressed, player mode:", state.player.mode);
+
+    if (state.player.onSurface &&
+        (state.player.currentPlanet === state.mazePlanet || state.player.currentPlanet === state.platformPlanet)) {
+
+        console.log("Player is on surface of a valid planet:", state.player.currentPlanet);
+
+        const planet = state.player.currentPlanet;
+        const diff = angleDiff(state.player.angle, planet.beamAngle);
+
+        console.log("Player angle:", state.player.angle.toFixed(3), 
+                    "Planet beamAngle:", planet.beamAngle.toFixed(3), 
+                    "Angular diff:", diff.toFixed(3));
+
+        if (diff < Math.PI / 5) {
+            console.log("Diff < π/5 — starting teleport!");
+            startTeleportToMaze();
+        } else {
+            console.log("Diff too large, teleport not triggered.");
         }
+    } else {
+        console.log("Player not on surface of a valid planet or invalid planet:", state.player.currentPlanet);
     }
+}
     if (e.key === 'Enter') {
         if (state.gameOver) {
             state.score = 0;
@@ -111,6 +128,10 @@ function initGame() {
     buildMazeData();
     state.mazePlanet = new MazePlanetoid(state.sceneWidth * 0.55, state.sceneHeight * 0.45, 250);
     state.planetoids.push(state.mazePlanet);
+    // === SPECIAL PLATFORM PLANET ===
+    state.platformPlanet = new PlatformPlanetoid(state.sceneWidth * 0.3, state.sceneHeight * 0.6, 250);
+    state.planetoids.push(state.platformPlanet);
+
     // Initialize two miniature maze ghosts at random open positions
     let pos1 = getRandomPelletMazePos();
     let pos2 = getRandomPelletMazePos();
@@ -170,7 +191,7 @@ function initGame() {
     state.particles = [];
     state.gameOver = false;
     state.levelComplete = false;
-    state.inMaze = false;
+    state.player.mode = "space";
     state.eatDotIndex = 0; // Reset sound index on restart
 }
 
@@ -373,16 +394,16 @@ function gameLoop(timestamp) {
     }
 
     updatePlanetoids();
-    if (state.inMaze) updatePlayerMazePosition();
+    if (state.player.mode == "maze") updatePlayerMazePosition();
     updateAsteroids();
     handleCollisions();
 
     // Only do normal player logic when NOT dying
     if (!state.player.isDying) {
         state.player.move(state.keys);
-        if (!state.player.inMaze) state.player.applyGravity(state.planetoids);
+        if (state.player.mode != "maze") state.player.applyGravity(state.planetoids);
         state.player.update();
-        if (!state.player.inMaze) state.player.checkCollision(state.planetoids);
+        if (state.player.mode != "maze") state.player.checkCollision(state.planetoids);
     } else {
         state.player.update();           // Run death animation
     }
@@ -394,7 +415,7 @@ function gameLoop(timestamp) {
     state.particles = state.particles.filter(p => p.life > 0);
     checkCoinCollisions(); checkPlayerEnemyCollisions(); checkPlayerAsteroidCollisions();
     checkMazeDots();
-    if (state.inMaze) {
+    if (state.player.mode == "maze") {
         for (let i = 0; i < state.mazeGhosts.length; i++) {
             const g = state.mazeGhosts[i];
             if (g.mazeCol === state.player.mazeCol && g.mazeRow === state.player.mazeRow) {
@@ -403,7 +424,7 @@ function gameLoop(timestamp) {
             }
         }
     }
-    if (state.coins.length === 0 && !state.player.inMaze) {
+    if (state.coins.length === 0 && state.player.mode != "maze") {
         state.levelComplete = true;
     }
     // Camera follows player

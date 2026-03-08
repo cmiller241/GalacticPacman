@@ -9,7 +9,14 @@ import {
     MAZE_TILE_SIZE,
     MAZE_EXIT_COL_LEFT,
     MAZE_EXIT_COL_RIGHT,
-    MAZE_EXIT_ROW
+    MAZE_EXIT_ROW,
+    PLATFORM_EXIT_COL_LEFT,
+    PLATFORM_EXIT_COL_RIGHT,
+    PLATFORM_EXIT_ROW,
+    PLATFORM_TILE,
+    PLATFORM_COLS,
+    PLATFORM_ROWS,
+    platformTiles
 } from './constants.js';
 import { Vector2 } from './vector2.js';
 
@@ -26,6 +33,7 @@ export class Planetoid {
         this.lastAlphaUpdate = 0;
         this.isSpikey = false;
         this.offscreen = null;
+        this.interiorType = null; //"maze", "platform", etc.
     }
 
     createOffscreen() {
@@ -257,25 +265,342 @@ export class SpikeyPlanetoid extends Planetoid {
     }
 }
 
-export class MazePlanetoid extends Planetoid {
-    constructor(x, y, radius) {
-        super(x, y, radius, '#8A2BE2');
+export class BeamPlanetoid extends Planetoid {
+
+    constructor(x, y, radius, color, beamColor) {
+
+        super(x, y, radius, color);
+
+        this.beamColor = beamColor;
+
         this.beamAngle = -Math.PI / 2;
         this.beamLength = 140;
         this.beamWidth = 14;
+
         this.beamParticles = [];
         this.portalParticles = [];
-        this.mazeOffscreen = null; // New: Offscreen for static maze walls
+    }
+
+    getBeamStart() {
+
+        return new Vector2(
+            this.pos.x + Math.cos(this.beamAngle) * this.radius,
+            this.pos.y + Math.sin(this.beamAngle) * this.radius
+        );
+    }
+
+    getBeamEnd(start) {
+
+        return new Vector2(
+            start.x + Math.cos(this.beamAngle) * this.beamLength,
+            start.y + Math.sin(this.beamAngle) * this.beamLength
+        );
+    }
+
+    spawnPortalParticles(pos) {
+
+        if (Math.random() < 0.5) {
+
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 1 + Math.random() * 2;
+
+            const vel = new Vector2(
+                Math.cos(angle) * speed,
+                Math.sin(angle) * speed
+            );
+
+            this.portalParticles.push(
+                new PortalParticle(pos, vel, 40, this.beamColor)
+            );
+        }
+    }
+
+    spawnBeamParticles(start) {
+
+        if (Math.random() < 0.6) {
+
+            const beamDir = new Vector2(
+                Math.cos(this.beamAngle),
+                Math.sin(this.beamAngle)
+            );
+
+            const side = new Vector2(-beamDir.y, beamDir.x)
+                .multiply((Math.random() - 0.5) * 1.5);
+
+            const speed = 2 + Math.random() * 2;
+
+            const vel = beamDir.multiply(speed).add(side);
+
+            this.beamParticles.push(
+                new BeamParticle(start, vel, 50, this.beamColor)
+            );
+        }
+    }
+
+    drawBeam(start, end) {
+
+        const ctx = state.ctx;
+
+        const gradient = ctx.createLinearGradient(
+            start.x, start.y,
+            end.x, end.y
+        );
+
+        gradient.addColorStop(0, this.beamColor);
+        gradient.addColorStop(1, "rgba(0,0,0,0)");
+
+        ctx.save();
+
+        ctx.shadowColor = this.beamColor;
+        ctx.shadowBlur = 60;
+
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = this.beamWidth;
+
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.stroke();
+
+        ctx.shadowBlur = 20;
+        ctx.lineWidth = 4;
+
+        ctx.beginPath();
+        ctx.moveTo(start.x - 8, start.y);
+        ctx.lineTo(end.x - 8, end.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(start.x + 8, start.y);
+        ctx.lineTo(end.x + 8, end.y);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    updateParticles() {
+
+        for (let i = this.beamParticles.length - 1; i >= 0; i--) {
+
+            const p = this.beamParticles[i];
+
+            p.update();
+            p.draw();
+
+            if (p.life <= 0) {
+                this.beamParticles.splice(i, 1);
+            }
+        }
+
+        for (let i = this.portalParticles.length - 1; i >= 0; i--) {
+
+            const p = this.portalParticles[i];
+
+            p.update();
+            p.draw();
+
+            if (p.life <= 0) {
+                this.portalParticles.splice(i, 1);
+            }
+        }
+    }
+
+    draw() {
+
+        super.draw();
+
+        this.drawInterior();
+
+        const start = this.getBeamStart();
+        const end = this.getBeamEnd(start);
+
+        const portal = this.getPortalPosition();
+
+        this.spawnBeamParticles(start);
+        this.spawnPortalParticles(portal);
+
+        this.drawBeam(start, end);
+
+        this.updateParticles();
+    }
+
+}
+
+export class PlatformPlanetoid extends BeamPlanetoid {
+
+    constructor(x, y, radius) {
+
+        super(x, y, radius, '#55aa55', 'rgba(57,255,20,1)');
+
+        this.interiorType = "platform";
+        this.platformOffscreen = null;
+
+        this.createPlatformOffscreen();
+    }
+
+    createPlatformOffscreen() {
+
+        const width = PLATFORM_COLS * PLATFORM_TILE;
+        const height = PLATFORM_ROWS * PLATFORM_TILE;
+
+        this.platformOffscreen = document.createElement('canvas');
+        this.platformOffscreen.width = width;
+        this.platformOffscreen.height = height;
+
+        const offCtx = this.platformOffscreen.getContext('2d');
+
+        for (let row = 0; row < PLATFORM_ROWS; row++) {
+            for (let col = 0; col < PLATFORM_COLS; col++) {
+
+                const tile = platformTiles[row][col];
+                const x = col * PLATFORM_TILE;
+                const y = row * PLATFORM_TILE;
+
+                // PLATFORM BLOCK
+                if (tile === "#") {
+
+                    offCtx.fillStyle = "#6b3f1d";
+                    offCtx.fillRect(x, y, PLATFORM_TILE, PLATFORM_TILE);
+
+                    offCtx.strokeStyle = "#3b200f";
+                    offCtx.strokeRect(x, y, PLATFORM_TILE, PLATFORM_TILE);
+
+                    // highlight strip
+                    offCtx.fillStyle = "rgba(255,255,255,0.15)";
+                    offCtx.fillRect(x, y, PLATFORM_TILE, 6);
+                }
+
+                // LADDER
+                if (tile === "H") {
+
+                    const centerX = x + PLATFORM_TILE / 2;
+
+                    const railOffset = 3;
+                    const leftRail = centerX - railOffset;
+                    const rightRail = centerX + railOffset;
+
+                    offCtx.strokeStyle = "#d8c38f";
+                    offCtx.lineWidth = 2;
+
+                    // vertical rails
+                    offCtx.beginPath();
+                    offCtx.moveTo(leftRail, y);
+                    offCtx.lineTo(leftRail, y + PLATFORM_TILE);
+                    offCtx.moveTo(rightRail, y);
+                    offCtx.lineTo(rightRail, y + PLATFORM_TILE);
+                    offCtx.stroke();
+
+                    // ladder rungs
+                    for (let r = 3; r < PLATFORM_TILE; r += 4) {
+
+                        offCtx.beginPath();
+                        offCtx.moveTo(leftRail, y + r);
+                        offCtx.lineTo(rightRail, y + r);
+                        offCtx.stroke();
+                    }
+                }
+            }
+        }
+    }
+
+    drawInterior() {
+
+        const ctx = state.ctx;
+
+        const offsetX = this.pos.x - (PLATFORM_COLS * PLATFORM_TILE / 2);
+        const offsetY = this.pos.y - (PLATFORM_ROWS * PLATFORM_TILE / 2);
+
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+
+        if (this.platformOffscreen) {
+            ctx.drawImage(this.platformOffscreen, offsetX, offsetY);
+        }
+
+        ctx.globalAlpha = 1;
+
+        // ===== PLATFORM PORTAL =====
+
+        const portal = this.getPortalPosition();
+
+        const time = Date.now() * 0.004;
+        const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
+
+        ctx.save();
+
+        // glow
+        ctx.shadowColor = "#39ff14";
+        ctx.shadowBlur = 20;
+
+        // core portal
+        ctx.beginPath();
+        ctx.arc(portal.x, portal.y, 8 + pulse * 3, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(57,255,20,${0.7 + pulse * 0.3})`;
+        ctx.fill();
+
+        ctx.globalCompositeOperation = "lighter";
+        // swirl particles
+        const swirlCount = 8;
+
+        for (let i = 0; i < swirlCount; i++) {
+
+            const angle = time + (i / swirlCount) * Math.PI * 2;
+            const radius = 12 + Math.sin(time * 2 + i) * 3;
+
+            const x = portal.x + Math.cos(angle) * radius;
+            const y = portal.y + Math.sin(angle) * radius;
+
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = "#baff9a";
+            ctx.fill();
+        }
+
+        ctx.restore();
+        ctx.restore();
+    }
+
+    getPortalPosition() {
+
+        const offsetX = this.pos.x - (PLATFORM_COLS * PLATFORM_TILE / 2);
+        const offsetY = this.pos.y - (PLATFORM_ROWS * PLATFORM_TILE / 2);
+
+        const portalX =
+            offsetX +
+            (PLATFORM_EXIT_COL_LEFT + 0.5) * PLATFORM_TILE +
+            PLATFORM_TILE / 2;
+
+        const portalY =
+            offsetY +
+            PLATFORM_EXIT_ROW * PLATFORM_TILE +
+            PLATFORM_TILE / 2;
+
+        return new Vector2(portalX, portalY);
+    }
+}
+
+export class MazePlanetoid extends BeamPlanetoid {
+
+    constructor(x, y, radius) {
+
+        super(x, y, radius, '#8A2BE2', 'rgba(255,0,255,1)');
+
+        this.interiorType = "maze";
+
+        this.mazeOffscreen = null;
+
         this.createMazeOffscreen();
     }
 
     createMazeOffscreen() {
-        // Pre-render static maze walls to an offscreen canvas
+
         const mazeWidth = MAZE_COLS * MAZE_TILE_SIZE;
         const mazeHeight = MAZE_ROWS * MAZE_TILE_SIZE;
+
         this.mazeOffscreen = document.createElement('canvas');
         this.mazeOffscreen.width = mazeWidth;
         this.mazeOffscreen.height = mazeHeight;
+
         const offCtx = this.mazeOffscreen.getContext('2d');
 
         offCtx.fillStyle = '#cc00cc';
@@ -284,173 +609,181 @@ export class MazePlanetoid extends Planetoid {
 
         for (let row = 0; row < MAZE_ROWS; row++) {
             for (let col = 0; col < MAZE_COLS; col++) {
+
                 if (state.mazeWalls[row][col]) {
-                    offCtx.fillRect(col * MAZE_TILE_SIZE, row * MAZE_TILE_SIZE, MAZE_TILE_SIZE, MAZE_TILE_SIZE);
+
+                    offCtx.fillRect(
+                        col * MAZE_TILE_SIZE,
+                        row * MAZE_TILE_SIZE,
+                        MAZE_TILE_SIZE,
+                        MAZE_TILE_SIZE
+                    );
                 }
             }
         }
     }
 
-    draw() {
+    getPortalPosition() {
+
+        const offsetX = this.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
+        const offsetY = this.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
+
+        const portalX =
+            offsetX +
+            (MAZE_EXIT_COL_LEFT + 0.5) * MAZE_TILE_SIZE +
+            MAZE_TILE_SIZE / 2;
+
+        const portalY =
+            offsetY +
+            MAZE_EXIT_ROW * MAZE_TILE_SIZE +
+            MAZE_TILE_SIZE / 2;
+
+        return new Vector2(portalX, portalY);
+    }
+
+    drawInterior() {
+
         const ctx = state.ctx;
 
-        super.draw();
-
-        // === DRAW CLASSIC PAC-MAN MAZE OVERLAY ===
         const offsetX = this.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
         const offsetY = this.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
 
         ctx.save();
+
         ctx.globalAlpha = 0.5;
 
-        // Draw pre-rendered maze walls
+        // Draw maze walls (pre-rendered)
         if (this.mazeOffscreen) {
-            ctx.drawImage(this.mazeOffscreen, offsetX, offsetY);
+
+            ctx.drawImage(
+                this.mazeOffscreen,
+                offsetX,
+                offsetY
+            );
         }
 
         ctx.globalAlpha = 1.0;
 
-        // Dots (dynamic, redraw each frame)
+        // ===== DOTS =====
+
         ctx.fillStyle = '#FFFFFF';
+
         for (let dot of state.mazeDots) {
+
             const x = offsetX + dot.x * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
             const y = offsetY + dot.y * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+
             ctx.beginPath();
             ctx.arc(x, y, 4, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Power pellets (dynamic, redraw each frame)
+        // ===== POWER PELLETS =====
+
         ctx.fillStyle = '#FFFF00';
+
         for (let pp of state.powerPellets) {
+
             const x = offsetX + pp.x * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
             const y = offsetY + pp.y * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+
             ctx.beginPath();
             ctx.arc(x, y, 8, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Exit Portal
-        const portalX = offsetX + (MAZE_EXIT_COL_LEFT + 0.5) * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
-        const portalY = offsetY + MAZE_EXIT_ROW * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+        // ===== EXIT PORTAL =====
+
+        const portalX =
+            offsetX +
+            (MAZE_EXIT_COL_LEFT + 0.5) * MAZE_TILE_SIZE +
+            MAZE_TILE_SIZE / 2;
+
+        const portalY =
+            offsetY +
+            MAZE_EXIT_ROW * MAZE_TILE_SIZE +
+            MAZE_TILE_SIZE / 2;
+
         const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
 
-        ctx.save(); // Batch portal styles
+        ctx.save();
+
         ctx.beginPath();
         ctx.arc(portalX, portalY, 10 + pulse * 4, 0, Math.PI * 2);
+
         ctx.fillStyle = `rgba(255, 0, 255, ${0.7 + pulse * 0.3})`;
         ctx.fill();
+
         ctx.strokeStyle = '#ffaaff';
         ctx.lineWidth = 3;
+
         ctx.stroke();
+
         ctx.restore();
+
+        // ===== GHOSTS =====
 
         state.mazeGhosts.forEach(g => g.draw());
+
         ctx.restore();
-
-        // Beam & Particles logic (unchanged)
-        if (Math.random() < 0.5) {
-            const angle = Math.random() * Math.PI * 2;
-            const speed = 1 + Math.random() * 2;
-            const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-            const spawnPos = new Vector2(portalX, portalY);
-            this.portalParticles.push(new PortalParticle(spawnPos, vel, 40));
-        }
-
-        const beamStartX = this.pos.x + Math.cos(this.beamAngle) * this.radius;
-        const beamStartY = this.pos.y + Math.sin(this.beamAngle) * this.radius;
-        const beamEndX = beamStartX + Math.cos(this.beamAngle) * this.beamLength;
-        const beamEndY = beamStartY + Math.sin(this.beamAngle) * this.beamLength;
-
-        if (Math.random() < 0.6) {
-            const beamDir = new Vector2(Math.cos(this.beamAngle), Math.sin(this.beamAngle));
-            const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
-            const speed = 2 + Math.random() * 2;
-            const vel = beamDir.multiply(speed).add(side);
-            const spawnPos = new Vector2(beamStartX, beamStartY);
-            this.beamParticles.push(new BeamParticle(spawnPos, vel, 50));
-        }
-
-        // Batch beam gradient and shadow for all beam lines
-        const gradient = ctx.createLinearGradient(beamStartX, beamStartY, beamEndX, beamEndY);
-        gradient.addColorStop(0, 'rgba(255, 0, 255, 1)');
-        gradient.addColorStop(1, 'rgba(255, 0, 255, 0)');
-
-        ctx.save();
-        ctx.shadowColor = '#FF00FF';
-        ctx.shadowBlur = 60;
-        ctx.strokeStyle = gradient;
-        ctx.lineWidth = this.beamWidth;
-        ctx.beginPath();
-        ctx.moveTo(beamStartX, beamStartY);
-        ctx.lineTo(beamEndX, beamEndY);
-        ctx.stroke();
-
-        ctx.shadowBlur = 20;
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(beamStartX - 8, beamStartY);
-        ctx.lineTo(beamEndX - 8, beamEndY);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(beamStartX + 8, beamStartY);
-        ctx.lineTo(beamEndX + 8, beamEndY);
-        ctx.stroke();
-        ctx.restore();
-
-        // Update & Draw Beam Particles
-        for (let i = this.beamParticles.length - 1; i >= 0; i--) {
-            const p = this.beamParticles[i];
-            p.update();
-            p.draw();
-            if (p.life <= 0) this.beamParticles.splice(i, 1);
-        }
-
-        // Update & Draw Portal Particles
-        for (let i = this.portalParticles.length - 1; i >= 0; i--) {
-            const p = this.portalParticles[i];
-            p.update();
-            p.draw();
-            if (p.life <= 0) this.portalParticles.splice(i, 1);
-        }
     }
 }
 
+
 export class BeamParticle {
-    constructor(pos, vel, life = 40) {
+    constructor(pos, vel, life = 40, color = 'rgba(255,0,255,1)') {
         this.pos = pos.clone();
         this.vel = vel;
         this.life = life;
         this.maxLife = life;
+        this.color = color;
     }
-    update() { this.pos.add(this.vel); this.life--; }
+
+    update() {
+        this.pos.add(this.vel);
+        this.life--;
+    }
+
     draw() {
         const ctx = state.ctx;
         if (this.life <= 0) return;
+
         const alpha = this.life / this.maxLife;
+
         ctx.beginPath();
         ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+
+        ctx.fillStyle = this.color.replace("1)", `${alpha})`);
         ctx.fill();
     }
 }
 
 export class PortalParticle {
-    constructor(pos, vel, life = 35) {
+    constructor(pos, vel, life = 35, color = 'rgba(255,0,255,1)') {
         this.pos = pos.clone();
         this.vel = vel;
         this.life = life;
         this.maxLife = life;
+        this.color = color;
     }
-    update() { this.pos.add(this.vel); this.life--; }
+
+    update() {
+        this.pos.add(this.vel);
+        this.life--;
+    }
+
     draw() {
         const ctx = state.ctx;
         if (this.life <= 0) return;
+
         const alpha = this.life / this.maxLife;
         const size = 3 * alpha;
+
         ctx.beginPath();
         ctx.arc(this.pos.x, this.pos.y, size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+
+        ctx.fillStyle = this.color.replace("1)", `${alpha})`);
         ctx.fill();
     }
 }
+

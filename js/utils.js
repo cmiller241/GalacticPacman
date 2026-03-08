@@ -105,6 +105,7 @@ export function isWall(col, row) {
 }
 
 export function updatePlayerMazePosition() {
+    console.log("We are trying to update the player maze position");
     const offsetX = state.mazePlanet.pos.x - (MAZE_COLS * MAZE_TILE_SIZE / 2);
     const offsetY = state.mazePlanet.pos.y - (MAZE_ROWS * MAZE_TILE_SIZE / 2);
     state.player.pos.x = offsetX + state.player.mazeCol * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
@@ -112,8 +113,7 @@ export function updatePlayerMazePosition() {
 }
 
 export function enterMazeMode() {
-    state.inMaze = true;
-    state.player.inMaze = true;
+    state.player.mode = "maze";
     state.player.onSurface = false;
     state.player.currentPlanet = null;
     state.player.mazeCol = 14;
@@ -138,8 +138,7 @@ export function startTeleportFromMaze() {
 }
 
 export function exitMazeMode() {
-    state.inMaze = false;
-    state.player.inMaze = false;
+    state.player.mode = "space";
     if (state.mazePlanet) {
         const surfaceDist = state.mazePlanet.radius + PLAYER_RADIUS;
         state.player.pos.x = state.mazePlanet.pos.x + Math.cos(state.mazePlanet.beamAngle) * surfaceDist;
@@ -152,7 +151,7 @@ export function exitMazeMode() {
 }
 
 export function checkMazeDots() {
-    if (!state.inMaze) return;
+    if (state.player.mode != "maze") return;
     for (let i = state.mazeDots.length - 1; i >= 0; i--) {
         const d = state.mazeDots[i];
         if (d.x === state.player.mazeCol && d.y === state.player.mazeRow) {
@@ -169,6 +168,22 @@ export function checkMazeDots() {
             state.score += 50;
         }
     }
+}
+
+export function startTeleportToPlatform(map, entryPos) {
+    state.player.isTeleporting = true;
+    state.player.teleportStartTime = Date.now();
+    state.player.vel = new Vector2(0,0);
+
+    state.player.nextMode = 'platform';
+    state.player.platformMap = map;
+    state.player.platformPos = entryPos.clone(); // Vector2(x, y)
+    state.player.onGround = false;
+}
+
+export function enterPlatformMode() {
+    state.player.mode = 'platform';
+    state.player.isTeleporting = false;
 }
 
 export function createParticles(atPos, count) {
@@ -207,4 +222,10 @@ export function initResizeListener() {
             });
         }
     });
+}
+
+export function angleDiff(a, b) {
+    let diff = (a - b + Math.PI) % (2 * Math.PI);
+    if (diff < 0) diff += 2 * Math.PI; // ensure positive
+    return Math.abs(diff - Math.PI);   // now in [0, PI]
 }

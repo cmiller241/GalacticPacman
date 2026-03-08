@@ -17,7 +17,6 @@ export const state = {
     level: 1,
     gameOver: false,
     levelComplete: false,
-    inMaze: false,
     mazePlanet: null,
     stars: [],
     keys: {},
