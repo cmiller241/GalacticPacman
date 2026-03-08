@@ -20,7 +20,6 @@ var state = {
   level: 1,
   gameOver: false,
   levelComplete: false,
-  inMaze: false,
   mazePlanet: null,
   stars: [],
   keys: {},
@@ -37,6 +36,7 @@ var GRAVITY_STRENGTH = 0.35;
 var GROUND_POUND_GRAV_MULTIPLIER = 3;
 var GROUND_POUND_PUSH_STRENGTH = 0.05;
 var JUMP_STRENGTH = 9;
+var MOVE_SPEED = 0.05;
 var PLAYER_LINEAR_SPEED = 4;
 var PLAYER_RADIUS = 20;
 var ENEMY_RADIUS = 20;
@@ -85,6 +85,42 @@ var mazeLayout = [
   "     #................#     ",
   "     ##################     "
 ];
+var PLATFORM_TILE = 12;
+var PLATFORM_COLS = 28;
+var PLATFORM_ROWS = 29;
+var PLATFORM_EXIT_COL_LEFT = 24;
+var PLATFORM_EXIT_ROW = 25;
+var platformTiles = [
+  "............................",
+  "............................",
+  "..........##########........",
+  "...........H................",
+  "...........H................",
+  "....####################....",
+  "..................H........",
+  "..................H.........",
+  "..########################..",
+  ".......H....................",
+  ".......H....................",
+  "....####################....",
+  "..............H.............",
+  "..............H.............",
+  "..########################..",
+  "....................H.......",
+  "....................H.......",
+  "....####################....",
+  "......H........H............",
+  "......H.....................",
+  "..########################..",
+  "....................H.......",
+  "....................H.......",
+  "....####################....",
+  ".....H.........H............",
+  ".....H......................",
+  "############################",
+  "............................",
+  "............................"
+];
 var enemyColors = ["red", "pink", "cyan", "orange"];
 var planetColors = ["blue", "green", "purple", "orange", "yellow", "red", "cyan"];
 
@@ -107,6 +143,9 @@ var Vector2 = class _Vector2 {
   }
   length() {
     return Math.sqrt(this.x * this.x + this.y * this.y);
+  }
+  lengthSq() {
+    return this.x * this.x + this.y * this.y;
   }
   normalize() {
     const len = this.length();
@@ -138,6 +177,7 @@ var Planetoid = class {
     this.lastAlphaUpdate = 0;
     this.isSpikey = false;
     this.offscreen = null;
+    this.interiorType = null;
   }
   createOffscreen() {
     this.offscreen = document.createElement("canvas");
@@ -334,14 +374,213 @@ var SpikeyPlanetoid = class extends Planetoid {
     ctx.restore();
   }
 };
-var MazePlanetoid = class extends Planetoid {
-  constructor(x, y, radius) {
-    super(x, y, radius, "#8A2BE2");
+var BeamPlanetoid = class extends Planetoid {
+  constructor(x, y, radius, color, beamColor) {
+    super(x, y, radius, color);
+    this.beamColor = beamColor;
     this.beamAngle = -Math.PI / 2;
     this.beamLength = 140;
     this.beamWidth = 14;
     this.beamParticles = [];
     this.portalParticles = [];
+  }
+  getBeamStart() {
+    return new Vector2(
+      this.pos.x + Math.cos(this.beamAngle) * this.radius,
+      this.pos.y + Math.sin(this.beamAngle) * this.radius
+    );
+  }
+  getBeamEnd(start) {
+    return new Vector2(
+      start.x + Math.cos(this.beamAngle) * this.beamLength,
+      start.y + Math.sin(this.beamAngle) * this.beamLength
+    );
+  }
+  spawnPortalParticles(pos) {
+    if (Math.random() < 0.5) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1 + Math.random() * 2;
+      const vel = new Vector2(
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed
+      );
+      this.portalParticles.push(
+        new PortalParticle(pos, vel, 40, this.beamColor)
+      );
+    }
+  }
+  spawnBeamParticles(start) {
+    if (Math.random() < 0.6) {
+      const beamDir = new Vector2(
+        Math.cos(this.beamAngle),
+        Math.sin(this.beamAngle)
+      );
+      const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
+      const speed = 2 + Math.random() * 2;
+      const vel = beamDir.multiply(speed).add(side);
+      this.beamParticles.push(
+        new BeamParticle(start, vel, 50, this.beamColor)
+      );
+    }
+  }
+  drawBeam(start, end) {
+    const ctx = state.ctx;
+    const gradient = ctx.createLinearGradient(
+      start.x,
+      start.y,
+      end.x,
+      end.y
+    );
+    gradient.addColorStop(0, this.beamColor);
+    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.save();
+    ctx.shadowColor = this.beamColor;
+    ctx.shadowBlur = 60;
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = this.beamWidth;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.shadowBlur = 20;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(start.x - 8, start.y);
+    ctx.lineTo(end.x - 8, end.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(start.x + 8, start.y);
+    ctx.lineTo(end.x + 8, end.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+  updateParticles() {
+    for (let i = this.beamParticles.length - 1; i >= 0; i--) {
+      const p = this.beamParticles[i];
+      p.update();
+      p.draw();
+      if (p.life <= 0) {
+        this.beamParticles.splice(i, 1);
+      }
+    }
+    for (let i = this.portalParticles.length - 1; i >= 0; i--) {
+      const p = this.portalParticles[i];
+      p.update();
+      p.draw();
+      if (p.life <= 0) {
+        this.portalParticles.splice(i, 1);
+      }
+    }
+  }
+  draw() {
+    super.draw();
+    this.drawInterior();
+    const start = this.getBeamStart();
+    const end = this.getBeamEnd(start);
+    const portal = this.getPortalPosition();
+    this.spawnBeamParticles(start);
+    this.spawnPortalParticles(portal);
+    this.drawBeam(start, end);
+    this.updateParticles();
+  }
+};
+var PlatformPlanetoid = class extends BeamPlanetoid {
+  constructor(x, y, radius) {
+    super(x, y, radius, "#55aa55", "rgba(57,255,20,1)");
+    this.interiorType = "platform";
+    this.platformOffscreen = null;
+    this.createPlatformOffscreen();
+  }
+  createPlatformOffscreen() {
+    const width = PLATFORM_COLS * PLATFORM_TILE;
+    const height = PLATFORM_ROWS * PLATFORM_TILE;
+    this.platformOffscreen = document.createElement("canvas");
+    this.platformOffscreen.width = width;
+    this.platformOffscreen.height = height;
+    const offCtx = this.platformOffscreen.getContext("2d");
+    for (let row = 0; row < PLATFORM_ROWS; row++) {
+      for (let col = 0; col < PLATFORM_COLS; col++) {
+        const tile = platformTiles[row][col];
+        const x = col * PLATFORM_TILE;
+        const y = row * PLATFORM_TILE;
+        if (tile === "#") {
+          offCtx.fillStyle = "#6b3f1d";
+          offCtx.fillRect(x, y, PLATFORM_TILE, PLATFORM_TILE);
+          offCtx.strokeStyle = "#3b200f";
+          offCtx.strokeRect(x, y, PLATFORM_TILE, PLATFORM_TILE);
+          offCtx.fillStyle = "rgba(255,255,255,0.15)";
+          offCtx.fillRect(x, y, PLATFORM_TILE, 6);
+        }
+        if (tile === "H") {
+          const centerX = x + PLATFORM_TILE / 2;
+          const railOffset = 3;
+          const leftRail = centerX - railOffset;
+          const rightRail = centerX + railOffset;
+          offCtx.strokeStyle = "#d8c38f";
+          offCtx.lineWidth = 2;
+          offCtx.beginPath();
+          offCtx.moveTo(leftRail, y);
+          offCtx.lineTo(leftRail, y + PLATFORM_TILE);
+          offCtx.moveTo(rightRail, y);
+          offCtx.lineTo(rightRail, y + PLATFORM_TILE);
+          offCtx.stroke();
+          for (let r = 3; r < PLATFORM_TILE; r += 4) {
+            offCtx.beginPath();
+            offCtx.moveTo(leftRail, y + r);
+            offCtx.lineTo(rightRail, y + r);
+            offCtx.stroke();
+          }
+        }
+      }
+    }
+  }
+  drawInterior() {
+    const ctx = state.ctx;
+    const offsetX = this.pos.x - PLATFORM_COLS * PLATFORM_TILE / 2;
+    const offsetY = this.pos.y - PLATFORM_ROWS * PLATFORM_TILE / 2;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    if (this.platformOffscreen) {
+      ctx.drawImage(this.platformOffscreen, offsetX, offsetY);
+    }
+    ctx.globalAlpha = 1;
+    const portal = this.getPortalPosition();
+    const time = Date.now() * 4e-3;
+    const pulse = (Math.sin(Date.now() * 6e-3) + 1) / 2;
+    ctx.save();
+    ctx.shadowColor = "#39ff14";
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.arc(portal.x, portal.y, 8 + pulse * 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(57,255,20,${0.7 + pulse * 0.3})`;
+    ctx.fill();
+    ctx.globalCompositeOperation = "lighter";
+    const swirlCount = 8;
+    for (let i = 0; i < swirlCount; i++) {
+      const angle = time + i / swirlCount * Math.PI * 2;
+      const radius = 12 + Math.sin(time * 2 + i) * 3;
+      const x = portal.x + Math.cos(angle) * radius;
+      const y = portal.y + Math.sin(angle) * radius;
+      ctx.beginPath();
+      ctx.arc(x, y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = "#baff9a";
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.restore();
+  }
+  getPortalPosition() {
+    const offsetX = this.pos.x - PLATFORM_COLS * PLATFORM_TILE / 2;
+    const offsetY = this.pos.y - PLATFORM_ROWS * PLATFORM_TILE / 2;
+    const portalX = offsetX + (PLATFORM_EXIT_COL_LEFT + 0.5) * PLATFORM_TILE + PLATFORM_TILE / 2;
+    const portalY = offsetY + PLATFORM_EXIT_ROW * PLATFORM_TILE + PLATFORM_TILE / 2;
+    return new Vector2(portalX, portalY);
+  }
+};
+var MazePlanetoid = class extends BeamPlanetoid {
+  constructor(x, y, radius) {
+    super(x, y, radius, "#8A2BE2", "rgba(255,0,255,1)");
+    this.interiorType = "maze";
     this.mazeOffscreen = null;
     this.createMazeOffscreen();
   }
@@ -358,20 +597,35 @@ var MazePlanetoid = class extends Planetoid {
     for (let row = 0; row < MAZE_ROWS; row++) {
       for (let col = 0; col < MAZE_COLS; col++) {
         if (state.mazeWalls[row][col]) {
-          offCtx.fillRect(col * MAZE_TILE_SIZE, row * MAZE_TILE_SIZE, MAZE_TILE_SIZE, MAZE_TILE_SIZE);
+          offCtx.fillRect(
+            col * MAZE_TILE_SIZE,
+            row * MAZE_TILE_SIZE,
+            MAZE_TILE_SIZE,
+            MAZE_TILE_SIZE
+          );
         }
       }
     }
   }
-  draw() {
+  getPortalPosition() {
+    const offsetX = this.pos.x - MAZE_COLS * MAZE_TILE_SIZE / 2;
+    const offsetY = this.pos.y - MAZE_ROWS * MAZE_TILE_SIZE / 2;
+    const portalX = offsetX + (MAZE_EXIT_COL_LEFT + 0.5) * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+    const portalY = offsetY + MAZE_EXIT_ROW * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
+    return new Vector2(portalX, portalY);
+  }
+  drawInterior() {
     const ctx = state.ctx;
-    super.draw();
     const offsetX = this.pos.x - MAZE_COLS * MAZE_TILE_SIZE / 2;
     const offsetY = this.pos.y - MAZE_ROWS * MAZE_TILE_SIZE / 2;
     ctx.save();
     ctx.globalAlpha = 0.5;
     if (this.mazeOffscreen) {
-      ctx.drawImage(this.mazeOffscreen, offsetX, offsetY);
+      ctx.drawImage(
+        this.mazeOffscreen,
+        offsetX,
+        offsetY
+      );
     }
     ctx.globalAlpha = 1;
     ctx.fillStyle = "#FFFFFF";
@@ -404,68 +658,15 @@ var MazePlanetoid = class extends Planetoid {
     ctx.restore();
     state.mazeGhosts.forEach((g) => g.draw());
     ctx.restore();
-    if (Math.random() < 0.5) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 1 + Math.random() * 2;
-      const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-      const spawnPos = new Vector2(portalX, portalY);
-      this.portalParticles.push(new PortalParticle(spawnPos, vel, 40));
-    }
-    const beamStartX = this.pos.x + Math.cos(this.beamAngle) * this.radius;
-    const beamStartY = this.pos.y + Math.sin(this.beamAngle) * this.radius;
-    const beamEndX = beamStartX + Math.cos(this.beamAngle) * this.beamLength;
-    const beamEndY = beamStartY + Math.sin(this.beamAngle) * this.beamLength;
-    if (Math.random() < 0.6) {
-      const beamDir = new Vector2(Math.cos(this.beamAngle), Math.sin(this.beamAngle));
-      const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
-      const speed = 2 + Math.random() * 2;
-      const vel = beamDir.multiply(speed).add(side);
-      const spawnPos = new Vector2(beamStartX, beamStartY);
-      this.beamParticles.push(new BeamParticle(spawnPos, vel, 50));
-    }
-    const gradient = ctx.createLinearGradient(beamStartX, beamStartY, beamEndX, beamEndY);
-    gradient.addColorStop(0, "rgba(255, 0, 255, 1)");
-    gradient.addColorStop(1, "rgba(255, 0, 255, 0)");
-    ctx.save();
-    ctx.shadowColor = "#FF00FF";
-    ctx.shadowBlur = 60;
-    ctx.strokeStyle = gradient;
-    ctx.lineWidth = this.beamWidth;
-    ctx.beginPath();
-    ctx.moveTo(beamStartX, beamStartY);
-    ctx.lineTo(beamEndX, beamEndY);
-    ctx.stroke();
-    ctx.shadowBlur = 20;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(beamStartX - 8, beamStartY);
-    ctx.lineTo(beamEndX - 8, beamEndY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(beamStartX + 8, beamStartY);
-    ctx.lineTo(beamEndX + 8, beamEndY);
-    ctx.stroke();
-    ctx.restore();
-    for (let i = this.beamParticles.length - 1; i >= 0; i--) {
-      const p = this.beamParticles[i];
-      p.update();
-      p.draw();
-      if (p.life <= 0) this.beamParticles.splice(i, 1);
-    }
-    for (let i = this.portalParticles.length - 1; i >= 0; i--) {
-      const p = this.portalParticles[i];
-      p.update();
-      p.draw();
-      if (p.life <= 0) this.portalParticles.splice(i, 1);
-    }
   }
 };
 var BeamParticle = class {
-  constructor(pos, vel, life = 40) {
+  constructor(pos, vel, life = 40, color = "rgba(255,0,255,1)") {
     this.pos = pos.clone();
     this.vel = vel;
     this.life = life;
     this.maxLife = life;
+    this.color = color;
   }
   update() {
     this.pos.add(this.vel);
@@ -477,16 +678,17 @@ var BeamParticle = class {
     const alpha = this.life / this.maxLife;
     ctx.beginPath();
     ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+    ctx.fillStyle = this.color.replace("1)", `${alpha})`);
     ctx.fill();
   }
 };
 var PortalParticle = class {
-  constructor(pos, vel, life = 35) {
+  constructor(pos, vel, life = 35, color = "rgba(255,0,255,1)") {
     this.pos = pos.clone();
     this.vel = vel;
     this.life = life;
     this.maxLife = life;
+    this.color = color;
   }
   update() {
     this.pos.add(this.vel);
@@ -499,7 +701,7 @@ var PortalParticle = class {
     const size = 3 * alpha;
     ctx.beginPath();
     ctx.arc(this.pos.x, this.pos.y, size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 0, 255, ${alpha})`;
+    ctx.fillStyle = this.color.replace("1)", `${alpha})`);
     ctx.fill();
   }
 };
@@ -516,6 +718,14 @@ var Asteroid = class {
     this.angle = Math.random() * Math.PI * 2;
     this.color = "#8B4513";
     this.points = this.generatePoints();
+    this.interiorPoints = [];
+    const numInterior = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < numInterior; i++) {
+      this.interiorPoints.push(new Vector2(
+        (Math.random() - 0.5) * this.radius * 1.2,
+        (Math.random() - 0.5) * this.radius * 1.2
+      ));
+    }
   }
   generatePoints() {
     const numSides = 6 + Math.floor(Math.random() * 6);
@@ -554,18 +764,62 @@ var Asteroid = class {
     ctx.save();
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(this.angle);
+    const lightDir = new Vector2(-0.7, -0.7).normalize();
+    const baseR = parseInt(this.color.substr(1, 2), 16);
+    const baseG = parseInt(this.color.substr(3, 2), 16);
+    const baseB = parseInt(this.color.substr(5, 2), 16);
+    for (let i = 0; i < this.points.length; i++) {
+      const j = (i + 1) % this.points.length;
+      const p1 = this.points[i].clone();
+      const p2 = this.points[j].clone();
+      this.interiorPoints.forEach((ip) => {
+        this.fillTriangle(ctx, p1, p2, ip, baseR, baseG, baseB, lightDir);
+      });
+      const mid = p1.clone().add(p2).multiply(0.5);
+      this.fillTriangle(ctx, p1, mid, p2, baseR, baseG, baseB, lightDir);
+    }
     ctx.beginPath();
     ctx.moveTo(this.points[0].x, this.points[0].y);
     for (let i = 1; i < this.points.length; i++) {
       ctx.lineTo(this.points[i].x, this.points[i].y);
     }
     ctx.closePath();
-    ctx.fillStyle = this.color;
-    ctx.fill();
-    ctx.strokeStyle = "black";
+    ctx.strokeStyle = "#3A1C08";
     ctx.lineWidth = 2;
     ctx.stroke();
+    const shadowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius);
+    shadowGrad.addColorStop(0, "rgba(0,0,0,0)");
+    shadowGrad.addColorStop(0.7, "rgba(0,0,0,0.15)");
+    shadowGrad.addColorStop(1, "rgba(0,0,0,0.3)");
+    ctx.fillStyle = shadowGrad;
+    ctx.beginPath();
+    ctx.moveTo(this.points[0].x, this.points[0].y);
+    for (let i = 1; i < this.points.length; i++) {
+      ctx.lineTo(this.points[i].x, this.points[i].y);
+    }
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
+  }
+  // --- Helper to fill a triangle with shading ---
+  fillTriangle(ctx, v0, v1, v2, baseR, baseG, baseB, lightDir) {
+    const edge = v2.subtract(v1);
+    const perp = new Vector2(edge.y, -edge.x);
+    const normal = perp.lengthSq() > 0 ? perp.normalize() : new Vector2(0, 1);
+    const dot = lightDir.dot(normal);
+    const edgeDistance = (v1.length() + v2.length()) / (2 * this.radius);
+    let brightness = 0.3 + Math.max(0, dot) * 0.7;
+    brightness = brightness * (1 - 0.4 * edgeDistance) + 0.2;
+    const cr = Math.min(255, Math.max(0, Math.floor(baseR * brightness)));
+    const cg = Math.min(255, Math.max(0, Math.floor(baseG * brightness)));
+    const cb = Math.min(255, Math.max(0, Math.floor(baseB * brightness)));
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    ctx.beginPath();
+    ctx.moveTo(v0.x, v0.y);
+    ctx.lineTo(v1.x, v1.y);
+    ctx.lineTo(v2.x, v2.y);
+    ctx.closePath();
+    ctx.fill();
   }
 };
 
@@ -669,14 +923,14 @@ function isWall(col, row) {
   return state.mazeWalls[row][col];
 }
 function updatePlayerMazePosition() {
+  console.log("We are trying to update the player maze position");
   const offsetX = state.mazePlanet.pos.x - MAZE_COLS * MAZE_TILE_SIZE / 2;
   const offsetY = state.mazePlanet.pos.y - MAZE_ROWS * MAZE_TILE_SIZE / 2;
   state.player.pos.x = offsetX + state.player.mazeCol * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
   state.player.pos.y = offsetY + state.player.mazeRow * MAZE_TILE_SIZE + MAZE_TILE_SIZE / 2;
 }
 function enterMazeMode() {
-  state.inMaze = true;
-  state.player.inMaze = true;
+  state.player.mode = "maze";
   state.player.onSurface = false;
   state.player.currentPlanet = null;
   state.player.mazeCol = 14;
@@ -697,21 +951,8 @@ function startTeleportFromMaze() {
   state.player.vel = new Vector2(0, 0);
   state.player.onSurface = false;
 }
-function exitMazeMode() {
-  state.inMaze = false;
-  state.player.inMaze = false;
-  if (state.mazePlanet) {
-    const surfaceDist = state.mazePlanet.radius + PLAYER_RADIUS;
-    state.player.pos.x = state.mazePlanet.pos.x + Math.cos(state.mazePlanet.beamAngle) * surfaceDist;
-    state.player.pos.y = state.mazePlanet.pos.y + Math.sin(state.mazePlanet.beamAngle) * surfaceDist;
-    state.player.angle = state.mazePlanet.beamAngle;
-    state.player.onSurface = true;
-    state.player.currentPlanet = state.mazePlanet;
-    state.player.lastInfluencePlanet = state.mazePlanet;
-  }
-}
 function checkMazeDots() {
-  if (!state.inMaze) return;
+  if (state.player.mode != "maze") return;
   for (let i = state.mazeDots.length - 1; i >= 0; i--) {
     const d = state.mazeDots[i];
     if (d.x === state.player.mazeCol && d.y === state.player.mazeRow) {
@@ -763,6 +1004,11 @@ function initResizeListener() {
     }
   });
 }
+function angleDiff(a, b) {
+  let diff = (a - b + Math.PI) % (2 * Math.PI);
+  if (diff < 0) diff += 2 * Math.PI;
+  return Math.abs(diff - Math.PI);
+}
 
 // js/player.js
 var Player = class {
@@ -771,18 +1017,22 @@ var Player = class {
     this.vel = new Vector2(0, 0);
     this.radius = PLAYER_RADIUS;
     this.onSurface = false;
+    this.onGround = false;
     this.currentPlanet = null;
     this.lastInfluencePlanet = null;
     this.angle = 0;
     this.mouthAngle = 0;
     this.facingDirection = 1;
     this.isGroundPounding = false;
-    this.inMaze = false;
+    this.mode = "space";
     this.mazeCol = 14;
     this.mazeRow = 15;
     this.mazeDir = new Vector2(1, 0);
+    this.platformPos = null;
+    this.platformVel = new Vector2(0, 0);
     this.lastMoveTime = 0;
     this.isTeleporting = false;
+    this.teleportTargetMode = null;
     this.teleportStartTime = 0;
     this.teleportDuration = 900;
     this.teleportScale = 1;
@@ -794,8 +1044,24 @@ var Player = class {
     this.deathRotation = 0;
     this.deathAlpha = 1;
   }
+  // ----------------------------
+  // TELEPORT HELPER
+  // ----------------------------
+  startTeleport(targetMode, targetPos = null) {
+    this.isTeleporting = true;
+    this.teleportTargetMode = targetMode;
+    this.teleportStartTime = Date.now();
+    this.teleportScale = 1;
+    this.teleportGlow = 0;
+    if (targetPos && targetMode === "platform") {
+      this.platformPos = targetPos.clone();
+    }
+  }
+  // ----------------------------
+  // DEATH
+  // ----------------------------
   startDeath() {
-    if (this.isDying == false) {
+    if (!this.isDying) {
       this.isDying = true;
       this.deathStartTime = Date.now();
       this.deathScale = 1;
@@ -864,7 +1130,7 @@ var Player = class {
     this.currentPlanet = null;
   }
   move(keys) {
-    if (this.inMaze) {
+    if (this.mode == "maze") {
       const now = Date.now();
       if (now - this.lastMoveTime < 110) return;
       let dx = 0, dy = 0;
@@ -889,6 +1155,33 @@ var Player = class {
       }
       return;
     }
+    if (this.mode === "platform") {
+      const tileSize = PLATFORM_TILE;
+      if (keys["ArrowLeft"]) this.platformVel.x = -MOVE_SPEED * 60;
+      else if (keys["ArrowRight"]) this.platformVel.x = MOVE_SPEED * 60;
+      else this.platformVel.x = 0;
+      let tileX = Math.floor(this.platformPos.x / tileSize);
+      let tileY = Math.floor(this.platformPos.y / tileSize);
+      const onLadder = platformTiles[tileY] && platformTiles[tileY][tileX] === "H";
+      if (onLadder) {
+        if (keys["ArrowUp"]) this.platformVel.y = -MOVE_SPEED * 60;
+        else if (keys["ArrowDown"]) this.platformVel.y = MOVE_SPEED * 60;
+        else this.platformVel.y = 0;
+      } else if (!this.onGround) {
+        this.platformVel.y += GRAVITY_STRENGTH;
+      }
+      this.platformPos.add(this.platformVel);
+      tileX = Math.floor(this.platformPos.x / tileSize);
+      tileY = Math.floor(this.platformPos.y / tileSize);
+      if (platformTiles[tileY] && platformTiles[tileY][tileX] === "#") {
+        if (this.platformVel.x > 0) this.platformPos.x = tileX * tileSize - PLAYER_RADIUS;
+        if (this.platformVel.x < 0) this.platformPos.x = (tileX + 1) * tileSize + PLAYER_RADIUS;
+        this.platformVel.x = 0;
+      }
+      const belowTile = platformTiles[tileY + 1]?.[tileX];
+      this.onGround = belowTile === "#" || onLadder;
+      return;
+    }
     if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
       const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
@@ -905,6 +1198,14 @@ var Player = class {
     }
   }
   jump() {
+    if (this.mode === "platform") {
+      if (this.onGround) {
+        this.platformVel.y = -JUMP_STRENGTH;
+        this.onGround = false;
+        playJump();
+      }
+      return;
+    }
     if (this.onSurface && this.currentPlanet) {
       const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
       this.vel = direction.multiply(JUMP_STRENGTH);
@@ -919,9 +1220,7 @@ var Player = class {
     if (planet) {
       const outwardDir = this.pos.subtract(planet.pos).normalize();
       const radialVel = this.vel.dot(outwardDir);
-      if (radialVel > 0) {
-        this.isGroundPounding = true;
-      }
+      if (radialVel > 0) this.isGroundPounding = true;
     }
   }
   update() {
@@ -931,9 +1230,7 @@ var Player = class {
       this.deathScale = 1 - t * t * t;
       this.deathRotation += 0.2;
       this.deathAlpha = 1 - t;
-      if (t >= 1) {
-        state.gameOver = true;
-      }
+      if (t >= 1) state.gameOver = true;
       return;
     }
     if (this.isTeleporting) {
@@ -941,11 +1238,8 @@ var Player = class {
       const t = elapsed / this.teleportDuration;
       if (t >= 1) {
         this.isTeleporting = false;
-        if (this.inMaze) {
-          exitMazeMode();
-        } else {
-          enterMazeMode();
-        }
+        enterMazeMode();
+        this.teleportTargetMode = null;
         return;
       }
       const pulse = Math.sin(t * Math.PI);
@@ -953,20 +1247,17 @@ var Player = class {
       this.teleportGlow = pulse;
       if (Math.random() < 0.6) {
         const beamDir = new Vector2(
-          Math.cos(state.mazePlanet.beamAngle),
-          Math.sin(state.mazePlanet.beamAngle)
+          Math.cos(state.mazePlanet?.beamAngle || 0),
+          Math.sin(state.mazePlanet?.beamAngle || 0)
         );
-        const side = new Vector2(
-          -beamDir.y,
-          beamDir.x
-        ).multiply((Math.random() - 0.5) * 1.5);
+        const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
         const speed = 2 + Math.random() * 2;
         const vel = beamDir.multiply(speed).add(side);
         state.particles.push(new Particle(this.pos.clone(), vel));
       }
       return;
     }
-    if (this.inMaze) {
+    if (this.mode == "maze") {
       this.vel = new Vector2(0, 0);
       this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
       return;
@@ -997,7 +1288,6 @@ var Player = class {
     const ctx = state.ctx;
     let scale = 1;
     let glow = 0;
-    let rotationOffset = 0;
     if (this.isDying) {
       ctx.save();
       ctx.globalAlpha = this.deathAlpha;
@@ -1020,7 +1310,20 @@ var Player = class {
       scale = this.teleportScale;
       glow = this.teleportGlow;
     }
-    if (this.inMaze) {
+    if (this.mode === "platform") {
+      ctx.save();
+      ctx.translate(this.platformPos.x, this.platformPos.y);
+      if (this.platformVel.x < 0) ctx.scale(-1, 1);
+      const mouthAngle2 = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, mouthAngle2 / 2, 2 * Math.PI - mouthAngle2 / 2);
+      ctx.lineTo(0, 0);
+      ctx.fillStyle = "yellow";
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+    if (this.mode == "maze") {
       const mazeScale = 0.4;
       ctx.save();
       ctx.translate(this.pos.x, this.pos.y);
@@ -1033,13 +1336,7 @@ var Player = class {
       ctx.scale(scale * mazeScale, scale * mazeScale);
       const mouthAngle2 = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
       ctx.beginPath();
-      ctx.arc(
-        0,
-        0,
-        this.radius,
-        mouthAngle2 / 2,
-        2 * Math.PI - mouthAngle2 / 2
-      );
+      ctx.arc(0, 0, this.radius, mouthAngle2 / 2, 2 * Math.PI - mouthAngle2 / 2);
       ctx.lineTo(0, 0);
       ctx.fillStyle = "yellow";
       ctx.fill();
@@ -1049,17 +1346,13 @@ var Player = class {
     }
     let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
     let downDir = new Vector2(0, 1);
-    if (planet) {
-      downDir = planet.pos.subtract(this.pos).normalize();
-    }
+    if (planet) downDir = planet.pos.subtract(this.pos).normalize();
     const downAngle = Math.atan2(downDir.y, downDir.x);
     const rotation = downAngle - Math.PI / 2;
     ctx.save();
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(rotation);
-    if (this.facingDirection < 0) {
-      ctx.rotate(Math.PI);
-    }
+    if (this.facingDirection < 0) ctx.rotate(Math.PI);
     if (this.isTeleporting) {
       ctx.shadowColor = "yellow";
       ctx.shadowBlur = 40 * glow;
@@ -1067,13 +1360,7 @@ var Player = class {
     ctx.scale(scale, scale);
     const mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
     ctx.beginPath();
-    ctx.arc(
-      0,
-      0,
-      this.radius,
-      mouthAngle / 2,
-      2 * Math.PI - mouthAngle / 2
-    );
+    ctx.arc(0, 0, this.radius, mouthAngle / 2, 2 * Math.PI - mouthAngle / 2);
     ctx.lineTo(0, 0);
     ctx.fillStyle = "yellow";
     ctx.fill();
@@ -1414,15 +1701,31 @@ for (let i = 0; i < STAR_COUNT; i++) {
 window.addEventListener("keydown", (e) => {
   state.keys[e.key] = true;
   if (e.key === " ") {
-    if (state.player.onSurface && !state.player.inMaze) state.player.jump();
-    else if (!state.player.inMaze) state.player.tryGroundPound();
+    if (state.player.onSurface && state.player.mode != "maze") state.player.jump();
+    else if (state.player.mode != "maze") state.player.tryGroundPound();
   }
-  if (e.key === "ArrowDown" && !state.player.inMaze) {
-    if (state.player.onSurface && state.player.currentPlanet === state.mazePlanet) {
-      const diff = Math.abs((state.player.angle - state.mazePlanet.beamAngle + Math.PI) % (2 * Math.PI) - Math.PI);
+  if (e.key === "ArrowDown" && state.player.mode != "maze") {
+    console.log("ArrowDown pressed, player mode:", state.player.mode);
+    if (state.player.onSurface && (state.player.currentPlanet === state.mazePlanet || state.player.currentPlanet === state.platformPlanet)) {
+      console.log("Player is on surface of a valid planet:", state.player.currentPlanet);
+      const planet = state.player.currentPlanet;
+      const diff = angleDiff(state.player.angle, planet.beamAngle);
+      console.log(
+        "Player angle:",
+        state.player.angle.toFixed(3),
+        "Planet beamAngle:",
+        planet.beamAngle.toFixed(3),
+        "Angular diff:",
+        diff.toFixed(3)
+      );
       if (diff < Math.PI / 5) {
+        console.log("Diff < \u03C0/5 \u2014 starting teleport!");
         startTeleportToMaze();
+      } else {
+        console.log("Diff too large, teleport not triggered.");
       }
+    } else {
+      console.log("Player not on surface of a valid planet or invalid planet:", state.player.currentPlanet);
     }
   }
   if (e.key === "Enter") {
@@ -1468,6 +1771,8 @@ function initGame() {
   buildMazeData();
   state.mazePlanet = new MazePlanetoid(state.sceneWidth * 0.55, state.sceneHeight * 0.45, 250);
   state.planetoids.push(state.mazePlanet);
+  state.platformPlanet = new PlatformPlanetoid(state.sceneWidth * 0.3, state.sceneHeight * 0.6, 250);
+  state.planetoids.push(state.platformPlanet);
   let pos1 = getRandomPelletMazePos();
   let pos2 = getRandomPelletMazePos();
   while (pos2.col === pos1.col && pos2.row === pos1.row) {
@@ -1525,7 +1830,7 @@ function initGame() {
   state.particles = [];
   state.gameOver = false;
   state.levelComplete = false;
-  state.inMaze = false;
+  state.player.mode = "space";
   state.eatDotIndex = 0;
 }
 function updatePlanetoids() {
@@ -1724,14 +2029,14 @@ function gameLoop(timestamp) {
     return;
   }
   updatePlanetoids();
-  if (state.inMaze) updatePlayerMazePosition();
+  if (state.player.mode == "maze") updatePlayerMazePosition();
   updateAsteroids();
   handleCollisions();
   if (!state.player.isDying) {
     state.player.move(state.keys);
-    if (!state.player.inMaze) state.player.applyGravity(state.planetoids);
+    if (state.player.mode != "maze") state.player.applyGravity(state.planetoids);
     state.player.update();
-    if (!state.player.inMaze) state.player.checkCollision(state.planetoids);
+    if (state.player.mode != "maze") state.player.checkCollision(state.planetoids);
   } else {
     state.player.update();
   }
@@ -1744,7 +2049,7 @@ function gameLoop(timestamp) {
   checkPlayerEnemyCollisions();
   checkPlayerAsteroidCollisions();
   checkMazeDots();
-  if (state.inMaze) {
+  if (state.player.mode == "maze") {
     for (let i = 0; i < state.mazeGhosts.length; i++) {
       const g = state.mazeGhosts[i];
       if (g.mazeCol === state.player.mazeCol && g.mazeRow === state.player.mazeRow) {
@@ -1753,7 +2058,7 @@ function gameLoop(timestamp) {
       }
     }
   }
-  if (state.coins.length === 0 && !state.player.inMaze) {
+  if (state.coins.length === 0 && state.player.mode != "maze") {
     state.levelComplete = true;
   }
   const camera = new Vector2();

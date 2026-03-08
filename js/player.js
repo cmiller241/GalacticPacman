@@ -13,11 +13,23 @@ import {
     MAZE_TILE_SIZE,
     MAZE_EXIT_ROW,
     MAZE_EXIT_COL_LEFT,
-    MAZE_EXIT_COL_RIGHT
+    MAZE_EXIT_COL_RIGHT,
+    PLATFORM_TILE,
+    platformTiles
 } from './constants.js';
 import { Vector2 } from './vector2.js';
-import { playDeath, playJump, createDeathParticles, createParticles, isWall, startTeleportFromMaze, updatePlayerMazePosition, enterMazeMode, exitMazeMode } from './utils.js';
-import { Particle } from './particle.js'; // Added missing import for Particle
+import {
+    playDeath,
+    playJump,
+    createDeathParticles,
+    createParticles,
+    isWall,
+    startTeleportFromMaze,
+    updatePlayerMazePosition,
+    enterMazeMode,
+    exitMazeMode
+} from './utils.js';
+import { Particle } from './particle.js';
 
 export class Player {
     constructor(x, y) {
@@ -25,51 +37,73 @@ export class Player {
         this.vel = new Vector2(0, 0);
         this.radius = PLAYER_RADIUS;
         this.onSurface = false;
+        this.onGround = false;
         this.currentPlanet = null;
         this.lastInfluencePlanet = null;
         this.angle = 0;
-        this.mouthAngle = 0; // For animating mouth
-        this.facingDirection = 1; // 1 for right (increasing angle), -1 for left
+        this.mouthAngle = 0;
+        this.facingDirection = 1;
         this.isGroundPounding = false;
-        this.inMaze = false;
+        this.mode = "space";
         this.mazeCol = 14;
         this.mazeRow = 15;
         this.mazeDir = new Vector2(1, 0);
+        this.platformPos = null;
+        this.platformVel = new Vector2(0,0);
         this.lastMoveTime = 0;
         this.isTeleporting = false;
+        this.teleportTargetMode = null; // "maze", "platform", or "space"
         this.teleportStartTime = 0;
-        this.teleportDuration = 900; // milliseconds
+        this.teleportDuration = 900;
         this.teleportScale = 1;
         this.teleportGlow = 0;
         this.isDying = false;
         this.deathStartTime = 0;
-        this.deathDuration = 1200; // 1.2 seconds for animation
+        this.deathDuration = 1200;
         this.deathScale = 1;
         this.deathRotation = 0;
         this.deathAlpha = 1;
     }
 
+    // ----------------------------
+    // TELEPORT HELPER
+    // ----------------------------
+    startTeleport(targetMode, targetPos = null) {
+        this.isTeleporting = true;
+        this.teleportTargetMode = targetMode;
+        this.teleportStartTime = Date.now();
+        this.teleportScale = 1;
+        this.teleportGlow = 0;
+
+        if (targetPos && targetMode === "platform") {
+            this.platformPos = targetPos.clone();
+        }
+    }
+
+    // ----------------------------
+    // DEATH
+    // ----------------------------
     startDeath() {
-        if (this.isDying == false) {
+        if (!this.isDying) {
             this.isDying = true;
             this.deathStartTime = Date.now();
             this.deathScale = 1;
             this.deathRotation = 0;
             this.deathAlpha = 1;
-            createDeathParticles(this.pos, 400)
+            createDeathParticles(this.pos, 400);
             playDeath();
         }
     }
 
-    findDominantPlanet(planets) { 
-        let closest = null, minDist = Infinity; 
-        for (const planet of planets) { 
-            const dist = this.pos.subtract(planet.pos).length(); 
-            if (dist < planet.influenceRadius && dist < minDist) { 
-                minDist = dist; closest = planet; 
-            } 
-        } 
-        return closest; 
+    findDominantPlanet(planets) {
+        let closest = null, minDist = Infinity;
+        for (const planet of planets) {
+            const dist = this.pos.subtract(planet.pos).length();
+            if (dist < planet.influenceRadius && dist < minDist) {
+                minDist = dist; closest = planet;
+            }
+        }
+        return closest;
     }
 
     applyGravity(planets) {
@@ -86,7 +120,6 @@ export class Player {
     }
 
     checkCollision(planets) {
-        // First, check for collision with spikey planetoids (death)
         for (const planet of planets.filter(p => p.isSpikey)) {
             const dist = this.pos.subtract(planet.pos).length();
             if (dist <= planet.radius + this.radius + SURFACE_TOLERANCE) {
@@ -96,7 +129,7 @@ export class Player {
         }
 
         if (this.onSurface) return;
-        // If not dead, check for landing on non-spikey planetoids
+
         for (const planet of planets.filter(p => !p.isSpikey)) {
             const offset = this.pos.subtract(planet.pos);
             const dist = offset.length();
@@ -119,11 +152,16 @@ export class Player {
                 return;
             }
         }
-        this.onSurface = false; this.currentPlanet = null;
+
+        this.onSurface = false;
+        this.currentPlanet = null;
     }
 
     move(keys) {
-        if (this.inMaze) {
+        // ----------------------------
+        // MAZE MODE
+        // ----------------------------
+        if (this.mode=="maze") {
             const now = Date.now();
             if (now - this.lastMoveTime < 110) return;
             let dx = 0, dy = 0;
@@ -134,7 +172,8 @@ export class Player {
             if (dx !== 0 || dy !== 0) {
                 const newCol = this.mazeCol + dx;
                 const newRow = this.mazeRow + dy;
-                if (dy === -1 && this.mazeRow === (MAZE_EXIT_ROW) && (this.mazeCol === MAZE_EXIT_COL_LEFT || this.mazeCol === MAZE_EXIT_COL_RIGHT)) {
+                if (dy === -1 && this.mazeRow === MAZE_EXIT_ROW &&
+                    (this.mazeCol === MAZE_EXIT_COL_LEFT || this.mazeCol === MAZE_EXIT_COL_RIGHT)) {
                     startTeleportFromMaze();
                     return;
                 }
@@ -148,10 +187,51 @@ export class Player {
             }
             return;
         }
+
+        // ----------------------------
+        // PLATFORM MODE
+        // ----------------------------
+        if (this.mode === "platform") {
+            const tileSize = PLATFORM_TILE;
+
+            if (keys['ArrowLeft']) this.platformVel.x = -MOVE_SPEED * 60;
+            else if (keys['ArrowRight']) this.platformVel.x = MOVE_SPEED * 60;
+            else this.platformVel.x = 0;
+
+            let tileX = Math.floor(this.platformPos.x / tileSize);
+            let tileY = Math.floor(this.platformPos.y / tileSize);
+
+            const onLadder = platformTiles[tileY] && platformTiles[tileY][tileX] === 'H';
+            if (onLadder) {
+                if (keys['ArrowUp']) this.platformVel.y = -MOVE_SPEED * 60;
+                else if (keys['ArrowDown']) this.platformVel.y = MOVE_SPEED * 60;
+                else this.platformVel.y = 0;
+            } else if (!this.onGround) {
+                this.platformVel.y += GRAVITY_STRENGTH;
+            }
+
+            this.platformPos.add(this.platformVel);
+
+            tileX = Math.floor(this.platformPos.x / tileSize);
+            tileY = Math.floor(this.platformPos.y / tileSize);
+
+            if (platformTiles[tileY] && platformTiles[tileY][tileX] === '#') {
+                if (this.platformVel.x > 0) this.platformPos.x = tileX * tileSize - PLAYER_RADIUS;
+                if (this.platformVel.x < 0) this.platformPos.x = (tileX + 1) * tileSize + PLAYER_RADIUS;
+                this.platformVel.x = 0;
+            }
+
+            const belowTile = platformTiles[tileY + 1]?.[tileX];
+            this.onGround = belowTile === '#' || onLadder;
+            return;
+        }
+
+        // ----------------------------
+        // PLANET SURFACE
+        // ----------------------------
         if (this.onSurface && this.currentPlanet) {
-            // Calculate angular speed based on linear speed and surface radius
             const surfaceDist = this.currentPlanet.radius + this.radius;
-            const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;  // Linear to angular conversion
+            const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
 
             if (keys['ArrowLeft']) {
                 this.angle -= angularSpeed;
@@ -167,6 +247,15 @@ export class Player {
     }
 
     jump() {
+        if (this.mode === "platform") {
+            if (this.onGround) {
+                this.platformVel.y = -JUMP_STRENGTH;
+                this.onGround = false;
+                playJump();
+            }
+            return;
+        }
+
         if (this.onSurface && this.currentPlanet) {
             const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
             this.vel = direction.multiply(JUMP_STRENGTH);
@@ -182,78 +271,93 @@ export class Player {
         if (planet) {
             const outwardDir = this.pos.subtract(planet.pos).normalize();
             const radialVel = this.vel.dot(outwardDir);
-            if (radialVel > 0) {
-                this.isGroundPounding = true;
-            }
+            if (radialVel > 0) this.isGroundPounding = true;
         }
     }
 
     update() {
+        // ----------------------------
+        // DEATH
+        // ----------------------------
         if (this.isDying) {
             const elapsed = Date.now() - this.deathStartTime;
-            const t = Math.min(elapsed / this.deathDuration, 1); // 0 to 1 progress
-
-            // Smooth scale down (ease out)
-            this.deathScale = 1 - (t * t * t); // Cubic ease out for snappy feel
-
-            // Spin and fade
-            this.deathRotation += 0.2; // Spin faster over time
+            const t = Math.min(elapsed / this.deathDuration, 1);
+            this.deathScale = 1 - (t*t*t);
+            this.deathRotation += 0.2;
             this.deathAlpha = 1 - t;
-
-            // End death animation
-            if (t >= 1) {
-                state.gameOver = true;
-            }
-            return; // Skip all other updates during death
+            if (t >= 1) state.gameOver = true;
+            return;
         }
+
+        // ----------------------------
+        // TELEPORT
+        // ----------------------------
         if (this.isTeleporting) {
             const elapsed = Date.now() - this.teleportStartTime;
             const t = elapsed / this.teleportDuration;
+
             if (t >= 1) {
                 this.isTeleporting = false;
-                if (this.inMaze) {
-                    exitMazeMode();
-                } else {
-                    enterMazeMode();
-                }
+
+                enterMazeMode();
+
+                // if (this.teleportTargetMode === "maze") {
+                //     console.log("PacMan is entering Maze Mode()");
+                //     enterMazeMode();
+                // } else if (this.teleportTargetMode === "platform") {
+                //     this.mode = "platform";
+                //     this.platformVel = new Vector2(0,0);
+                //     const tileX = Math.floor(this.platformPos.x / PLATFORM_TILE);
+                //     const tileY = Math.floor(this.platformPos.y / PLATFORM_TILE);
+                //     const belowTile = platformTiles[tileY + 1]?.[tileX];
+                //     this.onGround = belowTile === '#' || belowTile === 'H';
+                // } else {
+                //     this.mode = "space";
+                // }
+
+                this.teleportTargetMode = null;
                 return;
             }
+
             const pulse = Math.sin(t * Math.PI);
             this.teleportScale = 1 + pulse * 1.2;
             this.teleportGlow = pulse;
-            // 🔥 PARTICLES SHOOTING INTO BEAM (works for both entry/exit)
+
             if (Math.random() < 0.6) {
-                // Direction of the maze beam
                 const beamDir = new Vector2(
-                    Math.cos(state.mazePlanet.beamAngle),
-                    Math.sin(state.mazePlanet.beamAngle)
+                    Math.cos(state.mazePlanet?.beamAngle || 0),
+                    Math.sin(state.mazePlanet?.beamAngle || 0)
                 );
-                // Slight sideways drift
-                const side = new Vector2(
-                    -beamDir.y,
-                    beamDir.x
-                ).multiply((Math.random() - 0.5) * 1.5);
-                const speed = 2 + Math.random() * 2;
+                const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random()-0.5)*1.5);
+                const speed = 2 + Math.random()*2;
                 const vel = beamDir.multiply(speed).add(side);
                 state.particles.push(new Particle(this.pos.clone(), vel));
             }
             return;
         }
-        if (this.inMaze) {
-            this.vel = new Vector2(0, 0);
-            this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+
+        // ----------------------------
+        // MAZE MODE
+        // ----------------------------
+        if (this.mode=="maze") {
+            this.vel = new Vector2(0,0);
+            this.mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
             return;
         }
+
+        // ----------------------------
+        // PLANET MOVEMENT
+        // ----------------------------
         if (!this.onSurface) {
             this.vel = this.vel.multiply(DRAG);
             this.pos.add(this.vel);
-            // Bound to scene
+
             if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
             if (this.pos.x + this.radius > state.sceneWidth) { this.pos.x = state.sceneWidth - this.radius; this.vel.x = -this.vel.x; }
             if (this.pos.y - this.radius < 0) { this.pos.y = this.radius; this.vel.y = -this.vel.y; }
             if (this.pos.y + this.radius > state.sceneHeight) { this.pos.y = state.sceneHeight - this.radius; this.vel.y = -this.vel.y; }
         }
-        // Animate mouth
+
         this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
     }
 
@@ -261,10 +365,8 @@ export class Player {
         const ctx = state.ctx;
         let scale = 1;
         let glow = 0;
-        let rotationOffset = 0;
 
         if (this.isDying) {
-            // Death animation overrides everything
             ctx.save();
             ctx.globalAlpha = this.deathAlpha;
             ctx.translate(this.pos.x, this.pos.y);
@@ -272,90 +374,88 @@ export class Player {
             ctx.scale(this.deathScale, this.deathScale);
             ctx.shadowColor = 'orange';
             ctx.shadowBlur = 30 * (this.deathAlpha * 0.5);
-
-            // Mouth closes during death
             const mouthAngle = 0;
             ctx.beginPath();
-            ctx.arc(0, 0, this.radius, mouthAngle / 2, 2 * Math.PI - mouthAngle / 2);
-            ctx.lineTo(0, 0);
-            ctx.fillStyle = '#ff6600'; // Orange death color
+            ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
+            ctx.lineTo(0,0);
+            ctx.fillStyle = '#ff6600';
             ctx.fill();
-
             ctx.shadowBlur = 0;
             ctx.restore();
             return;
         }
 
-        // Normal/Teleport logic (existing)
         if (this.isTeleporting) {
             scale = this.teleportScale;
             glow = this.teleportGlow;
         }
 
-        // ==================================================
-        // MAZE MODE
-        // ==================================================
-        if (this.inMaze) {
-            const mazeScale = 0.4;
+        // ----------------------------
+        // PLATFORM MODE
+        // ----------------------------
+        if (this.mode === "platform") {
             ctx.save();
-            ctx.translate(this.pos.x, this.pos.y);
-            // Apply teleport glow
-            if (this.isTeleporting) {
-                ctx.shadowColor = 'yellow';
-                ctx.shadowBlur = 40 * glow;
-            }
-            const rot = Math.atan2(this.mazeDir.y, this.mazeDir.x);
-            ctx.rotate(rot);
-            // Apply BOTH teleport scale AND maze scale
-            ctx.scale(scale * mazeScale, scale * mazeScale);
-            const mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+            ctx.translate(this.platformPos.x, this.platformPos.y);
+            if (this.platformVel.x < 0) ctx.scale(-1,1);
+            const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
             ctx.beginPath();
-            ctx.arc(0, 0, this.radius,
-                mouthAngle / 2,
-                2 * Math.PI - mouthAngle / 2
-            );
-            ctx.lineTo(0, 0);
+            ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
+            ctx.lineTo(0,0);
             ctx.fillStyle = 'yellow';
             ctx.fill();
-            ctx.shadowBlur = 0;
             ctx.restore();
             return;
         }
 
-        // ==================================================
-        // NORMAL PLANET MODE
-        // ==================================================
+        // ----------------------------
+        // MAZE MODE
+        // ----------------------------
+        if (this.mode=="maze") {
+            const mazeScale = 0.4;
+            ctx.save();
+            ctx.translate(this.pos.x,this.pos.y);
+            if (this.isTeleporting) {
+                ctx.shadowColor='yellow';
+                ctx.shadowBlur=40*glow;
+            }
+            const rot = Math.atan2(this.mazeDir.y,this.mazeDir.x);
+            ctx.rotate(rot);
+            ctx.scale(scale*mazeScale, scale*mazeScale);
+            const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
+            ctx.beginPath();
+            ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
+            ctx.lineTo(0,0);
+            ctx.fillStyle='yellow';
+            ctx.fill();
+            ctx.shadowBlur=0;
+            ctx.restore();
+            return;
+        }
+
+        // ----------------------------
+        // PLANET MODE
+        // ----------------------------
         let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-        let downDir = new Vector2(0, 1);
-        if (planet) {
-            downDir = planet.pos.subtract(this.pos).normalize();
-        }
+        let downDir = new Vector2(0,1);
+        if (planet) downDir = planet.pos.subtract(this.pos).normalize();
         const downAngle = Math.atan2(downDir.y, downDir.x);
-        const rotation = downAngle - Math.PI / 2;
+        const rotation = downAngle - Math.PI/2;
         ctx.save();
-        ctx.translate(this.pos.x, this.pos.y);
+        ctx.translate(this.pos.x,this.pos.y);
         ctx.rotate(rotation);
-        // Face direction
-        if (this.facingDirection < 0) {
-            ctx.rotate(Math.PI);
-        }
-        // Apply teleport glow
+        if (this.facingDirection < 0) ctx.rotate(Math.PI);
         if (this.isTeleporting) {
-            ctx.shadowColor = 'yellow';
-            ctx.shadowBlur = 40 * glow;
+            ctx.shadowColor='yellow';
+            ctx.shadowBlur=40*glow;
         }
-        // Apply teleport scaling
-        ctx.scale(scale, scale);
-        const mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+        ctx.scale(scale,scale);
+        const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
         ctx.beginPath();
-        ctx.arc(0, 0, this.radius,
-            mouthAngle / 2,
-            2 * Math.PI - mouthAngle / 2
-        );
-        ctx.lineTo(0, 0);
-        ctx.fillStyle = 'yellow';
+        ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
+        ctx.lineTo(0,0);
+        ctx.fillStyle='yellow';
         ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur=0;
         ctx.restore();
     }
 }
