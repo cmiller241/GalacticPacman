@@ -928,152 +928,6 @@ var Particle = class {
 };
 
 // js/utils.js
-var eatDotAudio0;
-var eatDotAudio1;
-var deathAudio;
-var jumpAudio;
-var jumpSmallAudio;
-var bangLarge;
-var bangMedium;
-var bangSmall;
-function initAudio() {
-  eatDotAudio0 = new Audio("sounds/eat_dot_0.wav");
-  eatDotAudio1 = new Audio("sounds/eat_dot_1.wav");
-  deathAudio = new Audio("sounds/death_0.wav");
-  jumpAudio = new Audio("sounds/jump.wav");
-  jumpSmallAudio = new Audio("sounds/jumpsmall.wav");
-  bangLarge = new Audio("sounds/bangLarge.wav");
-  bangMedium = new Audio("sounds/bangMedium.wav");
-  bangSmall = new Audio("sounds/bangSmall.wav");
-  [eatDotAudio0, eatDotAudio1, deathAudio, jumpAudio, jumpSmallAudio, bangLarge, bangMedium, bangSmall].forEach((audio) => {
-    audio.volume = 0.5;
-    audio.preload = "auto";
-    audio.load();
-  });
-}
-function playEatDot() {
-  const source = state.eatDotIndex === 0 ? eatDotAudio0 : eatDotAudio1;
-  state.eatDotIndex = 1 - state.eatDotIndex;
-  const audio = source.cloneNode(true);
-  audio.play().catch((e) => console.log("Audio play failed:", e));
-}
-function playDeath() {
-  const audio = deathAudio.cloneNode(true);
-  audio.play().catch((e) => console.log("Audio play failed:", e));
-}
-function playJump() {
-  const audio = jumpAudio.cloneNode(true);
-  audio.play().catch((e) => console.log("Audio play failed:", e));
-}
-function playBang(size, position) {
-  let audioSource;
-  if (size === "large") audioSource = bangLarge;
-  else if (size === "medium") audioSource = bangMedium;
-  else if (size === "small") audioSource = bangSmall;
-  else return;
-  const dist = state.player.pos.subtract(position).length();
-  let vol = 0.5 * Math.max(0, 1 - dist / 800);
-  if (vol <= 0) return;
-  const audio = audioSource.cloneNode(true);
-  audio.volume = vol;
-  audio.play().catch((e) => console.log("Audio play failed:", e));
-}
-function updatePlayerMazePosition() {
-  const interior = state.player.currentInterior;
-  const planet = state.player.currentPlanet;
-  if (!interior || !planet) {
-    console.warn("updatePlayerMazePosition: missing interior or planet");
-    return;
-  }
-  const offsetX = planet.pos.x - interior.cols * interior.tileSize / 2;
-  const offsetY = planet.pos.y - interior.rows * interior.tileSize / 2;
-  state.player.pos.x = offsetX + state.player.mazeCol * interior.tileSize + interior.tileSize / 2;
-  state.player.pos.y = offsetY + state.player.mazeRow * interior.tileSize + interior.tileSize / 2;
-}
-function enterMazeMode() {
-  const interior = state.player.currentPlanet?.interior;
-  if (!interior) {
-    console.error("Cannot enter maze: no planet or interior");
-    return;
-  }
-  state.player.mode = "maze";
-  state.player.currentInterior = interior;
-  state.player.onSurface = false;
-  state.player.mazeCol = interior.exitColLeft;
-  state.player.mazeRow = interior.exitRow;
-  state.player.mazeDir = new Vector2(1, 0);
-  state.player.lastMoveTime = Date.now();
-  updatePlayerMazePosition();
-}
-function enterPlatformMode() {
-  const interior = state.player.currentPlanet?.interior;
-  if (!interior) {
-    console.error("Cannot enter platform: no planet or interior");
-    return;
-  }
-  state.player.mode = "platform";
-  state.player.currentInterior = interior;
-  state.player.onSurface = false;
-  state.player.platformPos = new Vector2(
-    (interior.exitColLeft + 0.5) * interior.tileSize,
-    (interior.exitRow + 0.5) * interior.tileSize
-  );
-  state.player.platformVel = new Vector2(0, 0);
-  const tileX = Math.floor(state.player.platformPos.x / interior.tileSize);
-  const tileY = Math.floor(state.player.platformPos.y / interior.tileSize);
-  const belowTile = interior.tiles[tileY + 1]?.[tileX];
-  state.player.onGround = belowTile === "#" || belowTile === "H";
-  updatePlayerPlatformPosition();
-}
-function updatePlayerPlatformPosition() {
-  const interior = state.player.currentInterior;
-  const planet = state.player.currentPlanet;
-  if (!interior || !planet) {
-    console.warn("updatePlayerPlatformPosition: missing interior or planet");
-    return;
-  }
-  const offsetX = planet.pos.x - interior.cols * interior.tileSize / 2;
-  const offsetY = planet.pos.y - interior.rows * interior.tileSize / 2;
-  state.player.pos.x = offsetX + state.player.platformPos.x;
-  state.player.pos.y = offsetY + state.player.platformPos.y;
-}
-function startTeleportFromMaze() {
-  state.player.startTeleport("space");
-  state.player.vel = new Vector2(0, 0);
-  state.player.onSurface = false;
-}
-function exitMazeMode() {
-  state.player.mode = "space";
-  state.player.currentInterior = null;
-  if (state.player.currentPlanet) {
-    const surfaceDist = state.player.currentPlanet.radius + PLAYER_RADIUS;
-    state.player.pos.x = state.player.currentPlanet.pos.x + Math.cos(state.player.currentPlanet.beamAngle) * surfaceDist;
-    state.player.pos.y = state.player.currentPlanet.pos.y + Math.sin(state.player.currentPlanet.beamAngle) * surfaceDist;
-    state.player.angle = state.player.currentPlanet.beamAngle;
-    state.player.onSurface = true;
-    state.player.lastInfluencePlanet = state.player.currentPlanet;
-  }
-}
-function checkMazeDots() {
-  if (state.player.mode != "maze") return;
-  const interior = state.player.currentInterior;
-  for (let i = interior.dots.length - 1; i >= 0; i--) {
-    const d = interior.dots[i];
-    if (d.x === state.player.mazeCol && d.y === state.player.mazeRow) {
-      playEatDot();
-      interior.dots.splice(i, 1);
-      state.score += 10;
-    }
-  }
-  for (let i = interior.powerPellets.length - 1; i >= 0; i--) {
-    const p = interior.powerPellets[i];
-    if (p.x === state.player.mazeCol && p.y === state.player.mazeRow) {
-      playEatDot();
-      interior.powerPellets.splice(i, 1);
-      state.score += 50;
-    }
-  }
-}
 function createParticles(atPos, count) {
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
@@ -1159,6 +1013,8 @@ var Player = class extends Entity {
     this.teleportStartTime = Date.now();
     this.teleportScale = 1;
     this.teleportGlow = 0;
+    this.vel = new Vector2(0, 0);
+    this.onSurface = false;
     if (targetPos && targetMode === "platform") {
       this.platformPos = targetPos.clone();
     }
@@ -1174,7 +1030,7 @@ var Player = class extends Entity {
       this.deathRotation = 0;
       this.deathAlpha = 1;
       createDeathParticles(this.pos, 400);
-      playDeath();
+      state.audioManager.playDeath();
     }
   }
   applyGravity() {
@@ -1197,6 +1053,77 @@ var Player = class extends Entity {
     const tileY = Math.floor(y / interior.tileSize);
     return interior.tiles[tileY]?.[tileX] === "#";
   }
+  updateMazePosition() {
+    const interior = this.currentInterior;
+    const planet = this.currentPlanet;
+    if (!interior || !planet) {
+      console.warn("updatePlayerMazePosition: missing interior or planet");
+      return;
+    }
+    const offsetX = planet.pos.x - interior.cols * interior.tileSize / 2;
+    const offsetY = planet.pos.y - interior.rows * interior.tileSize / 2;
+    this.pos.x = offsetX + this.mazeCol * interior.tileSize + interior.tileSize / 2;
+    this.pos.y = offsetY + this.mazeRow * interior.tileSize + interior.tileSize / 2;
+  }
+  enterMazeMode() {
+    const interior = this.currentPlanet?.interior;
+    if (!interior) {
+      console.error("Cannot enter maze: no planet or interior");
+      return;
+    }
+    this.mode = "maze";
+    this.currentInterior = interior;
+    this.onSurface = false;
+    this.mazeCol = interior.exitColLeft;
+    this.mazeRow = interior.exitRow;
+    this.mazeDir = new Vector2(1, 0);
+    this.lastMoveTime = Date.now();
+    this.updateMazePosition();
+  }
+  exitMazeMode() {
+    this.mode = "space";
+    this.currentInterior = null;
+    if (this.currentPlanet) {
+      const surfaceDist = this.currentPlanet.radius + PLAYER_RADIUS;
+      this.pos.x = this.currentPlanet.pos.x + Math.cos(this.currentPlanet.beamAngle) * surfaceDist;
+      this.pos.y = this.currentPlanet.pos.y + Math.sin(this.currentPlanet.beamAngle) * surfaceDist;
+      this.angle = this.currentPlanet.beamAngle;
+      this.onSurface = true;
+      this.lastInfluencePlanet = this.currentPlanet;
+    }
+  }
+  updatePlatformPosition() {
+    const interior = this.currentInterior;
+    const planet = this.currentPlanet;
+    if (!interior || !planet) {
+      console.warn("updatePlayerPlatformPosition: missing interior or planet");
+      return;
+    }
+    const offsetX = planet.pos.x - interior.cols * interior.tileSize / 2;
+    const offsetY = planet.pos.y - interior.rows * interior.tileSize / 2;
+    this.pos.x = offsetX + this.platformPos.x;
+    this.pos.y = offsetY + this.platformPos.y;
+  }
+  enterPlatformMode() {
+    const interior = this.currentPlanet?.interior;
+    if (!interior) {
+      console.error("Cannot enter platform: no planet or interior");
+      return;
+    }
+    this.mode = "platform";
+    this.currentInterior = interior;
+    this.onSurface = false;
+    this.platformPos = new Vector2(
+      (interior.exitColLeft + 0.5) * interior.tileSize,
+      (interior.exitRow + 0.5) * interior.tileSize
+    );
+    this.platformVel = new Vector2(0, 0);
+    const tileX = Math.floor(this.platformPos.x / interior.tileSize);
+    const tileY = Math.floor(this.platformPos.y / interior.tileSize);
+    const belowTile = interior.tiles[tileY + 1]?.[tileX];
+    this.onGround = belowTile === "#" || belowTile === "H";
+    this.updatePlatformPosition();
+  }
   move(keys) {
     if (this.mode == "maze") {
       const now = Date.now();
@@ -1210,7 +1137,7 @@ var Player = class extends Entity {
         const newCol = this.mazeCol + dx;
         const newRow = this.mazeRow + dy;
         if (dy === -1 && this.mazeRow === this.currentInterior.exitRow && (this.mazeCol === this.currentInterior.exitColLeft || this.mazeCol === this.currentInterior.exitColRight)) {
-          startTeleportFromMaze();
+          this.startTeleport("space");
           return;
         }
         if (!this.currentInterior.walls[newRow]?.[newCol]) {
@@ -1218,7 +1145,7 @@ var Player = class extends Entity {
           this.mazeRow = newRow;
           this.mazeDir = new Vector2(dx || this.mazeDir.x, dy || this.mazeDir.y).normalize();
           this.lastMoveTime = now;
-          updatePlayerMazePosition();
+          this.updateMazePosition();
         }
       }
       return;
@@ -1290,7 +1217,7 @@ var Player = class extends Entity {
         this.platformVel.y = 0;
         console.warn("Player fell offscreen - respawning");
       }
-      updatePlayerPlatformPosition();
+      this.updatePlatformPosition();
       return;
     }
     if (this.onSurface && this.currentPlanet) {
@@ -1313,7 +1240,7 @@ var Player = class extends Entity {
       if (this.onGround) {
         this.platformVel.y = -JUMP_STRENGTH * 0.5;
         this.onGround = false;
-        playJump();
+        state.audioManager.playJump();
       }
       return;
     }
@@ -1322,7 +1249,7 @@ var Player = class extends Entity {
       this.vel = direction.multiply(JUMP_STRENGTH);
       this.onSurface = false;
       this.currentPlanet = null;
-      playJump();
+      state.audioManager.playJump();
     }
   }
   tryGroundPound() {
@@ -1332,6 +1259,26 @@ var Player = class extends Entity {
       const outwardDir = this.pos.subtract(planet.pos).normalize();
       const radialVel = this.vel.dot(outwardDir);
       if (radialVel > 0) this.isGroundPounding = true;
+    }
+  }
+  checkMazeDots() {
+    if (this.mode != "maze") return;
+    const interior = this.currentInterior;
+    for (let i = interior.dots.length - 1; i >= 0; i--) {
+      const d = interior.dots[i];
+      if (d.x === this.mazeCol && d.y === this.mazeRow) {
+        state.audioManager.playEatDot();
+        interior.dots.splice(i, 1);
+        state.score += 10;
+      }
+    }
+    for (let i = interior.powerPellets.length - 1; i >= 0; i--) {
+      const p = interior.powerPellets[i];
+      if (p.x === this.mazeCol && p.y === this.mazeRow) {
+        state.audioManager.playEatDot();
+        interior.powerPellets.splice(i, 1);
+        state.score += 50;
+      }
     }
   }
   update() {
@@ -1350,11 +1297,11 @@ var Player = class extends Entity {
       if (t >= 1) {
         this.isTeleporting = false;
         if (this.teleportTargetMode === "maze") {
-          enterMazeMode();
+          this.enterMazeMode();
         } else if (this.teleportTargetMode === "platform") {
-          enterPlatformMode();
+          this.enterPlatformMode();
         } else {
-          exitMazeMode();
+          this.exitMazeMode();
         }
         this.teleportTargetMode = null;
         return;
@@ -2042,7 +1989,7 @@ var CollisionSystem = class {
       const c = coins[i];
       const dist = player.pos.subtract(c.pos).length();
       if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
-        playEatDot();
+        state.audioManager.playEatDot();
         coins.splice(i, 1);
         state.score++;
       }
@@ -2074,6 +2021,61 @@ var AISystem = class {
   }
 };
 
+// js/AudioManager.js
+var AudioManager = class {
+  constructor() {
+    this.eatDotIndex = 0;
+    this.eatDotAudio0 = new Audio("sounds/eat_dot_0.wav");
+    this.eatDotAudio1 = new Audio("sounds/eat_dot_1.wav");
+    this.deathAudio = new Audio("sounds/death_0.wav");
+    this.jumpAudio = new Audio("sounds/jump.wav");
+    this.jumpSmallAudio = new Audio("sounds/jumpsmall.wav");
+    this.bangLarge = new Audio("sounds/bangLarge.wav");
+    this.bangMedium = new Audio("sounds/bangMedium.wav");
+    this.bangSmall = new Audio("sounds/bangSmall.wav");
+    [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall].forEach((audio) => {
+      audio.volume = 0.5;
+      audio.preload = "auto";
+      audio.load();
+    });
+  }
+  playEatDot() {
+    const source = this.eatDotIndex === 0 ? this.eatDotAudio0 : this.eatDotAudio1;
+    this.eatDotIndex = 1 - this.eatDotIndex;
+    const audio = source.cloneNode(true);
+    audio.play().catch((e) => console.log("Audio play failed:", e));
+  }
+  playDeath() {
+    const audio = this.deathAudio.cloneNode(true);
+    audio.play().catch((e) => console.log("Audio play failed:", e));
+  }
+  playJump() {
+    const audio = this.jumpAudio.cloneNode(true);
+    audio.play().catch((e) => console.log("Audio play failed:", e));
+  }
+  playJumpSmall() {
+    const audio = this.jumpSmallAudio.cloneNode(true);
+    audio.play().catch((e) => console.log("Audio play failed:", e));
+  }
+  playBang(size, position) {
+    let audioSource;
+    if (size === "large") audioSource = this.bangLarge;
+    else if (size === "medium") audioSource = this.bangMedium;
+    else if (size === "small") audioSource = this.bangSmall;
+    else return;
+    const dist = state.player.pos.subtract(position).length();
+    let vol = 0.5 * Math.max(0, 1 - dist / 800);
+    if (vol <= 0) return;
+    const audio = audioSource.cloneNode(true);
+    audio.volume = vol;
+    audio.play().catch((e) => console.log("Audio play failed:", e));
+  }
+  // Optional: Reset method if needed for game restarts (e.g., call from initGame)
+  reset() {
+    this.eatDotIndex = 0;
+  }
+};
+
 // js/game.js
 state.canvas = document.getElementById("gameCanvas");
 state.ctx = state.canvas.getContext("2d");
@@ -2087,7 +2089,7 @@ state.planetTexture.onload = () => {
   initGame();
   gameLoop();
 };
-initAudio();
+state.audioManager = new AudioManager();
 initResizeListener();
 state.stars = [];
 for (let i = 0; i < STAR_COUNT; i++) {
@@ -2236,7 +2238,7 @@ function initGame() {
   state.gameOver = false;
   state.levelComplete = false;
   state.player.mode = "space";
-  state.eatDotIndex = 0;
+  state.audioManager.reset();
   gravitySystem = new GravitySystem(state.planetoids);
 }
 function updatePlanetoids() {
@@ -2274,7 +2276,7 @@ function breakAsteroid(ast) {
   if (ast.radius > 30) size = "large";
   else if (ast.radius > 20) size = "medium";
   else size = "small";
-  playBang(size, ast.pos);
+  state.audioManager.playBang(size, ast.pos);
   createParticles(ast.pos, 150);
   if (ast.radius < 15) return;
   const numSmall = ast.radius > 30 ? 3 : 2;
@@ -2322,7 +2324,7 @@ function gameLoop(timestamp) {
     return;
   }
   updatePlanetoids();
-  if (state.player.mode == "maze") updatePlayerMazePosition();
+  if (state.player.mode == "maze") state.player.updateMazePosition();
   updateAsteroids();
   let toBreak = collisionSystem.handlePlanetAsteroidCollisions(state.planetoids, state.asteroids);
   collisionSystem.handleElasticCollisions(state.planetoids);
@@ -2352,7 +2354,7 @@ function gameLoop(timestamp) {
   collisionSystem.handlePlayerAsteroidCollisions(state.player, state.asteroids);
   collisionSystem.handlePlayerEnemyCollisions(state.player, state.enemies);
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
-    checkMazeDots();
+    state.player.checkMazeDots();
   }
   if (state.coins.length === 0 && state.player.mode != "maze") {
     state.levelComplete = true;
