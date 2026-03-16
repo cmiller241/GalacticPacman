@@ -2,7 +2,7 @@
 import { state } from '../state.js';
 import { SURFACE_TOLERANCE, PLAYER_RADIUS, ENEMY_RADIUS, COIN_RADIUS, GROUND_POUND_PUSH_STRENGTH } from '../constants.js';
 import { Vector2 } from '../vector2.js';
-import { createParticles, playEatDot } from '../utils.js';
+import { createParticles } from '../utils.js';
 
 export class CollisionSystem {
   handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = 'radius', radiusProp2 = 'radius', massProp1 = 'mass', massProp2 = 'mass') {
@@ -98,7 +98,7 @@ export class CollisionSystem {
       const c = coins[i];
       const dist = player.pos.subtract(c.pos).length();
       if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
-        playEatDot();
+        state.audioManager.playEatDot();
         coins.splice(i, 1);
         state.score++;
       }
