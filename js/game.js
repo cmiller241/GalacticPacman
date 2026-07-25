@@ -22,6 +22,7 @@ import { SpaceGhost } from './entities/world/SpaceGhost.js';
 import { Coin } from './entities/world/Coin.js';
 import { BlobMonster } from './entities/interior/BlobMonster.js';
 import { MazeGhost } from './entities/interior/MazeGhost.js';
+import { AlienMonster } from './entities/interior/AlienMonster.js';
 import { GravitySystem } from './systems/GravitySystem.js';
 import { CollisionSystem } from './systems/CollisionSystem.js';
 import { AISystem } from './systems/AISystem.js';
@@ -70,14 +71,6 @@ window.addEventListener('keydown', (e) => {
   if (e.key === ' ') {
     if (state.player.onSurface && state.player.mode != "maze") state.player.jump();
     else if (state.player.mode != "maze") state.player.tryGroundPound();
-  }
-  if (e.key === 'ArrowDown' && state.player.mode != "maze") {
-    if (state.player.onSurface && state.player.currentPlanet instanceof BeamPlanetoid) {
-      const diff = angleDiff(state.player.angle, state.player.currentPlanet.beamAngle);
-      if (diff < Math.PI / 5) {
-        state.player.startTeleport(state.player.currentPlanet.interior instanceof MazeInterior ? "maze" : "platform");
-      }
-    }
   }
   if (e.key === 'Enter') {
     if (state.gameOver) {
@@ -146,6 +139,13 @@ function initGame() {
       new Vector2(13 * tile + tile / 2, 1 * tile - 15),  // centered on top platform
       '#ff6600'  // bright orange blob
     ),
+  ];
+  interior.aliens = [
+    new AlienMonster(
+      interior,
+      new Vector2(5 * tile + tile / 2, 5 * tile - 10),
+      '#ff3333'
+    )
   ];
 
   // Initialize two miniature maze ghosts at random open positions
@@ -320,6 +320,9 @@ function gameLoop(timestamp) {
   if (state.player.mode === "platform" && state.platformPlanet?.interior?.blobs) {
     state.platformPlanet.interior.blobs.forEach(b => b.update());
   }
+  if (state.player.mode === "platform" && state.platformPlanet?.interior?.aliens) {
+    state.platformPlanet.interior.aliens.forEach(a => a.update());
+  }
   state.coins.forEach(c => c.update());
   state.particles.forEach(p => p.update());
   state.particles = state.particles.filter(p => p.life > 0);
@@ -333,14 +336,19 @@ function gameLoop(timestamp) {
     state.levelComplete = true;
   }
   // Camera follows player
-  const camera = new Vector2();
-  camera.x = state.player.pos.x - state.canvas.width / 2;
-  camera.y = state.player.pos.y - state.canvas.height / 2;
-  // Clamp camera to scene bounds
-  if (camera.x < 0) camera.x = 0;
-  if (camera.y < 0) camera.y = 0;
-  if (camera.x > state.sceneWidth - state.canvas.width) camera.x = state.sceneWidth - state.canvas.width;
-  if (camera.y > state.sceneHeight - state.canvas.height) camera.y = state.sceneHeight - state.canvas.height;
+// Camera follows player (use teleportRenderPos if teleporting)
+const playerPos = state.player.isTeleporting ? state.player.teleportRenderPos : state.player.pos;
+
+const camera = new Vector2();
+camera.x = playerPos.x - state.canvas.width / 2;
+camera.y = playerPos.y - state.canvas.height / 2;
+
+// Clamp camera to scene bounds
+if (camera.x < 0) camera.x = 0;
+if (camera.y < 0) camera.y = 0;
+if (camera.x > state.sceneWidth - state.canvas.width) camera.x = state.sceneWidth - state.canvas.width;
+if (camera.y > state.sceneHeight - state.canvas.height) camera.y = state.sceneHeight - state.canvas.height;
+
   state.ctx.save();
   state.ctx.translate(-camera.x, -camera.y);
   state.ctx.drawImage(state.starCanvas, 0, 0);

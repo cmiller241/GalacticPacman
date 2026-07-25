@@ -3,308 +3,830 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Donkey Kong Demo</title>
+    <title>Galactic Pac-Man — Irregular + Concave Planets (Rotation + Movement Fixed)</title>
     <style>
-        body { margin: 0; background: #000; }
-        canvas { display: block; margin: 0 auto; }
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #000050, #000010);
+        }
+        canvas {
+            display: block;
+            border: 1px solid #000;
+        }
     </style>
 </head>
 <body>
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <canvas id="gameCanvas"></canvas>
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
 
-        // Game constants
-        const GRAVITY = 0.5;
-        const JUMP_FORCE = -12;
-        const MOVE_SPEED = 3;
-        const CLIMB_SPEED = 2;
-        const WALK_ANIM_SPEED = 0.15;
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            stars.length = 0;
+            for (let i = 0; i < STAR_COUNT; i++) {
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    size: Math.random() * 2 + 1
+                });
+            }
+        });
 
-        // Sprite and hitbox constants
-        const SPRITE_SOURCE_SIZE = 30;
-        const SPRITE_SCALE = 2; // Adjust this to make the sprite bigger (e.g., 1.5 or 2)
-        const SPRITE_DRAW_WIDTH = SPRITE_SOURCE_SIZE * SPRITE_SCALE;
-        const SPRITE_DRAW_HEIGHT = SPRITE_SOURCE_SIZE * SPRITE_SCALE;
-        const HITBOX_WIDTH = 15; // Unchanged for collision
-        const HITBOX_HEIGHT = 30; // Unchanged for collision
+        // Audio setup
+        const eatDotAudio0 = new Audio('sounds/eat_dot_0.wav');
+        const eatDotAudio1 = new Audio('sounds/eat_dot_1.wav');
+        const deathAudio = new Audio('sounds/death_0.wav');
+        const jumpAudio = new Audio('sounds/jump.wav');
+        const jumpSmallAudio = new Audio('sounds/jumpsmall.wav');
+        [eatDotAudio0, eatDotAudio1, deathAudio, jumpAudio, jumpSmallAudio].forEach(audio => {
+            audio.volume = 0.5;
+            audio.preload = 'auto';
+            audio.load();
+        });
+        let eatDotIndex = 0;
+        function playEatDot() {
+            const source = eatDotIndex === 0 ? eatDotAudio0 : eatDotAudio1;
+            eatDotIndex = 1 - eatDotIndex;
+            const audio = source.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playDeath() {
+            const audio = deathAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playJump() {
+            const audio = jumpAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
+        function playJumpSmall() {
+            const audio = jumpSmallAudio.cloneNode(true);
+            audio.play().catch(e => console.log('Audio play failed:', e));
+        }
 
-        // Load hero sprite
-        const heroImg = new Image();
-        heroImg.src = 'img/herosprites.png';
+        // Constants
+        const GRAVITY_STRENGTH = 0.35;
+        const GROUND_POUND_GRAV_MULTIPLIER = 3;
+        const GROUND_POUND_PUSH_STRENGTH = 0.05;
+        const JUMP_STRENGTH = 9;
+        const MOVE_SPEED = 0.05;
+        const PLAYER_RADIUS = 20;
+        const ENEMY_RADIUS = 20;
+        const COIN_RADIUS = 5;
+        const COIN_ORBIT_OFFSET = 18;
+        const INFLUENCE_PADDING = 140;
+        const SURFACE_TOLERANCE = 4;
+        const DRAG = 0.995;
+        const PLANET_SPEED = 0.5;
+        const ENEMY_JUMP_PROB = 0.0005;
+        const STAR_COUNT = 200;
+        const SURFACE_FRICTION = 0.92;
 
-        // Load platform sprite
-        const platformImg = new Image();
-        platformImg.src = 'img/platform.png';
+        class Vector2 {
+            constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+            add(v) { this.x += v.x; this.y += v.y; return this; }
+            subtract(v) { return new Vector2(this.x - v.x, this.y - v.y); }
+            multiply(s) { return new Vector2(this.x * s, this.y * s); }
+            length() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            normalize() { const len = this.length(); if (len > 0) { this.x /= len; this.y /= len; } return this; }
+            clone() { return new Vector2(this.x, this.y); }
+            dot(v) { return this.x * v.x + this.y * v.y; }
+        }
 
-        // Load Satan Kong sprite
-        const satanImg = new Image();
-        satanImg.src = 'img/satan.png';
+        class Planetoid {
+            constructor(x, y, baseRadius, color, numSides = 8, irregularity = 0.15, concavityDepth = 0) {
+                this.pos = new Vector2(x, y);
+                this.color = color;
+                this.mass = baseRadius * baseRadius;
+                this.vertices = [];
+                this.edges = [];
+                this.concavityDepth = concavityDepth;
+                this.angle = 0;
+                this.angularVelocity = (Math.random() - 0.5) * 0.008; // set to 0 to disable rotation
 
-        let assetsToLoad = 3;
-        let assetsLoaded = false;
+                for (let i = 0; i < numSides; i++) {
+                    let ang = i * 2 * Math.PI / numSides;
+                    let r = baseRadius * (1 + irregularity * (Math.random() - 0.5) * 2);
+                    this.vertices.push(new Vector2(Math.cos(ang) * r, Math.sin(ang) * r));
+                }
 
-        heroImg.onload = () => {
-            assetsToLoad--;
-            if (assetsToLoad === 0) assetsLoaded = true;
-        };
+                if (concavityDepth > 0) {
+                    const numDents = Math.max(1, Math.floor(numSides / 4));
+                    for (let k = 0; k < numDents; k++) {
+                        const idx = Math.floor(Math.random() * numSides);
+                        const v = this.vertices[idx];
+                        const dir = v.clone().normalize();
+                        v.x -= dir.x * baseRadius * concavityDepth;
+                        v.y -= dir.y * baseRadius * concavityDepth;
+                    }
+                }
 
-        platformImg.onload = () => {
-            assetsToLoad--;
-            if (assetsToLoad === 0) assetsLoaded = true;
-        };
+                this.computeMaxRadius();
+                this.influenceRadius = this.radius + INFLUENCE_PADDING;
+                this.computeEdges();
 
-        satanImg.onload = () => {
-            assetsToLoad--;
-            if (assetsToLoad === 0) assetsLoaded = true;
-        };
+                let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+                this.vel = direction.multiply(PLANET_SPEED);
+                this.cachedAlpha = 0.3;
+                this.lastAlphaUpdate = 0;
+            }
 
-        // Player (Mario)
-        let player = {
-            x: 100,
-            y: 520,
-            width: HITBOX_WIDTH,
-            height: HITBOX_HEIGHT,
-            vx: 0,
-            vy: 0,
-            onGround: false,
-            climbing: false,
-            facing: 1,
-            frame: 0,
-            frameTimer: 0
-        };
+            computeMaxRadius() {
+                let maxR = 0;
+                for (let v of this.vertices) {
+                    let d = v.length();
+                    if (d > maxR) maxR = d;
+                }
+                this.radius = maxR;
+            }
 
-        // Platforms (simple rectangular platforms, height adjusted to 15 for sprite)
-        let platforms = [
-            { x: 0, y: 550, width: 800, height: 15, color: 'gray' }, // Ground
-            { x: 100, y: 450, width: 200, height: 15, color: 'gray' },
-            { x: 400, y: 350, width: 300, height: 15, color: 'gray' },
-            { x: 200, y: 250, width: 150, height: 15, color: 'gray' },
-            { x: 500, y: 150, width: 200, height: 15, color: 'gray' }
-        ];
+            computeEdges() {
+                this.edges = [];
+                const n = this.vertices.length;
+                for (let i = 0; i < n; i++) {
+                    const start = this.vertices[i];
+                    const end = this.vertices[(i + 1) % n];
+                    const vec = end.subtract(start);
+                    const len = vec.length();
+                    const outwardNormal = new Vector2(vec.y, -vec.x).normalize();
+                    this.edges.push({
+                        start: start.clone(),
+                        end: end.clone(),
+                        normal: outwardNormal,
+                        length: len
+                    });
+                }
+            }
 
-        // Ladders (rectangular areas where player can climb)
-        let ladders = [
-            { x: 150, y: 450, width: 20, height: 100, color: 'blue' }, // Ladder from platform 1 to ground
-            { x: 450, y: 350, width: 20, height: 100, color: 'blue' }, // Ladder from platform 2 to platform 1
-            { x: 250, y: 250, width: 20, height: 100, color: 'blue' }, // Ladder from platform 3 to platform 2
-            { x: 550, y: 150, width: 20, height: 100, color: 'blue' }  // Ladder from platform 4 to platform 3
-        ];
+            findClosestPointAndNormal(worldPoint) {
+                const rel = worldPoint.subtract(this.pos);
+                const cos = Math.cos(-this.angle);
+                const sin = Math.sin(-this.angle);
+                const localPoint = new Vector2(
+                    rel.x * cos - rel.y * sin,
+                    rel.x * sin + rel.y * cos
+                );
 
-        // Donkey Kong (static for now, using sprite at top)
-        let dk = {
-            x: 600,
-            y: 100,
-            width: 60,
-            height: 70
-        };
+                let minDist = Infinity;
+                let closestLocal = null;
+                let closestNormal = null;
+                let closestEdgeIndex = -1;
 
-        // Simple barrel (one rolling barrel for demo)
-        let barrel = {
-            x: 600,
-            y: 130,
-            radius: 10,
-            vx: -2,
-            vy: 0,
-            color: 'orange',
-            onGround: false
-        };
+                for (let i = 0; i < this.edges.length; i++) {
+                    const edge = this.edges[i];
+                    const a = edge.start;
+                    const b = edge.end;
+                    const ab = b.subtract(a);
+                    const ap = localPoint.subtract(a);
+                    let t = ab.dot(ab) > 0 ? ap.dot(ab) / ab.dot(ab) : 0;
+                    t = Math.max(0, Math.min(1, t));
 
-        // Keyboard input
-        let keys = {};
-        window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+                    const proj = a.add(ab.multiply(t));
+                    const distVec = localPoint.subtract(proj);
+                    const dist = distVec.length();
+
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestLocal = proj;
+                        closestNormal = edge.normal.clone();
+                        closestEdgeIndex = i;
+                    }
+                }
+
+                if (!closestLocal) return { dist: Infinity, point: null, normal: null, edgeIndex: -1 };
+
+                const cosF = Math.cos(this.angle);
+                const sinF = Math.sin(this.angle);
+
+                const wx = closestLocal.x * cosF - closestLocal.y * sinF;
+                const wy = closestLocal.x * sinF + closestLocal.y * cosF;
+                const worldPointOut = new Vector2(this.pos.x + wx, this.pos.y + wy);
+
+                const nx = closestNormal.x * cosF - closestNormal.y * sinF;
+                const ny = closestNormal.x * sinF + closestNormal.y * cosF;
+                const worldNormal = new Vector2(nx, ny).normalize();
+
+                return {
+                    dist: minDist,
+                    point: worldPointOut,
+                    normal: worldNormal,
+                    edgeIndex: closestEdgeIndex
+                };
+            }
+
+            draw() {
+                const now = Date.now();
+                if (now - this.lastAlphaUpdate > 500) {
+                    const dist = this.pos.subtract(player.pos).length();
+                    this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
+                    this.lastAlphaUpdate = now;
+                }
+
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(this.angle);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, this.influenceRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
+                ctx.lineWidth = 3;
+                ctx.setLineDash([10, 5]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.shadowColor = 'rgba(173,216,230,0.3)';
+                ctx.shadowBlur = 25;
+
+                ctx.beginPath();
+                for (let i = 0; i < this.vertices.length; i++) {
+                    const v = this.vertices[i];
+                    if (i === 0) ctx.moveTo(v.x, v.y);
+                    else ctx.lineTo(v.x, v.y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                ctx.restore();
+
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+            }
+
+            update() {
+                this.angle += this.angularVelocity;
+            }
+        }
+
+        class Particle {
+            constructor(pos, vel, life = 40) {
+                this.pos = pos.clone();
+                this.vel = vel;
+                this.life = life;
+            }
+            update() {
+                this.pos.add(this.vel);
+                this.life--;
+            }
+            draw() {
+                if (this.life <= 0) return;
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 0, ${this.life / 40})`;
+                ctx.fill();
+            }
+        }
+
+        class Player {
+            constructor(x, y) {
+                this.pos = new Vector2(x, y);
+                this.vel = new Vector2(0, 0);
+                this.radius = PLAYER_RADIUS;
+                this.onSurface = false;
+                this.currentPlanet = null;
+                this.currentEdgeIndex = 0;
+                this.edgeParam = 0.5;
+                this.currentNormal = new Vector2(0, 1);
+                this.lastInfluencePlanet = null;
+                this.mouthAngle = 0;
+                this.facingDirection = 1;
+                this.isGroundPounding = false;
+            }
+
+            findDominantPlanet(planets) {
+                let closest = null, minDist = Infinity;
+                for (const planet of planets) {
+                    const dist = this.pos.subtract(planet.pos).length();
+                    if (dist < planet.influenceRadius && dist < minDist) {
+                        minDist = dist;
+                        closest = planet;
+                    }
+                }
+                return closest;
+            }
+
+            applyGravity(planets) {
+                if (this.onSurface) return;
+                let planet = this.findDominantPlanet(planets);
+                if (!planet && this.lastInfluencePlanet) planet = this.lastInfluencePlanet;
+                if (planet) {
+                    this.lastInfluencePlanet = planet;
+                    const direction = planet.pos.subtract(this.pos).normalize();
+                    let grav = GRAVITY_STRENGTH;
+                    if (this.isGroundPounding) grav *= GROUND_POUND_GRAV_MULTIPLIER;
+                    this.vel.add(direction.multiply(grav));
+                }
+            }
+
+            updatePositionOnSurface() {
+                if (!this.onSurface || !this.currentPlanet) return;
+
+                const planet = this.currentPlanet;
+                const edge = planet.edges[this.currentEdgeIndex];
+
+                const localX = edge.start.x + (edge.end.x - edge.start.x) * this.edgeParam;
+                const localY = edge.start.y + (edge.end.y - edge.start.y) * this.edgeParam;
+
+                const cos = Math.cos(planet.angle);
+                const sin = Math.sin(planet.angle);
+                const wx = localX * cos - localY * sin;
+                const wy = localX * sin + localY * cos;
+
+                this.pos.x = planet.pos.x + wx;
+                this.pos.y = planet.pos.y + wy;
+            }
+
+            checkCollision(planets) {
+                if (this.onSurface && this.currentPlanet) return; // skip when already grounded
+
+                for (const planet of planets) {
+                    const closest = planet.findClosestPointAndNormal(this.pos);
+                    if (closest.dist <= this.radius + SURFACE_TOLERANCE) {
+                        this.pos = closest.point.clone().add(closest.normal.multiply(this.radius));
+                        this.onSurface = true;
+                        this.currentPlanet = planet;
+                        this.lastInfluencePlanet = planet;
+                        this.currentEdgeIndex = closest.edgeIndex;
+
+                        const edge = planet.edges[closest.edgeIndex];
+                        const startLocal = edge.start;
+                        const segVecLocal = new Vector2(edge.end.x - edge.start.x, edge.end.y - edge.start.y);
+
+                        const rel = closest.point.subtract(planet.pos);
+                        const cosInv = Math.cos(-planet.angle);
+                        const sinInv = Math.sin(-planet.angle);
+                        const lx = rel.x * cosInv - rel.y * sinInv;
+                        const ly = rel.x * sinInv + rel.y * cosInv;
+
+                        const toPointLocal = new Vector2(lx - startLocal.x, ly - startLocal.y);
+                        const len2 = segVecLocal.dot(segVecLocal);
+                        this.edgeParam = len2 > 0 ? toPointLocal.dot(segVecLocal) / len2 : 0.5;
+
+                        this.currentNormal = closest.normal.clone();
+
+                        const impactVel = this.vel.clone();
+                        this.vel.x = 0; this.vel.y = 0;
+
+                        if (this.isGroundPounding) {
+                            this.isGroundPounding = false;
+                            const pushDir = closest.normal.multiply(-1);
+                            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+                            createParticles(this.pos, 20);
+                        }
+                        return;
+                    }
+                }
+                this.onSurface = false;
+                this.currentPlanet = null;
+            }
+
+            move(keys) {
+                if (this.onSurface && this.currentPlanet) {
+                    const edge = this.currentPlanet.edges[this.currentEdgeIndex];
+                    let deltaT = 0;
+                    if (keys['ArrowLeft']) {
+                        deltaT -= MOVE_SPEED * 50;
+                        this.facingDirection = -1;
+                    }
+                    if (keys['ArrowRight']) {
+                        deltaT += MOVE_SPEED * 50;
+                        this.facingDirection = 1;
+                    }
+                    this.edgeParam += deltaT / edge.length;
+
+                    while (this.edgeParam > 1) {
+                        this.edgeParam -= 1;
+                        this.currentEdgeIndex = (this.currentEdgeIndex + 1) % this.currentPlanet.edges.length;
+                    }
+                    while (this.edgeParam < 0) {
+                        this.edgeParam += 1;
+                        this.currentEdgeIndex = (this.currentEdgeIndex - 1 + this.currentPlanet.edges.length) % this.currentPlanet.edges.length;
+                    }
+
+                    this.updatePositionOnSurface();
+                }
+            }
+
+            jump() {
+                if (this.onSurface && this.currentPlanet) {
+                    const edge = this.currentPlanet.edges[this.currentEdgeIndex];
+                    this.vel = edge.normal.multiply(JUMP_STRENGTH);
+                    this.onSurface = false;
+                    this.currentPlanet = null;
+                    playJump();
+                }
+            }
+
+            tryGroundPound() {
+                if (this.isGroundPounding) return;
+                let planet = this.findDominantPlanet(planetoids) || this.lastInfluencePlanet;
+                if (planet) {
+                    const outwardDir = this.pos.subtract(planet.pos).normalize();
+                    const radialVel = this.vel.dot(outwardDir);
+                    if (radialVel > 0) this.isGroundPounding = true;
+                }
+            }
+
+            update() {
+                if (!this.onSurface) {
+                    this.vel = this.vel.multiply(DRAG);
+                    this.pos.add(this.vel);
+                } else if (this.onSurface && this.currentPlanet) {
+                    this.vel = this.vel.multiply(SURFACE_FRICTION);
+                    // No snapping here anymore — trust parametric position
+                }
+
+                this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+            }
+
+            draw() {
+                let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+                let downDir = new Vector2(0, 1);
+                if (planet) {
+                    if (this.onSurface) {
+                        downDir = this.currentNormal.multiply(-1);
+                    } else {
+                        downDir = planet.pos.subtract(this.pos).normalize();
+                    }
+                }
+                const downAngle = Math.atan2(downDir.y, downDir.x);
+                const rotation = downAngle - Math.PI / 2;
+
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(rotation);
+                if (this.facingDirection < 0) ctx.rotate(Math.PI);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, this.mouthAngle / 2, 2 * Math.PI - this.mouthAngle / 2);
+                ctx.lineTo(0, 0);
+                ctx.fillStyle = 'yellow';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Enemy {
+            constructor(planet, color) {
+                this.planet = planet;
+                this.angularSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.02;
+                this.angle = Math.random() * Math.PI * 2;
+                this.radius = ENEMY_RADIUS;
+                this.pos = new Vector2();
+                this.onSurface = true;
+                this.color = color;
+                this.lastInfluencePlanet = planet;
+                this.updatePosition();
+            }
+            updatePosition() {
+                const surfaceDist = this.planet.radius + this.radius;
+                this.pos.x = this.planet.pos.x + Math.cos(this.angle) * surfaceDist;
+                this.pos.y = this.planet.pos.y + Math.sin(this.angle) * surfaceDist;
+            }
+            update(planets) {
+                if (this.onSurface) {
+                    this.angle += this.angularSpeed;
+                    this.updatePosition();
+                    if (Math.random() < ENEMY_JUMP_PROB) {
+                        for (const p of planets) {
+                            if (p !== this.planet) {
+                                const dist = this.pos.subtract(p.pos).length();
+                                if (dist < p.influenceRadius) {
+                                    const direction = this.pos.subtract(this.planet.pos).normalize();
+                                    this.vel = direction.multiply(JUMP_STRENGTH);
+                                    this.onSurface = false;
+                                    this.planet = p;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!this.onSurface) {
+                    if (!this.vel) this.vel = new Vector2();
+                    let dominant = this.findDominantPlanet(planets);
+                    if (dominant) {
+                        this.lastInfluencePlanet = dominant;
+                        const dir = dominant.pos.subtract(this.pos).normalize();
+                        this.vel.add(dir.multiply(GRAVITY_STRENGTH));
+                    }
+                    this.vel = this.vel.multiply(DRAG);
+                    this.pos.add(this.vel);
+                    if (dominant) {
+                        const offset = this.pos.subtract(dominant.pos);
+                        const dist = offset.length();
+                        if (dist <= dominant.radius + this.radius + SURFACE_TOLERANCE) {
+                            const normal = offset.normalize();
+                            this.pos = dominant.pos.clone().add(normal.multiply(dominant.radius + this.radius));
+                            this.onSurface = true;
+                            this.angle = Math.atan2(this.pos.y - dominant.pos.y, this.pos.x - dominant.pos.x);
+                            this.planet = dominant;
+                            this.vel = new Vector2();
+                        }
+                    }
+                }
+            }
+            findDominantPlanet(planets) {
+                let closest = null, minDist = Infinity;
+                for (const planet of planets) {
+                    const dist = this.pos.subtract(planet.pos).length();
+                    if (dist < planet.influenceRadius && dist < minDist) {
+                        minDist = dist;
+                        closest = planet;
+                    }
+                }
+                return closest;
+            }
+            draw() {
+                let planet = this.onSurface ? this.planet : this.lastInfluencePlanet;
+                let downDir = new Vector2(0, 1);
+                if (planet) downDir = planet.pos.subtract(this.pos).normalize();
+                const downAngle = Math.atan2(downDir.y, downDir.x);
+                const rotation = downAngle - Math.PI / 2;
+
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(rotation);
+
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, Math.PI, 0, false);
+                ctx.lineTo(this.radius, this.radius);
+                ctx.lineTo(this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius / 3, this.radius / 2);
+                ctx.lineTo(-this.radius, this.radius);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.fillStyle = 'white';
+                ctx.beginPath(); ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 4, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = 'black';
+                ctx.beginPath(); ctx.arc(-this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(this.radius / 3, -this.radius / 3, this.radius / 8, 0, Math.PI * 2); ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Coin {
+            constructor(planet) {
+                this.planet = planet;
+                this.angularSpeed = (Math.random() - 0.5) * 0.04;
+                this.angle = 0;
+                this.radius = COIN_RADIUS;
+                this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
+                this.pos = new Vector2();
+                this.updatePosition();
+            }
+            updatePosition() {
+                this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
+                this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+            }
+            update() { this.angle += this.angularSpeed; this.updatePosition(); }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'gold';
+                ctx.fill();
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(Date.now() * 0.01);
+                ctx.beginPath();
+                ctx.arc(-this.radius*0.4, -this.radius*0.4, this.radius*0.4, 0, Math.PI*2);
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        let planetoids;
+        let player;
+        let enemies;
+        let coins;
+        let particles = [];
+        let gameOver = false;
+        let levelComplete = false;
+        let level = 1;
+        let score = 0;
+        const enemyColors = ['red', 'pink', 'cyan', 'orange'];
+        const keys = {};
+
+        const stars = [];
+        for (let i = 0; i < STAR_COUNT; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2 + 1
+            });
+        }
+
+        function initGame() {
+            planetoids = [
+                new Planetoid(300, 350, 60, 'blue', 3, 0, 0),
+                new Planetoid(600, 250, 45, 'green', 5, 0.25, 0),
+                new Planetoid(450, 500, 280, '#e0d070', 20, 0.08, 0.42),
+                new Planetoid(150, 200, 50, 'orange', 6, 0.18, 0),
+                new Planetoid(800, 100, 30, 'red', 4, 0.30, 0),
+                new Planetoid(200, 500, 40, 'cyan', 8, 0.15, 0),
+                new Planetoid(900, 200, 50, 'purple', 7, 0.10, 0),
+            ];
+
+            player = new Player(450, 500 - 110);
+            player.lastInfluencePlanet = planetoids[2];
+
+            player.currentPlanet = planetoids[2];
+            player.onSurface = true;
+            player.currentEdgeIndex = 3;
+            player.edgeParam = 0.5;
+            player.updatePositionOnSurface();
+            player.currentNormal = planetoids[2].edges[3].normal.clone();
+
+            enemies = [];
+            const numEnemies = 2 + level;
+            for (let i = 0; i < numEnemies; i++) {
+                const planetIndex = Math.floor(Math.random() * planetoids.length);
+                const color = enemyColors[i % enemyColors.length];
+                enemies.push(new Enemy(planetoids[planetIndex], color));
+            }
+
+            coins = [];
+            planetoids.forEach((planet) => {
+                const numCoins = 4 + Math.floor(planet.radius / 10);
+                for (let i = 0; i < numCoins; i++) {
+                    const coin = new Coin(planet);
+                    coin.angle = (i / numCoins) * Math.PI * 2 + Math.random() * 0.2;
+                    coins.push(coin);
+                }
+            });
+
+            particles = [];
+            gameOver = false;
+            levelComplete = false;
+            eatDotIndex = 0;
+        }
+
+        function createParticles(atPos, count) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 3 + 2;
+                const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+                particles.push(new Particle(atPos, vel));
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === ' ') {
+                if (player.onSurface) player.jump();
+                else player.tryGroundPound();
+            }
+            if (e.key === 'Enter') {
+                if (gameOver) {
+                    score = 0;
+                    level = 1;
+                    initGame();
+                } else if (levelComplete) {
+                    level++;
+                    initGame();
+                    levelComplete = false;
+                }
+            }
+        });
         window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
-        // Check if player is on a ladder
-        function isOnLadder() {
-            for (let ladder of ladders) {
-                if (player.x + player.width > ladder.x && player.x < ladder.x + ladder.width &&
-                    player.y + player.height > ladder.y && player.y < ladder.y + ladder.height) {
-                    return true;
-                }
-            }
-            return false;
-        }
+        function updatePlanetoids() {
+            for (const p of planetoids) {
+                p.pos.add(p.vel);
+                p.update();
 
-        // Collision detection with platforms
-        function checkPlatformCollision(oldY) {
-            player.onGround = false;
-            for (let platform of platforms) {
-                let oldBottom = oldY + player.height;
-                let newBottom = player.y + player.height;
-                if (player.vy >= 0 && 
-                    player.x + player.width > platform.x && player.x < platform.x + platform.width &&
-                    oldBottom <= platform.y && newBottom >= platform.y) {
-                    player.y = platform.y - player.height;
-                    player.vy = 0;
-                    player.onGround = true;
-                }
-            }
-        }
-
-        // Barrel collision with platforms (simple)
-        function checkBarrelPlatformCollision(oldBarrelY) {
-            barrel.onGround = false;
-            for (let platform of platforms) {
-                let oldBottom = oldBarrelY + barrel.radius;
-                let newBottom = barrel.y + barrel.radius;
-                if (barrel.vy >= 0 &&
-                    barrel.x > platform.x && barrel.x < platform.x + platform.width &&
-                    oldBottom <= platform.y && newBottom >= platform.y) {
-                    barrel.y = platform.y - barrel.radius;
-                    barrel.vy = 0;
-                    barrel.onGround = true;
-                }
-            }
-        }
-
-        // Check player-barrel collision (simple bounding box)
-        function checkPlayerBarrelCollision() {
-            if (player.x + player.width > barrel.x - barrel.radius && player.x < barrel.x + barrel.radius &&
-                player.y + player.height > barrel.y - barrel.radius && player.y < barrel.y + barrel.radius) {
-                // Reset player on collision (simple death)
-                player.x = 100;
-                player.y = 520;
-                player.vx = 0;
-                player.vy = 0;
-                player.frame = 0;
-                player.frameTimer = 0;
-            }
-        }
-
-        // Update game state
-        function update() {
-            // Player movement
-            player.vx = 0;
-            if (keys['ArrowLeft']) player.vx = -MOVE_SPEED;
-            if (keys['ArrowRight']) player.vx = MOVE_SPEED;
-
-            // Update facing
-            if (player.vx > 0) player.facing = 1;
-            else if (player.vx < 0) player.facing = -1;
-
-            // Climbing
-            player.climbing = isOnLadder();
-            if (player.climbing) {
-                player.vx = 0; // No horizontal movement on ladder
-                player.vy = 0; // No gravity while climbing
-                if (keys['ArrowUp']) player.y -= CLIMB_SPEED;
-                if (keys['ArrowDown']) player.y += CLIMB_SPEED;
-            } else {
-                player.vy += GRAVITY; // Apply gravity
+                if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
+                if (p.pos.x + p.radius > canvas.width) { p.pos.x = canvas.width - p.radius; p.vel.x = -p.vel.x; }
+                if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
+                if (p.pos.y + p.radius > canvas.height) { p.pos.y = canvas.height - p.radius; p.vel.y = -p.vel.y; }
             }
 
-            // Jumping
-            if (keys['ArrowUp'] && player.onGround && !player.climbing) {
-                player.vy = JUMP_FORCE;
-                player.onGround = false;
-            }
+            for (let i = 0; i < planetoids.length; i++) {
+                for (let j = i + 1; j < planetoids.length; j++) {
+                    const p1 = planetoids[i], p2 = planetoids[j];
+                    const offset = p1.pos.subtract(p2.pos);
+                    const dist = offset.length();
+                    if (dist < p1.radius + p2.radius) {
+                        const overlap = p1.radius + p2.radius - dist;
+                        const normal = offset.normalize();
+                        const m1 = p1.mass, m2 = p2.mass, totalMass = m1 + m2;
+                        const sep1 = overlap * (m2 / totalMass);
+                        const sep2 = overlap * (m1 / totalMass);
+                        p1.pos.add(normal.multiply(sep1));
+                        p2.pos.add(normal.multiply(-sep2));
 
-            // Animation
-            if (player.climbing) {
-                player.frame = 0;
-            } else if (!player.onGround) {
-                player.frame = 1; // Jump frame
-            } else {
-                if (Math.abs(player.vx) > 0) {
-                    // Walking animation
-                    player.frameTimer += WALK_ANIM_SPEED;
-                    if (player.frameTimer >= 1) {
-                        player.frameTimer -= 1;
-                        player.frame = (player.frame + 1) % 4;
+                        const v1 = p1.vel.clone(), v2 = p2.vel.clone();
+                        const v1n = normal.dot(v1), v2n = normal.dot(v2);
+                        const tangent = new Vector2(-normal.y, normal.x);
+                        const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+                        const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+                        const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+                        p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+                        p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
                     }
-                } else {
-                    player.frame = 0; // Idle
                 }
-            }
-
-            // Update position
-            let oldY = player.y;
-            player.x += player.vx;
-            player.y += player.vy;
-
-            // Barrel movement (simple left roll, falls if no platform)
-            barrel.x += barrel.vx;
-            let oldBarrelY = barrel.y;
-            if (!barrel.onGround) barrel.vy += GRAVITY;
-            else barrel.vy = 0;
-            barrel.y += barrel.vy;
-
-            // Barrel reset if off screen
-            if (barrel.x < 0 || barrel.y > canvas.height) {
-                barrel.x = 600;
-                barrel.y = 130;
-                barrel.vy = 0;
-            }
-
-            // Collisions
-            checkPlatformCollision(oldY);
-            checkBarrelPlatformCollision(oldBarrelY);
-            checkPlayerBarrelCollision();
-
-            // Boundaries
-            if (player.x < 0) player.x = 0;
-            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
-            if (player.y > canvas.height) {
-                player.y = 520; // Reset if fall off
             }
         }
 
-        // Draw everything
-        function draw() {
-            ctx.fillStyle = "#1e1e2f"; // dark blue / purple
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Draw platforms with tiled sprite
-            for (let platform of platforms) {
-                const tileWidth = 30;
-                const tileHeight = 15;
-                const numTiles = Math.ceil(platform.width / tileWidth);
-                for (let i = 0; i < numTiles; i++) {
-                    const drawWidth = Math.min(tileWidth, platform.width - i * tileWidth);
-                    ctx.drawImage(platformImg, 0, 0, drawWidth, tileHeight, platform.x + i * tileWidth, platform.y, drawWidth, tileHeight);
+        function checkCoinCollisions() {
+            for (let i = coins.length - 1; i >= 0; i--) {
+                const coin = coins[i];
+                const dist = player.pos.subtract(coin.pos).length();
+                if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
+                    playEatDot();
+                    coins.splice(i, 1);
+                    score++;
                 }
             }
-
-            // Draw ladders
-            for (let ladder of ladders) {
-                ctx.fillStyle = ladder.color;
-                ctx.fillRect(ladder.x, ladder.y, ladder.width, ladder.height);
-            }
-
-            // Draw Satan Kong (first frame, standing)
-            ctx.drawImage(satanImg, 0, 0, 60, 70, dk.x, dk.y, dk.width, dk.height);
-
-            // Draw barrel
-            ctx.fillStyle = barrel.color;
-            ctx.beginPath();
-            ctx.arc(barrel.x, barrel.y, barrel.radius, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Draw player sprite (aligned so visual bottom matches hitbox bottom)
-            ctx.save();
-            const centerX = player.x + player.width / 2;
-            const bottomY = player.y + player.height;
-            ctx.translate(centerX, bottomY);
-            if (player.facing === -1) {
-                ctx.scale(-1, 1);
-            }
-            ctx.drawImage(heroImg, player.frame * SPRITE_SOURCE_SIZE, 0, SPRITE_SOURCE_SIZE, SPRITE_SOURCE_SIZE, -SPRITE_DRAW_WIDTH / 2, -SPRITE_DRAW_HEIGHT, SPRITE_DRAW_WIDTH, SPRITE_DRAW_HEIGHT);
-            ctx.restore();
         }
 
-        // Game loop
+        function checkPlayerEnemyCollisions() {
+            for (const enemy of enemies) {
+                const dist = player.pos.subtract(enemy.pos).length();
+                if (dist <= PLAYER_RADIUS + ENEMY_RADIUS) {
+                    playDeath();
+                    gameOver = true;
+                    break;
+                }
+            }
+        }
+
         function gameLoop() {
-            if (!assetsLoaded) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'white';
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            ctx.fillStyle = 'white';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Level ${level} - Score: ${score}`, 20, 40);
+
+            if (gameOver) {
+                ctx.fillStyle = 'white';
+                ctx.font = '48px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+                ctx.font = '32px Arial';
+                ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 30);
+                ctx.font = '24px Arial';
+                ctx.fillText('Press Enter to Restart', canvas.width / 2, canvas.height / 2 + 70);
+                requestAnimationFrame(gameLoop);
+                return;
+            } else if (levelComplete) {
+                ctx.fillStyle = 'white';
+                ctx.font = '48px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('You beat the level!', canvas.width / 2, canvas.height / 2 - 20);
+                ctx.font = '32px Arial';
+                ctx.fillText(`Score: ${score}`, canvas.width / 2, canvas.height / 2 + 30);
+                ctx.font = '24px Arial';
+                ctx.fillText('Press Enter to start next level', canvas.width / 2, canvas.height / 2 + 70);
                 requestAnimationFrame(gameLoop);
                 return;
             }
-            update();
-            draw();
+
+            updatePlanetoids();
+            player.move(keys);
+            player.applyGravity(planetoids);
+            player.update();
+            player.checkCollision(planetoids);
+            enemies.forEach(e => e.update(planetoids));
+            coins.forEach(c => c.update());
+            particles.forEach(p => p.update());
+            particles = particles.filter(p => p.life > 0);
+
+            checkCoinCollisions();
+            checkPlayerEnemyCollisions();
+
+            if (coins.length === 0) levelComplete = true;
+
+            planetoids.forEach(p => p.draw());
+            player.draw();
+            enemies.forEach(e => e.draw());
+            coins.forEach(c => c.draw());
+            particles.forEach(p => p.draw());
+
             requestAnimationFrame(gameLoop);
         }
 
+        initGame();
         gameLoop();
     </script>
 </body>
