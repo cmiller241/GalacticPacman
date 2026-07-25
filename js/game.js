@@ -37,13 +37,24 @@ state.canvas.height = window.innerHeight;
 state.sceneWidth = state.canvas.width * 2;
 state.sceneHeight = state.canvas.height * 2;
 
-// Load planet texture
+// Load planet texture and boot sprite, then start once both are ready
+let assetsLoaded = 0;
+const ASSETS_TO_LOAD = 2;
+function onAssetLoaded() {
+  assetsLoaded++;
+  if (assetsLoaded === ASSETS_TO_LOAD) {
+    initGame();
+    gameLoop();
+  }
+}
+
 state.planetTexture = new Image();
 state.planetTexture.src = "img/planet_texture_2.jpg";
-state.planetTexture.onload = () => {
-  initGame();
-  gameLoop();
-};
+state.planetTexture.onload = onAssetLoaded;
+
+state.bootImage = new Image();
+state.bootImage.src = "img/leftboot.png";
+state.bootImage.onload = onAssetLoaded;
 
 // Init audio and resize
 state.audioManager = new AudioManager();

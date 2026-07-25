@@ -53,6 +53,18 @@ export class Player extends Entity {
     this.deathScale = 1;
     this.deathRotation = 0;
     this.deathAlpha = 1;
+
+    // ----------------------------
+    // BOOT SPRITE
+    // ----------------------------
+    // Native leftboot.png dimensions, pointing right (+x) by default —
+    // which matches the local +x "forward" axis the rest of this class
+    // already rotates into place, so no extra angle offset is needed.
+    this.bootNaturalWidth = 232;
+    this.bootNaturalHeight = 312;
+    this.bootScale = 0.1; // tweak this to resize the boot on screen
+    this.bootWidth = this.bootNaturalWidth * this.bootScale;
+    this.bootHeight = this.bootNaturalHeight * this.bootScale;
   }
 
   // ----------------------------
@@ -482,6 +494,19 @@ export class Player extends Entity {
     this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
   }
 
+  // ----------------------------
+  // BOOT DRAW HELPER
+  // Draws the boot image centered at the current canvas origin.
+  // The image's natural orientation points along local +x, which is
+  // the same "forward" axis every draw block below rotates into place —
+  // so this is a straight swap-in for the old arc-fill pac-shape.
+  // ----------------------------
+  drawBoot(ctx) {
+    const img = state.bootImage;
+    if (!img || !img.complete || img.naturalWidth === 0) return;
+    ctx.drawImage(img, -this.bootWidth / 2, -this.bootHeight / 2, this.bootWidth, this.bootHeight);
+  }
+
   draw() {
     const ctx = state.ctx;
     let scale = 1;
@@ -495,12 +520,7 @@ export class Player extends Entity {
       ctx.scale(this.deathScale, this.deathScale);
       ctx.shadowColor = 'orange';
       ctx.shadowBlur = 30 * (this.deathAlpha * 0.5);
-      const mouthAngle = 0;
-      ctx.beginPath();
-      ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
-      ctx.lineTo(0,0);
-      ctx.fillStyle = '#ff6600';
-      ctx.fill();
+      this.drawBoot(ctx);
       ctx.shadowBlur = 0;
       ctx.restore();
       return;
@@ -520,12 +540,7 @@ export class Player extends Entity {
      ctx.translate(this.pos.x, this.pos.y);  // Use global pos
      ctx.scale(platformScale, platformScale);  // ← ADD: Scale down like maze
      if (this.platformVel.x < 0) ctx.scale(-1,1);
-     const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
-     ctx.beginPath();
-     ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
-     ctx.lineTo(0,0);
-     ctx.fillStyle = 'yellow';
-     ctx.fill();
+     this.drawBoot(ctx);
      ctx.restore();
      return;
    }
@@ -544,12 +559,7 @@ export class Player extends Entity {
       const rot = Math.atan2(this.mazeDir.y,this.mazeDir.x);
       ctx.rotate(rot);
       ctx.scale(scale*mazeScale, scale*mazeScale);
-      const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
-      ctx.beginPath();
-      ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
-      ctx.lineTo(0,0);
-      ctx.fillStyle='yellow';
-      ctx.fill();
+      this.drawBoot(ctx);
       ctx.shadowBlur=0;
       ctx.restore();
       return;
@@ -566,18 +576,13 @@ export class Player extends Entity {
     ctx.save();
     ctx.translate(this.pos.x,this.pos.y);
     ctx.rotate(rotation);
-    if (this.facingDirection < 0) ctx.rotate(Math.PI);
+    if (this.facingDirection < 0) ctx.scale(-1,1);
     if (this.isTeleporting) {
       ctx.shadowColor='yellow';
       ctx.shadowBlur=40*glow;
     }
     ctx.scale(scale,scale);
-    const mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
-    ctx.beginPath();
-    ctx.arc(0,0,this.radius,mouthAngle/2,2*Math.PI-mouthAngle/2);
-    ctx.lineTo(0,0);
-    ctx.fillStyle='yellow';
-    ctx.fill();
+    this.drawBoot(ctx);
     ctx.shadowBlur=0;
     ctx.restore();
   }
