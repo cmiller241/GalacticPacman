@@ -46,6 +46,7 @@ export class PlatformInterior extends Interior {
     this.offscreen = null;
     this.createOffscreen();
     this.blobs=[];
+    this.aliens=[];
   }
 
   createOffscreen() {
@@ -134,11 +135,14 @@ export class PlatformInterior extends Interior {
       ctx.fill();
     }
 
+    ctx.restore();
+
     // Draw Blob Monsters
     this.blobs.forEach(blob => blob.draw());
+    this.aliens.forEach(alien => alien.draw());
 
     ctx.restore();
-    ctx.restore();
+
   }
 
   getPortalPosition() {

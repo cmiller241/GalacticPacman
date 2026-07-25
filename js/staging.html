@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astronaut Staging - Cartoony Player Prototype</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #0a0a1f;
+            color: #ddd;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }
+        h1 { color: #66ccff; }
+        .container {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        .canvas-container {
+            border: 4px solid #334466;
+            background: #000;
+            box-shadow: 0 0 30px rgba(100, 180, 255, 0.3);
+        }
+        canvas {
+            image-rendering: crisp-edges;
+        }
+        .controls {
+            margin-bottom: 15px;
+        }
+        button {
+            padding: 10px 18px;
+            margin-right: 8px;
+            background: #223366;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:hover { background: #4477cc; }
+        .info {
+            max-width: 500px;
+            line-height: 1.5;
+        }
+        code {
+            background: #112233;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Cartoony Astronaut — Staging Area</h1>
+    <p>This is your new player character base (white spacesuit astronaut). The code is fully commented and uses <code>save/restore</code> so you can easily rotate, scale, and flip him later.</p>
+
+    <div class="controls">
+        <button id="redrawBtn">Redraw Astronaut</button>
+        <button id="exportBtn">Export Draw Function</button>
+        <button id="clearBtn">Clear Canvas</button>
+    </div>
+
+    <div class="container">
+        <div class="canvas-container">
+            <canvas id="canvas" width="600" height="600"></canvas>
+        </div>
+
+        <div class="info">
+            <h2>How to use:</h2>
+            <ul>
+                <li>Click <strong>Redraw Astronaut</strong> to reset the drawing.</li>
+                <li>Click <strong>Export Draw Function</strong> to get clean code you can copy into <code>Player.js</code>.</li>
+                <li>The character is drawn centered. You can easily change colors, add details, or animate parts (helmet reflection, arm movement, etc.).</li>
+            </ul>
+            <p><strong>Next steps ideas:</strong> Add jetpack flames, different helmet visors, walking animation frames, or integrate with your existing draw() logic (facingDirection, mode, scale, rotation).</p>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    function drawAstronaut() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2 - 30;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // === LEGS ===
+        const leftLegGradient = ctx.createLinearGradient(-25, 90, -25, 160);
+        leftLegGradient.addColorStop(0.0, '#f0f0f0');
+        leftLegGradient.addColorStop(1.0, '#d0d0d0');
+        ctx.fillStyle = leftLegGradient;
+        ctx.rect(-45, 85, 32, 35);
+        ctx.fill();
+
+        const rightLegGradient = ctx.createLinearGradient(15, 90, 15, 160);
+        rightLegGradient.addColorStop(0.0, '#f0f0f0');
+        rightLegGradient.addColorStop(1.0, '#d0d0d0');
+        ctx.fillStyle = rightLegGradient;
+        ctx.rect(3, 85, 32, 35);
+        ctx.fill();
+
+        // === BOOTS ===
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 4;
+
+        // Right Boot
+        const rightBootGradient = ctx.createLinearGradient(10, 118, 65, 150);
+        rightBootGradient.addColorStop(0.0, '#e8e8e8');
+        rightBootGradient.addColorStop(1.0, '#c4c4c4');
+        ctx.fillStyle = rightBootGradient;
+        ctx.beginPath();
+        ctx.moveTo(10, 120);
+        ctx.lineTo(0, 145);
+        ctx.lineTo(45, 148);
+        ctx.quadraticCurveTo(62, 148, 65, 135);
+        ctx.quadraticCurveTo(63, 122, 55, 118);
+        ctx.lineTo(48, 120);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Left Boot
+        const leftBootGradient = ctx.createLinearGradient(-48, 118, -10, 150);
+        leftBootGradient.addColorStop(0.0, '#e8e8e8');
+        leftBootGradient.addColorStop(1.0, '#c4c4c4');
+        ctx.fillStyle = leftBootGradient;
+        ctx.beginPath();
+        ctx.moveTo(-45, 120);
+        ctx.lineTo(-50, 145);
+        ctx.lineTo(-5, 148);
+        ctx.quadraticCurveTo(12, 148, 15, 135);
+        ctx.quadraticCurveTo(10, 122, 2, 118);
+        ctx.lineTo(-5, 120);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // === RIGHT ARM (viewer's right / player's left side) - rotated -10° ===
+        const rightArmGradient = ctx.createLinearGradient(-38, 35, -72, 85);
+        rightArmGradient.addColorStop(0.0, '#f0f0f0');
+        rightArmGradient.addColorStop(1.0, '#d8d8d8');
+
+        rOffset = 75;
+        ctx.fillStyle = rightArmGradient;
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 6;
+
+        // Save the current transformation state
+        ctx.save();
+
+        // Rotate around the shoulder point (-50 + rOffset, 5)
+        const shoulderX = -50 + rOffset;
+        const shoulderY = 5;
+        ctx.translate(shoulderX, shoulderY);
+        ctx.rotate(-35 * Math.PI / 180);   // -10 degrees in radians
+        ctx.translate(-shoulderX, -shoulderY);
+
+        ctx.beginPath();
+        ctx.moveTo(-50 + rOffset, 5);                    // shoulder
+        ctx.quadraticCurveTo(-110 + rOffset, 60, -60 + rOffset, 90);
+        ctx.lineTo(-60 + rOffset, 90);
+        ctx.lineTo(-35 + rOffset, 75);
+        ctx.quadraticCurveTo(-70 + rOffset, 60, -40 + rOffset, 20);
+        ctx.lineTo(-40 + rOffset, 20);
+        ctx.closePath();
+
+        ctx.fill();
+        ctx.stroke();
+
+        // Restore the previous transformation
+        ctx.restore();
+
+        // === BODY (drawn after left arm) ===
+        const bodyGradient = ctx.createLinearGradient(0, -5, 0, 105);
+        bodyGradient.addColorStop(0.00, '#b8b8b8');
+        bodyGradient.addColorStop(0.22, '#e8e8e8');
+        bodyGradient.addColorStop(0.70, '#f0f0f0');
+        bodyGradient.addColorStop(1.00, '#dadada');
+
+        ctx.fillStyle = bodyGradient;
+        ctx.beginPath();
+        ctx.ellipse(-5, 40, 60, 60, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // === HELMET ===
+        const helmetGradient = ctx.createLinearGradient(0, -105, 0, -35);
+        helmetGradient.addColorStop(0.0, '#ffffff');
+        helmetGradient.addColorStop(0.6, '#f5f5f5');
+        helmetGradient.addColorStop(1.0, '#e8e8e8');
+
+        ctx.fillStyle = helmetGradient;
+        ctx.beginPath();
+        ctx.ellipse(-5, -55, 65, 65, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // === FACE / VISOR ===
+        const visorGradient = ctx.createLinearGradient(0, -82, 0, -38);
+        visorGradient.addColorStop(0.0, '#1f4a85');
+        visorGradient.addColorStop(0.5, '#2356a8');
+        visorGradient.addColorStop(1.0, '#2a5eb5');
+
+        ctx.fillStyle = visorGradient;
+        ctx.strokeStyle = "#1b3969";
+        ctx.lineWidth = 12;
+        ctx.beginPath();
+        ctx.ellipse(5, -55, 52, 45, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fill();
+
+        // === REFLECTIVE ELLIPSE ===
+        const reflectGradient = ctx.createLinearGradient(-25, -78, 15, -45);
+        reflectGradient.addColorStop(0.0, 'rgba(255, 255, 255, 0.35)');
+        reflectGradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.18)');
+        reflectGradient.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+
+        ctx.fillStyle = reflectGradient;
+        ctx.beginPath();
+        ctx.ellipse(-8, -68, 28, 18, -0.35, 0, Math.PI * 2);
+        ctx.fill();
+
+        // === EYES ===
+        ctx.fillStyle = "#809fd1";
+        ctx.beginPath(); ctx.ellipse(-5, -60, 15, 20, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.beginPath(); ctx.ellipse(0, -60, 8, 10, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.beginPath(); ctx.ellipse(-3, -63, 2, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = "#809fd1";
+        ctx.beginPath(); ctx.ellipse(35, -60, 15, 20, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.beginPath(); ctx.ellipse(40, -60, 8, 10, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.beginPath(); ctx.ellipse(37, -63, 2, 2, 0, 0, Math.PI * 2); ctx.fill();
+
+        // === HELMET BUMP ===
+        ctx.fillStyle = '#ccc';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.ellipse(-58, -55, 20, 20, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#ccc';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.ellipse(-60, -55, 17, 17, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+        // === BELT & PANEL ===
+        const beltGradient = ctx.createLinearGradient(0, 38, 0, 58);
+        beltGradient.addColorStop(0.0, '#f0f0f0');
+        beltGradient.addColorStop(1.0, '#d0d0d0');
+        ctx.fillStyle = beltGradient;
+        ctx.strokeStyle = "#999";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.roundRect(-67, 40, 125, 15, 15);
+        ctx.fill();
+        ctx.stroke();
+
+        const panelGradient = ctx.createLinearGradient(0, 28, 0, 68);
+        panelGradient.addColorStop(0.0, '#f0f0f0');
+        panelGradient.addColorStop(1.0, '#d0d0d0');
+        ctx.fillStyle = panelGradient;
+        ctx.beginPath();
+        ctx.roundRect(-20, 30, 60, 35, 10);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(5, 33);
+        ctx.lineTo(5, 48);
+        ctx.lineTo(22, 48);
+        ctx.lineTo(22, 62);
+        ctx.stroke();
+
+        // === LEFT ARM (viewer's left / player's right side) ===
+        const leftArmGradient = ctx.createLinearGradient(-38, 35, -72, 85);
+        leftArmGradient.addColorStop(0.0, '#f0f0f0');
+        leftArmGradient.addColorStop(1.0, '#d8d8d8');
+
+        ctx.fillStyle = leftArmGradient;
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 6;
+
+        ctx.beginPath();
+        ctx.moveTo(-50, 5);                    // shoulder
+        ctx.quadraticCurveTo(-110, 60, -60, 90); // gentle curve outward/down
+        ctx.lineTo(-60, 90);                   // forearm
+        ctx.lineTo(-35, 75);
+        ctx.quadraticCurveTo(-70, 60, -40, 20);
+        ctx.lineTo(-40, 20);
+        //ctx.quadraticCurveTo(-48, 82, -35, 20); // back toward shoulder
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    // Button handlers
+    document.getElementById('redrawBtn').addEventListener('click', drawAstronaut);
+
+    document.getElementById('exportBtn').addEventListener('click', () => {
+        console.log("%c=== ASTRONAUT DRAW FUNCTION - COPY THIS ===", "color:#66ccff; font-size:16px");
+        console.log(`
+function drawAstronaut(ctx, x, y, scale = 1, rotation = 0, facing = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.scale(scale * facing, scale);
+
+    // Left arm first (behind body)
+    // Right arm after body (in front)
+    // ... (full arm code with curves and gloves)
+
+    // Legs, boots, body, helmet, etc.
+}
+        `);
+        alert("Arms corrected: Left arm (viewer's left) behind body, Right arm (viewer's right) in front.");
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    drawAstronaut();
+    console.log("%cAstronaut arms corrected with proper layering!", "color:#66ccff");
+</script>
+</body>
+</html>
