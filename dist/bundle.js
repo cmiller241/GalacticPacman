@@ -29,17 +29,17 @@
   var GRAVITY_STRENGTH = 0.35;
   var GROUND_POUND_GRAV_MULTIPLIER = 3;
   var GROUND_POUND_PUSH_STRENGTH = 0.05;
-  var JUMP_STRENGTH = 9;
-  var MOVE_SPEED = 0.05;
-  var PLAYER_LINEAR_SPEED = 4;
+  var JUMP_STRENGTH = 10;
+  var MOVE_SPEED = 0.5;
+  var PLAYER_LINEAR_SPEED = 5;
   var PLAYER_RADIUS = 20;
   var ENEMY_RADIUS = 20;
   var COIN_RADIUS = 5;
   var COIN_ORBIT_OFFSET = 18;
-  var INFLUENCE_PADDING = 140;
+  var INFLUENCE_PADDING = 200;
   var SURFACE_TOLERANCE = 4;
   var DRAG = 0.995;
-  var PLANET_SPEED = 0.8;
+  var PLANET_SPEED = 1;
   var ENEMY_JUMP_PROB = 5e-4;
   var STAR_COUNT = 800;
   var enemyColors = ["red", "pink", "cyan", "orange"];
@@ -85,7 +85,14 @@
   };
 
   // js/world/Planetoid.js
-  var Planetoid = class {
+  var Planetoid = class _Planetoid {
+    // How far the glow extends past the planet's edge, and how strong it
+    // is. These used to be set live via ctx.shadowBlur every frame; now
+    // they're only used once, at bake time, in createOffscreen(). If the
+    // glow ever looks clipped/square at the edges, increase SHADOW_PADDING.
+    static SHADOW_BLUR = 25;
+    static SHADOW_PADDING = 40;
+    static SHADOW_COLOR = "rgba(173,216,230,0.3)";
     constructor(x, y, radius, color) {
       this.pos = new Vector2(x, y);
       this.radius = radius;
@@ -98,35 +105,37 @@
       this.lastAlphaUpdate = 0;
       this.isSpikey = false;
       this.offscreen = null;
+      this.offscreenPadding = 0;
+      this.ringCanvas = null;
       this.interiorType = null;
     }
     createOffscreen() {
-      this.offscreen = document.createElement("canvas");
-      this.offscreen.width = this.radius * 2;
-      this.offscreen.height = this.radius * 2;
-      const offCtx = this.offscreen.getContext("2d");
-      offCtx.save();
-      offCtx.beginPath();
-      offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
-      offCtx.clip();
+      const bodyCanvas = document.createElement("canvas");
+      bodyCanvas.width = this.radius * 2;
+      bodyCanvas.height = this.radius * 2;
+      const bodyCtx = bodyCanvas.getContext("2d");
+      bodyCtx.save();
+      bodyCtx.beginPath();
+      bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+      bodyCtx.clip();
       const tiles = 2.5;
       const texSize = this.radius * 2 * tiles;
       const texOffset = this.radius * tiles;
-      offCtx.drawImage(state.planetTexture, this.radius - texOffset, this.radius - texOffset, texSize, texSize);
-      offCtx.restore();
-      offCtx.save();
-      offCtx.globalCompositeOperation = "multiply";
-      offCtx.beginPath();
-      offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
-      offCtx.fillStyle = this.color;
-      offCtx.fill();
-      offCtx.globalCompositeOperation = "source-over";
-      offCtx.restore();
-      offCtx.save();
-      offCtx.globalCompositeOperation = "multiply";
+      bodyCtx.drawImage(state.planetTexture, this.radius - texOffset, this.radius - texOffset, texSize, texSize);
+      bodyCtx.restore();
+      bodyCtx.save();
+      bodyCtx.globalCompositeOperation = "multiply";
+      bodyCtx.beginPath();
+      bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+      bodyCtx.fillStyle = this.color;
+      bodyCtx.fill();
+      bodyCtx.globalCompositeOperation = "source-over";
+      bodyCtx.restore();
+      bodyCtx.save();
+      bodyCtx.globalCompositeOperation = "multiply";
       const offsetX = -this.radius * 0.5;
       const offsetY = -this.radius * 0.5;
-      const lightGradient = offCtx.createRadialGradient(
+      const lightGradient = bodyCtx.createRadialGradient(
         this.radius + offsetX,
         this.radius + offsetY,
         0,
@@ -136,12 +145,33 @@
       );
       lightGradient.addColorStop(0, "white");
       lightGradient.addColorStop(1, "black");
-      offCtx.beginPath();
-      offCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
-      offCtx.fillStyle = lightGradient;
-      offCtx.fill();
-      offCtx.globalCompositeOperation = "source-over";
-      offCtx.restore();
+      bodyCtx.beginPath();
+      bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
+      bodyCtx.fillStyle = lightGradient;
+      bodyCtx.fill();
+      bodyCtx.globalCompositeOperation = "source-over";
+      bodyCtx.restore();
+      const padding = _Planetoid.SHADOW_PADDING;
+      this.offscreenPadding = padding;
+      this.offscreen = document.createElement("canvas");
+      this.offscreen.width = this.radius * 2 + padding * 2;
+      this.offscreen.height = this.radius * 2 + padding * 2;
+      const finalCtx = this.offscreen.getContext("2d");
+      finalCtx.shadowColor = _Planetoid.SHADOW_COLOR;
+      finalCtx.shadowBlur = _Planetoid.SHADOW_BLUR;
+      finalCtx.shadowOffsetX = 0;
+      finalCtx.shadowOffsetY = 0;
+      finalCtx.drawImage(bodyCanvas, padding, padding);
+      this.ringCanvas = document.createElement("canvas");
+      this.ringCanvas.width = this.influenceRadius * 2;
+      this.ringCanvas.height = this.influenceRadius * 2;
+      const ringCtx = this.ringCanvas.getContext("2d");
+      ringCtx.strokeStyle = "rgba(173,216,230,1)";
+      ringCtx.lineWidth = 3;
+      ringCtx.setLineDash([10, 5]);
+      ringCtx.beginPath();
+      ringCtx.arc(this.influenceRadius, this.influenceRadius, this.influenceRadius, 0, Math.PI * 2);
+      ringCtx.stroke();
     }
     draw() {
       const ctx = state.ctx;
@@ -151,22 +181,30 @@
         this.cachedAlpha = Math.max(0.01, 0.3 - dist / 1e3 * 0.65);
         this.lastAlphaUpdate = now;
       }
-      ctx.save();
-      ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 5]);
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-      ctx.save();
-      ctx.shadowColor = "rgba(173,216,230,0.3)";
-      ctx.shadowBlur = 25;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-      if (this.offscreen) {
-        ctx.drawImage(this.offscreen, this.pos.x - this.radius, this.pos.y - this.radius);
+      if (this.ringCanvas) {
+        ctx.save();
+        ctx.globalAlpha = this.cachedAlpha;
+        ctx.drawImage(this.ringCanvas, this.pos.x - this.influenceRadius, this.pos.y - this.influenceRadius);
+        ctx.restore();
       } else {
+        ctx.save();
+        ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([10, 5]);
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      if (this.offscreen) {
+        const padding = this.offscreenPadding;
+        ctx.drawImage(this.offscreen, this.pos.x - this.radius - padding, this.pos.y - this.radius - padding);
+      } else {
+        ctx.save();
+        ctx.shadowColor = _Planetoid.SHADOW_COLOR;
+        ctx.shadowBlur = _Planetoid.SHADOW_BLUR;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
         const offsetX = -this.radius * 0.5;
         const offsetY = -this.radius * 0.5;
         const gradient = ctx.createRadialGradient(
@@ -183,8 +221,8 @@
         ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
         ctx.fillStyle = gradient;
         ctx.fill();
+        ctx.restore();
       }
-      ctx.restore();
     }
   };
 
@@ -969,6 +1007,100 @@
     return Math.abs(diff - Math.PI);
   }
 
+  // js/entities/world/Fireball.js
+  var FIREBALL_SPEED = 14;
+  var FIREBALL_LIFE = 70;
+  var TRAIL_SPAWN_CHANCE = 0.9;
+  var TRAIL_PARTICLE_LIFE_MIN = 14;
+  var TRAIL_PARTICLE_LIFE_RANGE = 12;
+  var OFFSCREEN_MARGIN = 400;
+  var fireballSprite = null;
+  function getFireballSprite() {
+    if (fireballSprite) return fireballSprite;
+    const size = 14;
+    const core = 8;
+    const padding = 24;
+    const canvas = document.createElement("canvas");
+    canvas.width = (size + padding) * 2;
+    canvas.height = (size + padding) * 2;
+    const ctx = canvas.getContext("2d");
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = "#ff4400";
+    ctx.fillStyle = "#ffaa00";
+    ctx.beginPath();
+    ctx.arc(cx, cy, size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = "#ffee00";
+    ctx.fillStyle = "#ffff88";
+    ctx.beginPath();
+    ctx.arc(cx, cy, core, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    fireballSprite = canvas;
+    return canvas;
+  }
+  var Fireball = class extends Entity {
+    constructor(x, y, angle) {
+      super();
+      this.pos = new Vector2(x, y);
+      this.vel = new Vector2(Math.cos(angle), Math.sin(angle)).multiply(FIREBALL_SPEED);
+      this.life = FIREBALL_LIFE;
+      this.trail = [];
+      this.radius = 8;
+    }
+    get isDead() {
+      return this.life <= 0;
+    }
+    update() {
+      this.pos.add(this.vel);
+      this.life--;
+      if (Math.random() < TRAIL_SPAWN_CHANCE) {
+        const spread = 10;
+        const maxLife = TRAIL_PARTICLE_LIFE_MIN + Math.random() * TRAIL_PARTICLE_LIFE_RANGE;
+        this.trail.push({
+          x: this.pos.x + (Math.random() - 0.5) * spread,
+          y: this.pos.y + (Math.random() - 0.5) * spread * 0.8,
+          life: maxLife,
+          maxLife,
+          size: 3 + Math.random() * 6
+        });
+      }
+      for (let i = this.trail.length - 1; i >= 0; i--) {
+        this.trail[i].life--;
+        if (this.trail[i].life <= 0) this.trail.splice(i, 1);
+      }
+      if (this.pos.x < -OFFSCREEN_MARGIN || this.pos.x > state.sceneWidth + OFFSCREEN_MARGIN || this.pos.y < -OFFSCREEN_MARGIN || this.pos.y > state.sceneHeight + OFFSCREEN_MARGIN) {
+        this.life = 0;
+      }
+    }
+    draw() {
+      const ctx = state.ctx;
+      for (const t of this.trail) {
+        const a = t.life / t.maxLife;
+        const ts = t.size * a;
+        ctx.globalAlpha = a * 0.85;
+        ctx.fillStyle = "#ff5500";
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, ts * 1.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#ffcc44";
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, ts * 0.75, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      const sprite = getFireballSprite();
+      ctx.drawImage(sprite, this.pos.x - sprite.width / 2, this.pos.y - sprite.height / 2);
+    }
+  };
+
   // js/entities/Player.js
   var Player = class extends Entity {
     constructor(x, y) {
@@ -1007,8 +1139,181 @@
       this.bootNaturalWidth = 232;
       this.bootNaturalHeight = 312;
       this.bootScale = 0.1;
-      this.bootWidth = this.bootNaturalWidth * this.bootScale;
-      this.bootHeight = this.bootNaturalHeight * this.bootScale;
+      this.bodyScale = 0.1;
+      this.bodyPartsConfig = {
+        bodyY: 115,
+        headY: -150,
+        //-400,
+        leftArmX: 136,
+        leftArmY: 9,
+        leftArmJointX: 73,
+        leftArmJointY: 199,
+        rightArmX: -186,
+        rightArmY: -14,
+        rightArmJointX: 119,
+        rightArmJointY: 40,
+        leftBootX: 111,
+        leftBootY: 241,
+        leftBootJointX: 83,
+        leftBootJointY: 15,
+        rightBootX: -142,
+        rightBootY: 241,
+        rightBootJointX: 77,
+        rightBootJointY: 15
+      };
+      this.walkTime = 0;
+      this.isWalking = false;
+      this.strideLength = 90;
+      this.armSwingScale = 0.5;
+      this.groundOffset = 250;
+      this.maxAimFromForward = (90 + 5) * Math.PI / 180;
+      this.aimShoulderPos = null;
+      this.aimWorldAngle = 0;
+      this.aimRelativeAngle = 0;
+      this.headLookScale = 0.6;
+      this.headPivotFraction = 0.9;
+      this.blasterMuzzleLength = 300;
+      this.blasterAngleOffset = -5 * Math.PI / 180;
+      this.fireCooldown = 150;
+      this.lastShotTime = 0;
+      this.mouseIdleThreshold = 2e3;
+      this.mouseIdle = true;
+      this.scaledPartsReady = false;
+      this.scaledParts = {};
+      this.scaledBootCanvas = null;
+    }
+    invalidateScaledAssets() {
+      this.scaledPartsReady = false;
+      this.scaledParts = {};
+      this.scaledBootCanvas = null;
+    }
+    // Bakes img at `scale` (its correct world-space size, i.e. size at
+    // zoom=1) but rasterizes it internally at `scale * resolutionMultiplier`
+    // pixels, so it stays crisp when the caller later draws it larger
+    // (zoomed in) via the canvas' own scale transform. Returns both the
+    // baked canvas and the world-space size it should actually be drawn
+    // at, since those now differ.
+    makeScaledSprite(img, scale, resolutionMultiplier = 1) {
+      const displayWidth = Math.max(1, img.naturalWidth * scale);
+      const displayHeight = Math.max(1, img.naturalHeight * scale);
+      const bakeWidth = Math.max(1, Math.round(displayWidth * resolutionMultiplier));
+      const bakeHeight = Math.max(1, Math.round(displayHeight * resolutionMultiplier));
+      const canvas = document.createElement("canvas");
+      canvas.width = bakeWidth;
+      canvas.height = bakeHeight;
+      canvas.getContext("2d").drawImage(img, 0, 0, bakeWidth, bakeHeight);
+      return { canvas, displayWidth, displayHeight };
+    }
+    initScaledAssets() {
+      const images = state.characterImages;
+      const resMultiplier = Math.max(1, state.zoomMax || 2.5);
+      if (images) {
+        for (const key of ["body", "head", "leftarm", "rightarm", "leftboot", "rightboot"]) {
+          const img = images[key];
+          if (img && img.complete && img.naturalWidth > 0) {
+            this.scaledParts[key] = this.makeScaledSprite(img, this.bodyScale, resMultiplier);
+          }
+        }
+      }
+      if (state.bootImage && state.bootImage.complete && state.bootImage.naturalWidth > 0) {
+        this.scaledBootCanvas = this.makeScaledSprite(state.bootImage, this.bootScale, resMultiplier);
+      }
+      this.scaledPartsReady = true;
+    }
+    // ----------------------------
+    // BLASTER (LEFT ARM) AIMING
+    // ----------------------------
+    // Computes the local rotation to feed into drawLimb for the left arm
+    // so that — after accounting for the character's current orientation
+    // on the planet and the left/right mirror flip — the arm visually
+    // points at the mouse cursor in world space, clamped so it can swing
+    // up to just past straight up/down but never point behind him.
+    //
+    // Two things make this trickier than a plain "aim at target" formula:
+    //  1. "Forward" itself flips to the opposite world angle when the rig
+    //     is mirrored (facing left) — see the mirror comment in draw().
+    //  2. Because that mirror is a REFLECTION (not a rotation), a local
+    //     rotation applied before it doesn't just get negated — it gets
+    //     reflected. So converting "desired world angle" back into the
+    //     local rotation parameter needs different math on each side.
+    computeLeftArmAimAngle(orientation, dirSign, originPos) {
+      const cfg = this.bodyPartsConfig;
+      const s = this.bodyScale;
+      const cosO = Math.cos(orientation);
+      const sinO = Math.sin(orientation);
+      const offsetX = cfg.leftArmX * dirSign;
+      const offsetY = cfg.leftArmY;
+      const wx = offsetX * cosO - offsetY * sinO;
+      const wy = offsetX * sinO + offsetY * cosO;
+      const shoulderX = originPos.x + wx * s;
+      const shoulderY = originPos.y + wy * s;
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: shoulderX, y: shoulderY };
+      const mouseWorldX = mouse.x / zoom + cam.x;
+      const mouseWorldY = mouse.y / zoom + cam.y;
+      const targetAngle = Math.atan2(mouseWorldY - shoulderY, mouseWorldX - shoulderX);
+      const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+      let relative = Math.atan2(
+        Math.sin(targetAngle - forwardAngle),
+        Math.cos(targetAngle - forwardAngle)
+      );
+      relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+      const clampedTargetAngle = forwardAngle + relative;
+      this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
+      this.aimWorldAngle = clampedTargetAngle;
+      this.aimRelativeAngle = relative;
+      return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
+    }
+    // Converts a desired WORLD-space angle into the local rotation
+    // parameter drawLimb (or a head/other part's own ctx.rotate) expects,
+    // accounting for the left/right mirror. Because that mirror is a
+    // REFLECTION (not a rotation), this isn't just a sign flip — see the
+    // comment on computeLeftArmAimAngle above for why.
+    worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign) {
+      if (dirSign > 0) {
+        return desiredWorldAngle - orientation;
+      }
+      return orientation + Math.PI - desiredWorldAngle;
+    }
+    // ----------------------------
+    // HEAD LOOK TILT
+    // ----------------------------
+    // Tilts the head partway toward the same clamped aim target the
+    // blaster arm uses (computeLeftArmAimAngle, called earlier this frame
+    // — this reads its cached aimRelativeAngle rather than recomputing
+    // anything), scaled down by headLookScale so it reads as a natural
+    // glance up/down rather than a full arm-like swing. headLookScale of
+    // 1.0 would exactly match the arm's aim angle; lower values glance
+    // less. Returns 0 (straight ahead) when aimRelativeAngle hasn't been
+    // set yet.
+    computeHeadLookTilt(orientation, dirSign) {
+      const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+      const desiredWorldAngle = forwardAngle + this.headLookScale * this.aimRelativeAngle;
+      return this.worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign);
+    }
+    // ----------------------------
+    // FIRING
+    // ----------------------------
+    // Spawns a Fireball from the blaster's muzzle tip, using this frame's
+    // cached aim (see computeLeftArmAimAngle). Only fires while in
+    // "space" mode (the main planet-surface/flight gameplay), respects a
+    // cooldown, and does nothing while dying/teleporting or before the
+    // first aim has been computed.
+    shootFireball() {
+      if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+      if (!this.aimShoulderPos) return;
+      const now = Date.now();
+      if (now - this.lastShotTime < this.fireCooldown) return;
+      this.lastShotTime = now;
+      const angle = this.aimWorldAngle + this.blasterAngleOffset;
+      const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
+      const tipX = this.aimShoulderPos.x + Math.cos(angle) * muzzleDist;
+      const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
+      state.fireballs.push(new Fireball(tipX, tipY, angle));
+      if (state.audioManager && typeof state.audioManager.playShoot === "function") {
+        state.audioManager.playShoot();
+      }
     }
     // ----------------------------
     // TELEPORT HELPER
@@ -1229,16 +1534,24 @@
       if (this.onSurface && this.currentPlanet) {
         const surfaceDist = this.currentPlanet.radius + this.radius;
         const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
+        this.isWalking = false;
+        const prevAngle = this.angle;
         if (keys["ArrowLeft"]) {
           this.angle -= angularSpeed;
           this.facingDirection = -1;
+          this.isWalking = true;
         }
         if (keys["ArrowRight"]) {
           this.angle += angularSpeed;
           this.facingDirection = 1;
+          this.isWalking = true;
         }
         this.pos.x = this.currentPlanet.pos.x + Math.cos(this.angle) * surfaceDist;
         this.pos.y = this.currentPlanet.pos.y + Math.sin(this.angle) * surfaceDist;
+        if (this.isWalking) {
+          const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
+          this.walkTime += distanceMoved / this.strideLength * Math.PI * 2;
+        }
       }
     }
     jump() {
@@ -1353,18 +1666,159 @@
         }
       }
       this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+      this.updateOrientationAndFacing();
     }
     // ----------------------------
-    // BOOT DRAW HELPER
-    // Draws the boot image centered at the current canvas origin.
-    // The image's natural orientation points along local +x, which is
-    // the same "forward" axis every draw block below rotates into place —
-    // so this is a straight swap-in for the old arc-fill pac-shape.
+    // MOUSE-DRIVEN FACING
+    // ----------------------------
+    // While the mouse is actively being used, the character faces
+    // whichever side of him it's currently on — even if that's opposite
+    // his direction of travel (a fun little "moonwalk" when aiming
+    // backward while moving forward, left in on purpose). Once the mouse
+    // has been idle for a while, facing just reverts to whatever move()
+    // already set from arrow-key input.
+    //
+    // Also updates this.mouseIdle, which drawFullBody uses to decide
+    // whether the arms should track the aim or sway together instead.
+    //
+    // Only meaningful in "space" mode (the full-body rig); a no-op
+    // otherwise. Deliberately recomputes its own local `orientation`
+    // rather than touching/reading anything shared with draw() — cheap
+    // trig, and keeps the two computations independent so there's no risk
+    // of them drifting out of sync during early-return frames (death,
+    // teleport) where update() doesn't reach this point.
+    updateOrientationAndFacing() {
+      if (this.mode !== "space") return;
+      const lastMove = state.lastMouseMoveTime || 0;
+      this.mouseIdle = Date.now() - lastMove > this.mouseIdleThreshold;
+      if (this.mouseIdle) return;
+      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+      let downDir = new Vector2(0, 1);
+      if (planet) downDir = planet.pos.subtract(this.pos).normalize();
+      const downAngle = Math.atan2(downDir.y, downDir.x);
+      const orientation = downAngle - Math.PI / 2;
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+      const mouseWorldX = mouse.x / zoom + cam.x;
+      const mouseWorldY = mouse.y / zoom + cam.y;
+      const tangentX = Math.cos(orientation);
+      const tangentY = Math.sin(orientation);
+      const toMouseX = mouseWorldX - this.pos.x;
+      const toMouseY = mouseWorldY - this.pos.y;
+      const projection = toMouseX * tangentX + toMouseY * tangentY;
+      this.facingDirection = projection >= 0 ? 1 : -1;
+    }
+    // ----------------------------
+    // BOOT DRAW HELPER (maze / platform / death modes)
     // ----------------------------
     drawBoot(ctx) {
-      const img = state.bootImage;
-      if (!img || !img.complete || img.naturalWidth === 0) return;
-      ctx.drawImage(img, -this.bootWidth / 2, -this.bootHeight / 2, this.bootWidth, this.bootHeight);
+      const sprite = this.scaledBootCanvas;
+      if (!sprite) return;
+      ctx.drawImage(
+        sprite.canvas,
+        -sprite.displayWidth / 2,
+        -sprite.displayHeight / 2,
+        sprite.displayWidth,
+        sprite.displayHeight
+      );
+    }
+    // ----------------------------
+    // FULL BODY DRAW HELPERS (main planet-surface / space mode)
+    // Ported from the standalone astronaut prototype: each limb has a
+    // fixed offset from the rig's origin (rotated by `orientation`, the
+    // same "up is away from the planet" angle already computed by the
+    // caller) plus a "joint" pivot within its own image so it swings from
+    // the right spot. `originPos` is passed in explicitly (rather than
+    // always using this.pos) so the caller can offset the whole rig
+    // outward from the planet without touching the physics position.
+    //
+    // Draws from the pre-scaled sprite cache (see initScaledAssets) rather
+    // than resampling the source images every frame. cosO/sinO are passed
+    // in from drawFullBody so they're computed once per frame, not once
+    // per limb. Each sprite's displayWidth/Height (its correct world-space
+    // size) is passed explicitly to drawImage, since the underlying cached
+    // canvas is baked at a higher resolution than that (see
+    // initScaledAssets) so zooming in stays crisp.
+    // ----------------------------
+    drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO) {
+      const sprite = this.scaledParts[partKey];
+      if (!sprite) return;
+      const s = this.bodyScale;
+      ctx.save();
+      const wx = offsetX * cosO - offsetY * sinO;
+      const wy = offsetX * sinO + offsetY * cosO;
+      ctx.translate(originPos.x + wx * s, originPos.y + wy * s);
+      ctx.rotate(orientation + angle);
+      ctx.drawImage(sprite.canvas, -jointX * s, -jointY * s, sprite.displayWidth, sprite.displayHeight);
+      ctx.restore();
+    }
+    drawFullBody(ctx, orientation, originPos) {
+      if (!this.scaledPartsReady) this.initScaledAssets();
+      if (!this.scaledParts.body && !this.scaledParts.leftboot) {
+        this.drawBoot(ctx);
+        return;
+      }
+      const cfg = this.bodyPartsConfig;
+      const s = this.bodyScale;
+      const cosO = Math.cos(orientation);
+      const sinO = Math.sin(orientation);
+      const walkAngle = this.onSurface && this.isWalking ? Math.sin(this.walkTime) * 0.6 : 0;
+      const dirSign = this.facingDirection < 0 ? -1 : 1;
+      let leftBootAngle = walkAngle;
+      let rightBootAngle = -walkAngle;
+      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+      let leftArmAngle, rightArmAngle;
+      if (this.mouseIdle) {
+        const swayAngle = this.onSurface && this.isWalking ? walkAngle * this.armSwingScale : Math.sin(Date.now() * 15e-4) * 0.15;
+        leftArmAngle = swayAngle;
+        rightArmAngle = swayAngle;
+      } else {
+        leftArmAngle = aimAngle;
+        rightArmAngle = walkAngle * this.armSwingScale;
+      }
+      if (!this.onSurface) {
+        leftBootAngle = -0.7;
+        rightBootAngle = 0.7;
+      }
+      this.drawLimb(ctx, "leftboot", cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
+      this.drawLimb(ctx, "leftarm", cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO);
+      const bodySprite = this.scaledParts.body;
+      if (bodySprite) {
+        ctx.save();
+        ctx.translate(originPos.x, originPos.y);
+        ctx.rotate(orientation);
+        ctx.drawImage(
+          bodySprite.canvas,
+          -bodySprite.displayWidth / 2,
+          cfg.bodyY * s - bodySprite.displayHeight / 2,
+          bodySprite.displayWidth,
+          bodySprite.displayHeight
+        );
+        ctx.restore();
+      }
+      this.drawLimb(ctx, "rightboot", cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
+      this.drawLimb(ctx, "rightarm", cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO);
+      const headSprite = this.scaledParts.head;
+      if (headSprite) {
+        ctx.save();
+        const headWX = -cfg.headY * sinO;
+        const headWY = cfg.headY * cosO;
+        const headBob = this.onSurface && this.isWalking ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+        const headLookTilt = this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+        const headTilt = headBob + headLookTilt;
+        ctx.translate(originPos.x + headWX * s, originPos.y + headWY * s);
+        ctx.rotate(orientation + headTilt);
+        const pivotY = headSprite.displayHeight * this.headPivotFraction;
+        ctx.drawImage(
+          headSprite.canvas,
+          -headSprite.displayWidth / 2,
+          -pivotY,
+          headSprite.displayWidth,
+          headSprite.displayHeight
+        );
+        ctx.restore();
+      }
     }
     draw() {
       const ctx = state.ctx;
@@ -1417,17 +1871,21 @@
       let downDir = new Vector2(0, 1);
       if (planet) downDir = planet.pos.subtract(this.pos).normalize();
       const downAngle = Math.atan2(downDir.y, downDir.x);
-      const rotation = downAngle - Math.PI / 2;
+      const orientation = downAngle - Math.PI / 2;
+      const outwardDir = downDir.multiply(-1);
+      const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
       ctx.save();
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(rotation);
-      if (this.facingDirection < 0) ctx.scale(-1, 1);
       if (this.isTeleporting) {
         ctx.shadowColor = "yellow";
         ctx.shadowBlur = 40 * glow;
       }
-      ctx.scale(scale, scale);
-      this.drawBoot(ctx);
+      const dirSign = this.facingDirection < 0 ? -1 : 1;
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(orientation);
+      ctx.scale(dirSign * scale, scale);
+      ctx.rotate(-orientation);
+      ctx.translate(-this.pos.x, -this.pos.y);
+      this.drawFullBody(ctx, orientation, visualPos);
       ctx.shadowBlur = 0;
       ctx.restore();
     }
@@ -1641,6 +2099,54 @@
       ctx.fillStyle = "rgba(255,255,255,0.8)";
       ctx.fill();
       ctx.restore();
+    }
+  };
+
+  // js/entities/world/Explosion.js
+  var EXPLOSION_DURATION = 400;
+  var RING_MAX_RADIUS = 70;
+  var FLASH_RADIUS = 30;
+  var FLASH_FRACTION = 0.3;
+  var PARTICLE_COUNT = 420;
+  var Explosion = class extends Entity {
+    constructor(x, y) {
+      super();
+      this.pos = new Vector2(x, y);
+      this.startTime = Date.now();
+      this.duration = EXPLOSION_DURATION;
+      createDeathParticles(this.pos.clone(), PARTICLE_COUNT);
+    }
+    get isDead() {
+      return Date.now() - this.startTime >= this.duration;
+    }
+    update() {
+    }
+    draw() {
+      const ctx = state.ctx;
+      const t = Math.min((Date.now() - this.startTime) / this.duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      ctx.save();
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = "#ffcc66";
+      ctx.lineWidth = 4 * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, eased * RING_MAX_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      const flashT = Math.min(t / FLASH_FRACTION, 1);
+      if (flashT < 1) {
+        ctx.save();
+        ctx.globalAlpha = 1 - flashT;
+        const grad = ctx.createRadialGradient(this.pos.x, this.pos.y, 0, this.pos.x, this.pos.y, FLASH_RADIUS);
+        grad.addColorStop(0, "rgba(255,255,220,1)");
+        grad.addColorStop(0.4, "rgba(255,180,60,0.8)");
+        grad.addColorStop(1, "rgba(255,100,20,0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, FLASH_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
   };
 
@@ -2005,6 +2511,47 @@
       }
       return toBreak;
     }
+    // Checks every fireball against every asteroid, then every planetoid.
+    // Each fireball can only register a single hit per frame (whichever
+    // it's found to overlap first) — once it's hit something, it's spent
+    // and doesn't get checked against further targets.
+    //
+    // Returns:
+    //   hitFireballs     — Set of fireballs that hit something this frame
+    //                       (caller should remove these from state.fireballs)
+    //   toBreakAsteroids — Set of asteroids to break (pass to the
+    //                       existing breakAsteroid() in game.js, same as
+    //                       planet-asteroid collisions already do)
+    //   planetHits       — array of { fireball, planet } pairs, for the
+    //                       caller to apply a push impulse + spawn an
+    //                       explosion at each impact
+    handleFireballCollisions(fireballs, planetoids, asteroids) {
+      const hitFireballs = /* @__PURE__ */ new Set();
+      const toBreakAsteroids = /* @__PURE__ */ new Set();
+      const planetHits = [];
+      for (const f of fireballs) {
+        let hit = false;
+        for (const a of asteroids) {
+          const dist = f.pos.subtract(a.pos).length();
+          if (dist < f.radius + a.radius) {
+            hitFireballs.add(f);
+            toBreakAsteroids.add(a);
+            hit = true;
+            break;
+          }
+        }
+        if (hit) continue;
+        for (const p of planetoids) {
+          const dist = f.pos.subtract(p.pos).length();
+          if (dist < f.radius + p.radius) {
+            hitFireballs.add(f);
+            planetHits.push({ fireball: f, planet: p });
+            break;
+          }
+        }
+      }
+      return { hitFireballs, toBreakAsteroids, planetHits };
+    }
   };
 
   // js/systems/AISystem.js
@@ -2081,8 +2628,17 @@
   state.canvas.height = window.innerHeight;
   state.sceneWidth = state.canvas.width * 2;
   state.sceneHeight = state.canvas.height * 2;
+  var CHARACTER_IMAGE_SOURCES = {
+    body: "img/body.png",
+    head: "img/head.png",
+    leftarm: "img/leftarm.png",
+    rightarm: "img/rightarm.png",
+    leftboot: "img/leftboot.png",
+    rightboot: "img/rightboot.png"
+  };
+  state.characterImages = {};
   var assetsLoaded = 0;
-  var ASSETS_TO_LOAD = 2;
+  var ASSETS_TO_LOAD = 1 + Object.keys(CHARACTER_IMAGE_SOURCES).length;
   function onAssetLoaded() {
     assetsLoaded++;
     if (assetsLoaded === ASSETS_TO_LOAD) {
@@ -2093,11 +2649,41 @@
   state.planetTexture = new Image();
   state.planetTexture.src = "img/planet_texture_2.jpg";
   state.planetTexture.onload = onAssetLoaded;
-  state.bootImage = new Image();
-  state.bootImage.src = "img/leftboot.png";
-  state.bootImage.onload = onAssetLoaded;
+  Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
+    const img = new Image();
+    img.src = src;
+    img.onload = onAssetLoaded;
+    state.characterImages[key] = img;
+  });
+  state.bootImage = state.characterImages.leftboot;
   state.audioManager = new AudioManager();
   initResizeListener();
+  state.mouse = { x: state.canvas.width / 2, y: state.canvas.height / 2 };
+  state.lastMouseMoveTime = Date.now();
+  state.canvas.addEventListener("mousemove", (e) => {
+    const rect = state.canvas.getBoundingClientRect();
+    state.mouse.x = e.clientX - rect.left;
+    state.mouse.y = e.clientY - rect.top;
+    state.lastMouseMoveTime = Date.now();
+  });
+  state.mouseDown = false;
+  state.canvas.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    state.mouseDown = true;
+    if (state.player) state.player.shootFireball();
+  });
+  window.addEventListener("mouseup", (e) => {
+    if (e.button !== 0) return;
+    state.mouseDown = false;
+  });
+  state.fireballs = [];
+  state.explosions = [];
+  state.zoom = 1;
+  var ZOOM_MIN = 0.5;
+  var ZOOM_MAX = 2.5;
+  state.zoomMax = ZOOM_MAX;
+  var ZOOM_STEP_PER_FRAME = 0.02;
+  var FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
   state.stars = [];
   for (let i = 0; i < STAR_COUNT; i++) {
     state.stars.push({
@@ -2150,8 +2736,8 @@
       starCtx.fill();
     });
     state.planetoids = [];
-    for (let i = 0; i < 44; i++) {
-      const radius = 30 + Math.random() * 40;
+    for (let i = 0; i < 10; i++) {
+      const radius = 60 + Math.random() * 40;
       const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
       const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
       const color = planetColors[Math.floor(Math.random() * planetColors.length)];
@@ -2197,8 +2783,8 @@
       new MazeGhost(state.mazePlanet.interior, pos2.col, pos2.row, "pink")
     ];
     state.asteroids = [];
-    for (let i = 0; i < 24; i++) {
-      const radius = 20 + Math.random() * 25;
+    for (let i = 0; i < 60; i++) {
+      const radius = 40 + Math.random() * 25;
       const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
       const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
       state.asteroids.push(new Asteroid(x, y, radius));
@@ -2242,6 +2828,8 @@
     });
     state.planetoids.forEach((p) => p.createOffscreen());
     state.particles = [];
+    state.fireballs = [];
+    state.explosions = [];
     state.gameOver = false;
     state.levelComplete = false;
     state.player.mode = "space";
@@ -2344,6 +2932,7 @@
       if (state.player.mode != "maze") gravitySystem.applyTo(state.player);
       state.player.update();
       if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
+      if (state.mouseDown) state.player.shootFireball();
     } else {
       state.player.update();
     }
@@ -2355,6 +2944,21 @@
       state.platformPlanet.interior.blobs.forEach((b) => b.update());
     }
     state.coins.forEach((c) => c.update());
+    state.fireballs.forEach((f) => f.update());
+    const fireballResults = collisionSystem.handleFireballCollisions(state.fireballs, state.planetoids, state.asteroids);
+    for (const a of fireballResults.toBreakAsteroids) {
+      breakAsteroid(a);
+      state.explosions.push(new Explosion(a.pos.x, a.pos.y));
+    }
+    for (const hit of fireballResults.planetHits) {
+      const speed = hit.fireball.vel.length();
+      const pushDir = hit.fireball.vel.clone().normalize();
+      hit.planet.vel.add(pushDir.multiply(speed * FIREBALL_PLANET_PUSH_STRENGTH));
+      state.explosions.push(new Explosion(hit.fireball.pos.x, hit.fireball.pos.y));
+    }
+    state.fireballs = state.fireballs.filter((f) => !f.isDead && !fireballResults.hitFireballs.has(f));
+    state.explosions.forEach((e) => e.update());
+    state.explosions = state.explosions.filter((e) => !e.isDead);
     state.particles.forEach((p) => p.update());
     state.particles = state.particles.filter((p) => p.life > 0);
     collisionSystem.handleCoinCollisions(state.player, state.coins);
@@ -2366,14 +2970,25 @@
     if (state.coins.length === 0 && state.player.mode != "maze") {
       state.levelComplete = true;
     }
+    if (state.keys["+"] || state.keys["="]) {
+      state.zoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME);
+    }
+    if (state.keys["-"] || state.keys["_"]) {
+      state.zoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME);
+    }
+    const zoom = state.zoom;
+    const visibleWidth = state.canvas.width / zoom;
+    const visibleHeight = state.canvas.height / zoom;
     const camera = new Vector2();
-    camera.x = state.player.pos.x - state.canvas.width / 2;
-    camera.y = state.player.pos.y - state.canvas.height / 2;
-    if (camera.x < 0) camera.x = 0;
-    if (camera.y < 0) camera.y = 0;
-    if (camera.x > state.sceneWidth - state.canvas.width) camera.x = state.sceneWidth - state.canvas.width;
-    if (camera.y > state.sceneHeight - state.canvas.height) camera.y = state.sceneHeight - state.canvas.height;
+    camera.x = state.player.pos.x - visibleWidth / 2;
+    camera.y = state.player.pos.y - visibleHeight / 2;
+    const maxCameraX = state.sceneWidth - visibleWidth;
+    const maxCameraY = state.sceneHeight - visibleHeight;
+    camera.x = maxCameraX > 0 ? Math.min(Math.max(camera.x, 0), maxCameraX) : maxCameraX / 2;
+    camera.y = maxCameraY > 0 ? Math.min(Math.max(camera.y, 0), maxCameraY) : maxCameraY / 2;
+    state.camera = camera;
     state.ctx.save();
+    state.ctx.scale(zoom, zoom);
     state.ctx.translate(-camera.x, -camera.y);
     state.ctx.drawImage(state.starCanvas, 0, 0);
     state.planetoids.forEach((p) => p.draw());
@@ -2381,13 +2996,16 @@
     state.player.draw();
     state.enemies.forEach((e) => e.draw());
     state.coins.forEach((c) => c.draw());
+    state.fireballs.forEach((f) => f.draw());
     state.particles.forEach((p) => p.draw());
+    state.explosions.forEach((e) => e.draw());
     state.ctx.restore();
     state.ctx.fillStyle = "white";
     state.ctx.font = "24px Arial";
     state.ctx.textAlign = "left";
     state.ctx.fillText(`Level ${state.level} - Score: ${state.score}`, 20, 40);
     state.ctx.fillText(`FPS: ${state.fps.toFixed(1)}`, 20, 70);
+    state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
     requestAnimationFrame(gameLoop);
   }
 })();
