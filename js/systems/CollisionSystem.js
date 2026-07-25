@@ -118,4 +118,50 @@ export class CollisionSystem {
     }
     return toBreak;
   }
+
+  // Checks every fireball against every asteroid, then every planetoid.
+  // Each fireball can only register a single hit per frame (whichever
+  // it's found to overlap first) — once it's hit something, it's spent
+  // and doesn't get checked against further targets.
+  //
+  // Returns:
+  //   hitFireballs     — Set of fireballs that hit something this frame
+  //                       (caller should remove these from state.fireballs)
+  //   toBreakAsteroids — Set of asteroids to break (pass to the
+  //                       existing breakAsteroid() in game.js, same as
+  //                       planet-asteroid collisions already do)
+  //   planetHits       — array of { fireball, planet } pairs, for the
+  //                       caller to apply a push impulse + spawn an
+  //                       explosion at each impact
+  handleFireballCollisions(fireballs, planetoids, asteroids) {
+    const hitFireballs = new Set();
+    const toBreakAsteroids = new Set();
+    const planetHits = [];
+
+    for (const f of fireballs) {
+      let hit = false;
+
+      for (const a of asteroids) {
+        const dist = f.pos.subtract(a.pos).length();
+        if (dist < f.radius + a.radius) {
+          hitFireballs.add(f);
+          toBreakAsteroids.add(a);
+          hit = true;
+          break;
+        }
+      }
+      if (hit) continue;
+
+      for (const p of planetoids) {
+        const dist = f.pos.subtract(p.pos).length();
+        if (dist < f.radius + p.radius) {
+          hitFireballs.add(f);
+          planetHits.push({ fireball: f, planet: p });
+          break;
+        }
+      }
+    }
+
+    return { hitFireballs, toBreakAsteroids, planetHits };
+  }
 }

@@ -18,6 +18,7 @@ import {
   createParticles
 } from '../utils.js';
 import { Particle } from './Particle.js';
+import { Fireball } from './world/Fireball.js';
 
 export class Player extends Entity {
   constructor(x, y) {
@@ -55,16 +56,309 @@ export class Player extends Entity {
     this.deathAlpha = 1;
 
     // ----------------------------
-    // BOOT SPRITE
+    // BOOT SPRITE (used for maze/platform/death — small stylized modes)
     // ----------------------------
-    // Native leftboot.png dimensions, pointing right (+x) by default —
-    // which matches the local +x "forward" axis the rest of this class
-    // already rotates into place, so no extra angle offset is needed.
     this.bootNaturalWidth = 232;
     this.bootNaturalHeight = 312;
-    this.bootScale = 0.1; // tweak this to resize the boot on screen
-    this.bootWidth = this.bootNaturalWidth * this.bootScale;
-    this.bootHeight = this.bootNaturalHeight * this.bootScale;
+    this.bootScale = 0.1;
+    // Final on-screen boot size is determined by the pre-scaled canvas
+    // built in initScaledAssets() (see scaledBootCanvas), not by these
+    // two natural-size fields directly — they're kept only as a record
+    // of the source PNG dimensions.
+
+    // ----------------------------
+    // FULL BODY SPRITE (used for the main planet-surface/space mode)
+    // Offsets/joints are in each image's native pixel space — ported
+    // directly from the standalone astronaut prototype, since those
+    // values are what make the limbs line up anatomically.
+    // ----------------------------
+    this.bodyScale = 0.1;
+    this.bodyPartsConfig = {
+      bodyY: 115, headY: -150,//-400,
+      leftArmX: 136, leftArmY: 9, leftArmJointX: 73, leftArmJointY: 199,
+      rightArmX: -186, rightArmY: -14, rightArmJointX: 119, rightArmJointY: 40,
+      leftBootX: 111, leftBootY: 241, leftBootJointX: 83, leftBootJointY: 15,
+      rightBootX: -142, rightBootY: 241, rightBootJointX: 77, rightBootJointY: 15
+    };
+    this.walkTime = 0;
+    this.isWalking = false;
+
+    // How many pixels of actual surface travel make up one full leg
+    // swing cycle. The walk animation now advances based on real
+    // distance walked (see move()), not a flat per-frame amount — so
+    // legs/arms pendulate faster or slower in lockstep with how much
+    // ground he's actually covering. Lower = faster-looking stride.
+    this.strideLength = 90;
+
+    // Arm swing amplitude relative to the leg swing amplitude (0.6,
+    // hardcoded below in drawFullBody). The right arm moves opposite
+    // its same-side leg, like a natural walking gait. (The left arm no
+    // longer uses this — it's dedicated to aiming, see below.)
+    this.armSwingScale = 0.5;
+
+    // How far (in the same raw joint-space units as bodyPartsConfig,
+    // multiplied by bodyScale) to shift the whole rig outward from the
+    // planet — away from this.pos — when drawing, so the boot soles
+    // land on the physical surface instead of the belt/origin doing so.
+    // Increase to lift the astronaut further off the surface, decrease
+    // to sink him back in. Tune this to taste once you see it in-game.
+    this.groundOffset = 250;
+
+    // How far past straight forward the blaster (left) arm is allowed
+    // to swing — up to and slightly past directly up/down, but never
+    // all the way around to point behind the character. 90° = exactly
+    // vertical; the extra amount is the "5 degrees past vertical"
+    // allowance.
+    this.maxAimFromForward = (90 + 5) * Math.PI / 180;
+
+    // Cached each frame by computeLeftArmAimAngle() while in "space"
+    // mode: the shoulder joint's world position and the actual
+    // (clamped) world angle the arm is currently pointing. shootFireball()
+    // reads these directly so shots always originate exactly where the
+    // gun barrel is visually aiming. aimRelativeAngle (the signed angle
+    // from "forward" to the clamped aim target) is what
+    // computeHeadLookTilt() reuses so the head can do a partial version
+    // of the same look direction.
+    this.aimShoulderPos = null;
+    this.aimWorldAngle = 0;
+    this.aimRelativeAngle = 0;
+
+    // How much of the arm's aim angle the head mimics when looking
+    // up/down at the aim target — 1.0 would match the arm exactly;
+    // lower values read as a more natural glance rather than a full
+    // swing. Tune to taste.
+    this.headLookScale = 0.6;
+
+    // Where within the head image, vertically, it pivots from — 0 = top
+    // of the image, 1 = bottom, 0.5 = dead center (the previous, only,
+    // behavior). A real head-tilt hinges from the neck rather than the
+    // middle, so once you're happy with headLookScale, try nudging this
+    // toward wherever the neck actually sits in head.png (probably
+    // somewhere in the 0.7–0.95 range). You'll likely want to re-check
+    // bodyPartsConfig.headY (how far the head sits from the body) at
+    // the same time, since changing the pivot shifts where the image
+    // lands relative to that anchor point.
+    this.headPivotFraction = 0.9;
+
+    // Distance from the shoulder joint to the muzzle tip, in the same
+    // raw joint-space units as bodyPartsConfig (multiplied by
+    // bodyScale). This is a guess — tune it once you see where
+    // fireballs actually spawn relative to the leftarm.png artwork.
+    this.blasterMuzzleLength = 300;
+
+    // Fine-tuning correction (radians), applied only at firing time —
+    // to both the muzzle position and the fired direction — in case
+    // the actual barrel opening in leftarm.png isn't perfectly aligned
+    // with the arm's computed aim direction. Does NOT affect the arm's
+    // visual rotation, only where/how the fireball launches. Nudge the
+    // sign/magnitude until shots visually leave from the barrel tip.
+    this.blasterAngleOffset = -5 * Math.PI / 180;
+
+    // Minimum time (ms) between shots while firing is held.
+    this.fireCooldown = 150;
+    this.lastShotTime = 0;
+
+    // How long (ms) the mouse can go without moving before we consider
+    // it "idle": facing stops following it (reverts to whatever
+    // movement set), and both arms switch to a synchronized sway
+    // instead of aim-tracking/counter-swing. Updated once per frame in
+    // updateOrientationAndFacing().
+    this.mouseIdleThreshold = 2000;
+    this.mouseIdle = true;
+
+    // ----------------------------
+    // PRE-SCALED SPRITE CACHE (perf)
+    // ----------------------------
+    // Every body part gets rendered ONCE to an offscreen canvas, instead
+    // of being resampled by drawImage from full source resolution every
+    // single frame. This is the same trick Planetoid.js uses for its
+    // texture. Built lazily on first draw() call, once we know the
+    // images have actually loaded.
+    //
+    // Baked at a resolution higher than "zoom = 1" needs — enough to
+    // stay crisp at state.zoomMax (see game.js) — so that zooming IN
+    // never has to upscale a low-res bitmap (blurry). Zooming out just
+    // downscales a higher-res one, which always looks clean. This means
+    // we never need to rebuild the cache while the player is actively
+    // zooming, which would reintroduce per-frame cost.
+    //
+    // Each cached entry is { canvas, displayWidth, displayHeight }:
+    // `canvas` is the (higher-res) baked bitmap; displayWidth/Height are
+    // the correct WORLD-SPACE size to actually draw it at (i.e. what its
+    // size would be at zoom=1) — draws always pass these explicitly to
+    // drawImage rather than relying on the canvas's own pixel size.
+    //
+    // NOTE: if you ever change bodyScale or bootScale after construction,
+    // call this.invalidateScaledAssets() so these get rebuilt at the
+    // new size.
+    this.scaledPartsReady = false;
+    this.scaledParts = {};        // partKey -> { canvas, displayWidth, displayHeight }, at bodyScale
+    this.scaledBootCanvas = null; // { canvas, displayWidth, displayHeight }, at bootScale
+  }
+
+  invalidateScaledAssets() {
+    this.scaledPartsReady = false;
+    this.scaledParts = {};
+    this.scaledBootCanvas = null;
+  }
+
+  // Bakes img at `scale` (its correct world-space size, i.e. size at
+  // zoom=1) but rasterizes it internally at `scale * resolutionMultiplier`
+  // pixels, so it stays crisp when the caller later draws it larger
+  // (zoomed in) via the canvas' own scale transform. Returns both the
+  // baked canvas and the world-space size it should actually be drawn
+  // at, since those now differ.
+  makeScaledSprite(img, scale, resolutionMultiplier = 1) {
+    const displayWidth = Math.max(1, img.naturalWidth * scale);
+    const displayHeight = Math.max(1, img.naturalHeight * scale);
+    const bakeWidth = Math.max(1, Math.round(displayWidth * resolutionMultiplier));
+    const bakeHeight = Math.max(1, Math.round(displayHeight * resolutionMultiplier));
+    const canvas = document.createElement('canvas');
+    canvas.width = bakeWidth;
+    canvas.height = bakeHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0, bakeWidth, bakeHeight);
+    return { canvas, displayWidth, displayHeight };
+  }
+
+  initScaledAssets() {
+    const images = state.characterImages;
+    // How much extra resolution to bake in, beyond zoom=1, so zooming
+    // in never has to upscale a low-res bitmap. Falls back to 2.5 (the
+    // current ZOOM_MAX in game.js) if state.zoomMax isn't set for some
+    // reason, so this degrades gracefully rather than baking too small.
+    const resMultiplier = Math.max(1, state.zoomMax || 2.5);
+
+    if (images) {
+      for (const key of ['body', 'head', 'leftarm', 'rightarm', 'leftboot', 'rightboot']) {
+        const img = images[key];
+        if (img && img.complete && img.naturalWidth > 0) {
+          this.scaledParts[key] = this.makeScaledSprite(img, this.bodyScale, resMultiplier);
+        }
+      }
+    }
+    if (state.bootImage && state.bootImage.complete && state.bootImage.naturalWidth > 0) {
+      this.scaledBootCanvas = this.makeScaledSprite(state.bootImage, this.bootScale, resMultiplier);
+    }
+    this.scaledPartsReady = true;
+  }
+
+  // ----------------------------
+  // BLASTER (LEFT ARM) AIMING
+  // ----------------------------
+  // Computes the local rotation to feed into drawLimb for the left arm
+  // so that — after accounting for the character's current orientation
+  // on the planet and the left/right mirror flip — the arm visually
+  // points at the mouse cursor in world space, clamped so it can swing
+  // up to just past straight up/down but never point behind him.
+  //
+  // Two things make this trickier than a plain "aim at target" formula:
+  //  1. "Forward" itself flips to the opposite world angle when the rig
+  //     is mirrored (facing left) — see the mirror comment in draw().
+  //  2. Because that mirror is a REFLECTION (not a rotation), a local
+  //     rotation applied before it doesn't just get negated — it gets
+  //     reflected. So converting "desired world angle" back into the
+  //     local rotation parameter needs different math on each side.
+  computeLeftArmAimAngle(orientation, dirSign, originPos) {
+    const cfg = this.bodyPartsConfig;
+    const s = this.bodyScale;
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+
+    // Mirror-aware shoulder world position: local x (offsetX) flips
+    // sign under the mirror, local y (offsetY) does not — same rule
+    // drawLimb relies on implicitly via the outer ctx transform.
+    const offsetX = cfg.leftArmX * dirSign;
+    const offsetY = cfg.leftArmY;
+    const wx = offsetX * cosO - offsetY * sinO;
+    const wy = offsetX * sinO + offsetY * cosO;
+    const shoulderX = originPos.x + wx * s;
+    const shoulderY = originPos.y + wy * s;
+
+    const cam = state.camera || { x: 0, y: 0 };
+    const zoom = state.zoom || 1;
+    const mouse = state.mouse || { x: shoulderX, y: shoulderY };
+    const mouseWorldX = mouse.x / zoom + cam.x;
+    const mouseWorldY = mouse.y / zoom + cam.y;
+
+    const targetAngle = Math.atan2(mouseWorldY - shoulderY, mouseWorldX - shoulderX);
+
+    // "Forward" flips to the opposite world angle when mirrored, since
+    // the whole rig reflects about the vertical (radial, up/down) axis.
+    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+
+    // Signed angle from forward to target, normalized to (-π, π]
+    let relative = Math.atan2(
+      Math.sin(targetAngle - forwardAngle),
+      Math.cos(targetAngle - forwardAngle)
+    );
+    relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+    const clampedTargetAngle = forwardAngle + relative;
+
+    // Cache for shootFireball() (so shots spawn exactly where the arm
+    // is visually pointing this frame) and for computeHeadLookTilt()
+    // (so the head can do a partial version of the same "look toward"
+    // rotation).
+    this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
+    this.aimWorldAngle = clampedTargetAngle;
+    this.aimRelativeAngle = relative;
+
+    return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
+  }
+
+  // Converts a desired WORLD-space angle into the local rotation
+  // parameter drawLimb (or a head/other part's own ctx.rotate) expects,
+  // accounting for the left/right mirror. Because that mirror is a
+  // REFLECTION (not a rotation), this isn't just a sign flip — see the
+  // comment on computeLeftArmAimAngle above for why.
+  worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign) {
+    if (dirSign > 0) {
+      return desiredWorldAngle - orientation;
+    }
+    return (orientation + Math.PI) - desiredWorldAngle;
+  }
+
+  // ----------------------------
+  // HEAD LOOK TILT
+  // ----------------------------
+  // Tilts the head partway toward the same clamped aim target the
+  // blaster arm uses (computeLeftArmAimAngle, called earlier this frame
+  // — this reads its cached aimRelativeAngle rather than recomputing
+  // anything), scaled down by headLookScale so it reads as a natural
+  // glance up/down rather than a full arm-like swing. headLookScale of
+  // 1.0 would exactly match the arm's aim angle; lower values glance
+  // less. Returns 0 (straight ahead) when aimRelativeAngle hasn't been
+  // set yet.
+  computeHeadLookTilt(orientation, dirSign) {
+    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+    const desiredWorldAngle = forwardAngle + this.headLookScale * this.aimRelativeAngle;
+    return this.worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign);
+  }
+
+  // ----------------------------
+  // FIRING
+  // ----------------------------
+  // Spawns a Fireball from the blaster's muzzle tip, using this frame's
+  // cached aim (see computeLeftArmAimAngle). Only fires while in
+  // "space" mode (the main planet-surface/flight gameplay), respects a
+  // cooldown, and does nothing while dying/teleporting or before the
+  // first aim has been computed.
+  shootFireball() {
+    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+    if (!this.aimShoulderPos) return;
+
+    const now = Date.now();
+    if (now - this.lastShotTime < this.fireCooldown) return;
+    this.lastShotTime = now;
+
+    const angle = this.aimWorldAngle + this.blasterAngleOffset;
+    const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
+    const tipX = this.aimShoulderPos.x + Math.cos(angle) * muzzleDist;
+    const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
+
+    state.fireballs.push(new Fireball(tipX, tipY, angle));
+    if (state.audioManager && typeof state.audioManager.playShoot === 'function') {
+      state.audioManager.playShoot();
+    }
   }
 
   // ----------------------------
@@ -353,16 +647,30 @@ export class Player extends Entity {
       const surfaceDist = this.currentPlanet.radius + this.radius;
       const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
 
+      this.isWalking = false;
+      const prevAngle = this.angle;
+
       if (keys['ArrowLeft']) {
         this.angle -= angularSpeed;
         this.facingDirection = -1;
+        this.isWalking = true;
       }
       if (keys['ArrowRight']) {
         this.angle += angularSpeed;
         this.facingDirection = 1;
+        this.isWalking = true;
       }
       this.pos.x = this.currentPlanet.pos.x + Math.cos(this.angle) * surfaceDist;
       this.pos.y = this.currentPlanet.pos.y + Math.sin(this.angle) * surfaceDist;
+
+      // Advance the walk cycle by the actual arc-length distance moved
+      // this frame (|Δangle| × surfaceDist), scaled by strideLength, so
+      // the leg/arm swing speed always matches real ground covered
+      // rather than an arbitrary flat rate.
+      if (this.isWalking) {
+        const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
+        this.walkTime += (distanceMoved / this.strideLength) * Math.PI * 2;
+      }
     }
   }
 
@@ -492,19 +800,195 @@ export class Player extends Entity {
     }
 
     this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
+
+    this.updateOrientationAndFacing();
   }
 
   // ----------------------------
-  // BOOT DRAW HELPER
-  // Draws the boot image centered at the current canvas origin.
-  // The image's natural orientation points along local +x, which is
-  // the same "forward" axis every draw block below rotates into place —
-  // so this is a straight swap-in for the old arc-fill pac-shape.
+  // MOUSE-DRIVEN FACING
+  // ----------------------------
+  // While the mouse is actively being used, the character faces
+  // whichever side of him it's currently on — even if that's opposite
+  // his direction of travel (a fun little "moonwalk" when aiming
+  // backward while moving forward, left in on purpose). Once the mouse
+  // has been idle for a while, facing just reverts to whatever move()
+  // already set from arrow-key input.
+  //
+  // Also updates this.mouseIdle, which drawFullBody uses to decide
+  // whether the arms should track the aim or sway together instead.
+  //
+  // Only meaningful in "space" mode (the full-body rig); a no-op
+  // otherwise. Deliberately recomputes its own local `orientation`
+  // rather than touching/reading anything shared with draw() — cheap
+  // trig, and keeps the two computations independent so there's no risk
+  // of them drifting out of sync during early-return frames (death,
+  // teleport) where update() doesn't reach this point.
+  updateOrientationAndFacing() {
+    if (this.mode !== "space") return;
+
+    const lastMove = state.lastMouseMoveTime || 0;
+    this.mouseIdle = (Date.now() - lastMove) > this.mouseIdleThreshold;
+
+    if (this.mouseIdle) return; // facing stays whatever move() set
+
+    let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+    let downDir = new Vector2(0, 1);
+    if (planet) downDir = planet.pos.subtract(this.pos).normalize();
+    const downAngle = Math.atan2(downDir.y, downDir.x);
+    const orientation = downAngle - Math.PI / 2;
+
+    const cam = state.camera || { x: 0, y: 0 };
+    const zoom = state.zoom || 1;
+    const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+    const mouseWorldX = mouse.x / zoom + cam.x;
+    const mouseWorldY = mouse.y / zoom + cam.y;
+
+    // Project the vector from the character to the mouse onto the
+    // tangent ("forward/back") axis at this orientation. Positive means
+    // the mouse is on the local +x side (dirSign +1); negative means
+    // it's on the local -x side (dirSign -1) — same convention drawing
+    // and aiming already use elsewhere.
+    const tangentX = Math.cos(orientation);
+    const tangentY = Math.sin(orientation);
+    const toMouseX = mouseWorldX - this.pos.x;
+    const toMouseY = mouseWorldY - this.pos.y;
+    const projection = toMouseX * tangentX + toMouseY * tangentY;
+
+    this.facingDirection = projection >= 0 ? 1 : -1;
+  }
+
+  // ----------------------------
+  // BOOT DRAW HELPER (maze / platform / death modes)
   // ----------------------------
   drawBoot(ctx) {
-    const img = state.bootImage;
-    if (!img || !img.complete || img.naturalWidth === 0) return;
-    ctx.drawImage(img, -this.bootWidth / 2, -this.bootHeight / 2, this.bootWidth, this.bootHeight);
+    const sprite = this.scaledBootCanvas;
+    if (!sprite) return;
+    ctx.drawImage(
+      sprite.canvas,
+      -sprite.displayWidth / 2,
+      -sprite.displayHeight / 2,
+      sprite.displayWidth,
+      sprite.displayHeight
+    );
+  }
+
+  // ----------------------------
+  // FULL BODY DRAW HELPERS (main planet-surface / space mode)
+  // Ported from the standalone astronaut prototype: each limb has a
+  // fixed offset from the rig's origin (rotated by `orientation`, the
+  // same "up is away from the planet" angle already computed by the
+  // caller) plus a "joint" pivot within its own image so it swings from
+  // the right spot. `originPos` is passed in explicitly (rather than
+  // always using this.pos) so the caller can offset the whole rig
+  // outward from the planet without touching the physics position.
+  //
+  // Draws from the pre-scaled sprite cache (see initScaledAssets) rather
+  // than resampling the source images every frame. cosO/sinO are passed
+  // in from drawFullBody so they're computed once per frame, not once
+  // per limb. Each sprite's displayWidth/Height (its correct world-space
+  // size) is passed explicitly to drawImage, since the underlying cached
+  // canvas is baked at a higher resolution than that (see
+  // initScaledAssets) so zooming in stays crisp.
+  // ----------------------------
+  drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO) {
+    const sprite = this.scaledParts[partKey];
+    if (!sprite) return;
+    const s = this.bodyScale;
+    ctx.save();
+    const wx = offsetX * cosO - offsetY * sinO;
+    const wy = offsetX * sinO + offsetY * cosO;
+    ctx.translate(originPos.x + wx * s, originPos.y + wy * s);
+    ctx.rotate(orientation + angle);
+    ctx.drawImage(sprite.canvas, -jointX * s, -jointY * s, sprite.displayWidth, sprite.displayHeight);
+    ctx.restore();
+  }
+
+  drawFullBody(ctx, orientation, originPos) {
+    if (!this.scaledPartsReady) this.initScaledAssets();
+    if (!this.scaledParts.body && !this.scaledParts.leftboot) { this.drawBoot(ctx); return; }
+
+    const cfg = this.bodyPartsConfig;
+    const s = this.bodyScale;
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+
+    const walkAngle = (this.onSurface && this.isWalking) ? Math.sin(this.walkTime) * 0.6 : 0;
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+
+    let leftBootAngle = walkAngle;
+    let rightBootAngle = -walkAngle;
+
+    // Always compute the aim angle (even while idle) so aimShoulderPos/
+    // aimWorldAngle stay accurate to the mouse's current world position
+    // for shootFireball() — but only actually use it for the arm's
+    // visual angle when the mouse isn't idle. While idle, both arms
+    // sway together instead: in sync with the walk cycle if walking, or
+    // a slow gentle idle sway if just standing still.
+    const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+    let leftArmAngle, rightArmAngle;
+    if (this.mouseIdle) {
+      const swayAngle = (this.onSurface && this.isWalking)
+        ? walkAngle * this.armSwingScale
+        : Math.sin(Date.now() * 0.0015) * 0.15;
+      leftArmAngle = swayAngle;
+      rightArmAngle = swayAngle;
+    } else {
+      leftArmAngle = aimAngle;
+      rightArmAngle = walkAngle * this.armSwingScale;
+    }
+
+    if (!this.onSurface) {
+      // Simple in-flight pose: legs splayed. Right arm settles back to
+      // rest (walkAngle is 0 while airborne); left arm keeps aiming.
+      leftBootAngle = -0.7;
+      rightBootAngle = 0.7;
+    }
+
+    this.drawLimb(ctx, 'leftboot', cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(ctx, 'leftarm', cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO);
+
+    const bodySprite = this.scaledParts.body;
+    if (bodySprite) {
+      ctx.save();
+      ctx.translate(originPos.x, originPos.y);
+      ctx.rotate(orientation);
+      ctx.drawImage(
+        bodySprite.canvas,
+        -bodySprite.displayWidth / 2,
+        cfg.bodyY * s - bodySprite.displayHeight / 2,
+        bodySprite.displayWidth,
+        bodySprite.displayHeight
+      );
+      ctx.restore();
+    }
+
+    this.drawLimb(ctx, 'rightboot', cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(ctx, 'rightarm', cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO);
+
+    const headSprite = this.scaledParts.head;
+    if (headSprite) {
+      ctx.save();
+      const headWX = -cfg.headY * sinO;
+      const headWY = cfg.headY * cosO;
+      const headBob = (this.onSurface && this.isWalking) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+      // Look toward the aim target (up if aiming up, down if aiming
+      // down), same idea as the arm. Returns to neutral while the
+      // mouse is idle, matching the arms swaying together instead of
+      // tracking a stale aim point.
+      const headLookTilt = this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+      const headTilt = headBob + headLookTilt;
+      ctx.translate(originPos.x + headWX * s, originPos.y + headWY * s);
+      ctx.rotate(orientation + headTilt);
+      const pivotY = headSprite.displayHeight * this.headPivotFraction;
+      ctx.drawImage(
+        headSprite.canvas,
+        -headSprite.displayWidth / 2,
+        -pivotY,
+        headSprite.displayWidth,
+        headSprite.displayHeight
+      );
+      ctx.restore();
+    }
   }
 
   draw() {
@@ -566,23 +1050,46 @@ export class Player extends Entity {
     }
 
     // ----------------------------
-    // PLANET MODE
+    // PLANET MODE (full body)
     // ----------------------------
     let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
     let downDir = new Vector2(0,1);
     if (planet) downDir = planet.pos.subtract(this.pos).normalize();
     const downAngle = Math.atan2(downDir.y, downDir.x);
-    const rotation = downAngle - Math.PI/2;
+    const orientation = downAngle - Math.PI/2;
+
+    // Shift the visual draw origin outward (away from the planet) so
+    // the boots' soles rest on the surface instead of this.pos — which
+    // marks roughly the belt — sinking into it. This only affects
+    // drawing; the physics position (this.pos) is untouched.
+    const outwardDir = downDir.multiply(-1);
+    const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+
     ctx.save();
-    ctx.translate(this.pos.x,this.pos.y);
-    ctx.rotate(rotation);
-    if (this.facingDirection < 0) ctx.scale(-1,1);
     if (this.isTeleporting) {
       ctx.shadowColor='yellow';
       ctx.shadowBlur=40*glow;
     }
-    ctx.scale(scale,scale);
-    this.drawBoot(ctx);
+
+    // Mirror the whole rig about the character's own local vertical
+    // axis (the line through this.pos at angle `orientation`) when
+    // facing left, and apply the teleport pulse (`scale`) the same way.
+    // Doing this as translate→rotate→scale→rotate-back→translate-back
+    // reflects/scales everything drawn afterward around that axis,
+    // regardless of where on the planet the character currently is —
+    // a plain ctx.scale(-1,1) would mirror around the canvas' raw
+    // x-axis instead, which isn't what we want here. Using a transform
+    // for the pulse (rather than temporarily inflating bodyScale, as
+    // before) keeps the pre-scaled sprite cache valid — it never needs
+    // to be regenerated mid-animation.
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+    ctx.translate(this.pos.x, this.pos.y);
+    ctx.rotate(orientation);
+    ctx.scale(dirSign * scale, scale);
+    ctx.rotate(-orientation);
+    ctx.translate(-this.pos.x, -this.pos.y);
+
+    this.drawFullBody(ctx, orientation, visualPos);
     ctx.shadowBlur=0;
     ctx.restore();
   }

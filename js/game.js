@@ -20,6 +20,7 @@ import { Asteroid } from './entities/world/Asteroid.js';
 import { Player } from './entities/Player.js';
 import { SpaceGhost } from './entities/world/SpaceGhost.js';
 import { Coin } from './entities/world/Coin.js';
+import { Explosion } from './entities/world/Explosion.js';
 import { BlobMonster } from './entities/interior/BlobMonster.js';
 import { MazeGhost } from './entities/interior/MazeGhost.js';
 import { GravitySystem } from './systems/GravitySystem.js';
@@ -37,9 +38,25 @@ state.canvas.height = window.innerHeight;
 state.sceneWidth = state.canvas.width * 2;
 state.sceneHeight = state.canvas.height * 2;
 
-// Load planet texture and boot sprite, then start once both are ready
+// ----------------------------
+// ASSET LOADING
+// Planet texture + all six astronaut body-part sprites. Everything
+// waits for all of these before the game starts, since draw() now
+// needs the full set to render the character.
+// ----------------------------
+const CHARACTER_IMAGE_SOURCES = {
+  body: 'img/body.png',
+  head: 'img/head.png',
+  leftarm: 'img/leftarm.png',
+  rightarm: 'img/rightarm.png',
+  leftboot: 'img/leftboot.png',
+  rightboot: 'img/rightboot.png'
+};
+
+state.characterImages = {};
+
 let assetsLoaded = 0;
-const ASSETS_TO_LOAD = 2;
+const ASSETS_TO_LOAD = 1 + Object.keys(CHARACTER_IMAGE_SOURCES).length; // planet texture + 6 body parts
 function onAssetLoaded() {
   assetsLoaded++;
   if (assetsLoaded === ASSETS_TO_LOAD) {
@@ -52,13 +69,75 @@ state.planetTexture = new Image();
 state.planetTexture.src = "img/planet_texture_2.jpg";
 state.planetTexture.onload = onAssetLoaded;
 
-state.bootImage = new Image();
-state.bootImage.src = "img/leftboot.png";
-state.bootImage.onload = onAssetLoaded;
+Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
+  const img = new Image();
+  img.src = src;
+  img.onload = onAssetLoaded;
+  state.characterImages[key] = img;
+});
+
+// The compact single-boot rendering (maze/platform/death modes) reuses
+// the same leftboot image — no need to load it twice.
+state.bootImage = state.characterImages.leftboot;
 
 // Init audio and resize
 state.audioManager = new AudioManager();
 initResizeListener();
+
+// ----------------------------
+// MOUSE TRACKING (for blaster aiming)
+// Stored in canvas-space (relative to the canvas element). Player.js
+// converts this to world space each frame using state.camera, which
+// gameLoop() keeps up to date below.
+// ----------------------------
+state.mouse = { x: state.canvas.width / 2, y: state.canvas.height / 2 };
+// Timestamp of the last actual mousemove event. Since mousemove only
+// fires on real pointer movement, "idle" is simply checked as
+// Date.now() - state.lastMouseMoveTime, no distance threshold needed.
+state.lastMouseMoveTime = Date.now();
+state.canvas.addEventListener('mousemove', (e) => {
+  const rect = state.canvas.getBoundingClientRect();
+  state.mouse.x = e.clientX - rect.left;
+  state.mouse.y = e.clientY - rect.top;
+  state.lastMouseMoveTime = Date.now();
+});
+
+// Hold left mouse button to fire the blaster (continuous fire is
+// handled per-frame in gameLoop via state.mouseDown). We also fire
+// immediately here on mousedown itself, so a quick click always
+// produces at least one shot rather than depending on frame timing.
+state.mouseDown = false;
+state.canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  state.mouseDown = true;
+  if (state.player) state.player.shootFireball();
+});
+window.addEventListener('mouseup', (e) => {
+  if (e.button !== 0) return;
+  state.mouseDown = false;
+});
+
+state.fireballs = [];
+state.explosions = [];
+
+// Camera zoom (1 = default view; >1 zooms in, <1 zooms out). Held
+// continuously with +/- (see gameLoop). ZOOM_MIN of 0.5 is chosen
+// deliberately: since sceneWidth/sceneHeight are 2x the canvas size,
+// a zoom of exactly 0.5 makes the visible area exactly match the full
+// scene, so the camera clamp never needs to handle "visible area
+// bigger than the whole scene."
+state.zoom = 1;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2.5;
+// Exposed so Player.js's sprite cache can bake at high enough
+// resolution to stay crisp at the maximum zoom level, without ever
+// needing to rebuild while zooming.
+state.zoomMax = ZOOM_MAX;
+const ZOOM_STEP_PER_FRAME = 0.02;
+
+// How hard a fireball impact shoves a planet (scaled by the fireball's
+// own speed, same pattern as GROUND_POUND_PUSH_STRENGTH). Tune to taste.
+const FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
 
 // Generate initial stars
 state.stars = [];
@@ -118,8 +197,8 @@ function initGame() {
 
   state.planetoids = [];
   // Create regular planetoids
-  for (let i = 0; i < 44; i++) {
-    const radius = 30 + Math.random() * 40; // 30-70
+  for (let i = 0; i < 10; i++) {
+    const radius = 60 + Math.random() * 40; // 30-70
     const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
     const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
     const color = planetColors[Math.floor(Math.random() * planetColors.length)];
@@ -171,8 +250,8 @@ function initGame() {
   ];
 
   state.asteroids = [];
-  for (let i = 0; i < 24; i++) {
-    const radius = 20 + Math.random() * 25; // 20-45
+  for (let i = 0; i < 60; i++) {
+    const radius = 40 + Math.random() * 25; // 20-45
     const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
     const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
     state.asteroids.push(new Asteroid(x, y, radius));
@@ -217,6 +296,8 @@ function initGame() {
   });
   state.planetoids.forEach(p => p.createOffscreen());
   state.particles = [];
+  state.fireballs = [];
+  state.explosions = [];
   state.gameOver = false;
   state.levelComplete = false;
   state.player.mode = "space";
@@ -320,6 +401,7 @@ function gameLoop(timestamp) {
     if (state.player.mode != "maze") gravitySystem.applyTo(state.player);
     state.player.update();
     if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
+    if (state.mouseDown) state.player.shootFireball();
   } else {
     state.player.update(); // Run death animation
   }
@@ -332,6 +414,24 @@ function gameLoop(timestamp) {
     state.platformPlanet.interior.blobs.forEach(b => b.update());
   }
   state.coins.forEach(c => c.update());
+  state.fireballs.forEach(f => f.update());
+
+  const fireballResults = collisionSystem.handleFireballCollisions(state.fireballs, state.planetoids, state.asteroids);
+  for (const a of fireballResults.toBreakAsteroids) {
+    breakAsteroid(a);
+    state.explosions.push(new Explosion(a.pos.x, a.pos.y));
+  }
+  for (const hit of fireballResults.planetHits) {
+    const speed = hit.fireball.vel.length();
+    const pushDir = hit.fireball.vel.clone().normalize(); // planet gets knocked further along the fireball's own path, away from the shooter
+    hit.planet.vel.add(pushDir.multiply(speed * FIREBALL_PLANET_PUSH_STRENGTH));
+    state.explosions.push(new Explosion(hit.fireball.pos.x, hit.fireball.pos.y));
+  }
+  state.fireballs = state.fireballs.filter(f => !f.isDead && !fireballResults.hitFireballs.has(f));
+
+  state.explosions.forEach(e => e.update());
+  state.explosions = state.explosions.filter(e => !e.isDead);
+
   state.particles.forEach(p => p.update());
   state.particles = state.particles.filter(p => p.life > 0);
   collisionSystem.handleCoinCollisions(state.player, state.coins);
@@ -343,16 +443,35 @@ function gameLoop(timestamp) {
   if (state.coins.length === 0 && state.player.mode != "maze") {
     state.levelComplete = true;
   }
-  // Camera follows player
+  // Zoom controls: held continuously, same pattern as movement keys.
+  if (state.keys['+'] || state.keys['=']) {
+    state.zoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME);
+  }
+  if (state.keys['-'] || state.keys['_']) {
+    state.zoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME);
+  }
+
+  // Camera follows player. The visible world area shrinks as zoom
+  // increases (zooming in) and grows as it decreases (zooming out).
+  const zoom = state.zoom;
+  const visibleWidth = state.canvas.width / zoom;
+  const visibleHeight = state.canvas.height / zoom;
   const camera = new Vector2();
-  camera.x = state.player.pos.x - state.canvas.width / 2;
-  camera.y = state.player.pos.y - state.canvas.height / 2;
-  // Clamp camera to scene bounds
-  if (camera.x < 0) camera.x = 0;
-  if (camera.y < 0) camera.y = 0;
-  if (camera.x > state.sceneWidth - state.canvas.width) camera.x = state.sceneWidth - state.canvas.width;
-  if (camera.y > state.sceneHeight - state.canvas.height) camera.y = state.sceneHeight - state.canvas.height;
+  camera.x = state.player.pos.x - visibleWidth / 2;
+  camera.y = state.player.pos.y - visibleHeight / 2;
+  // Clamp camera to scene bounds. Guarded in case the visible area
+  // ever exceeds the scene size (shouldn't happen given ZOOM_MIN above,
+  // but cheap insurance against future tuning) — in that case, just
+  // center the camera instead of leaving it unclamped.
+  const maxCameraX = state.sceneWidth - visibleWidth;
+  const maxCameraY = state.sceneHeight - visibleHeight;
+  camera.x = maxCameraX > 0 ? Math.min(Math.max(camera.x, 0), maxCameraX) : maxCameraX / 2;
+  camera.y = maxCameraY > 0 ? Math.min(Math.max(camera.y, 0), maxCameraY) : maxCameraY / 2;
+  // Exposed on state so Player.js can convert the tracked mouse
+  // position (canvas-space) into world-space for blaster aiming.
+  state.camera = camera;
   state.ctx.save();
+  state.ctx.scale(zoom, zoom);
   state.ctx.translate(-camera.x, -camera.y);
   state.ctx.drawImage(state.starCanvas, 0, 0);
 
@@ -361,7 +480,9 @@ function gameLoop(timestamp) {
   state.player.draw();
   state.enemies.forEach(e => e.draw());
   state.coins.forEach(c => c.draw());
+  state.fireballs.forEach(f => f.draw());
   state.particles.forEach(p => p.draw());
+  state.explosions.forEach(e => e.draw());
   state.ctx.restore();
   // HUD
   state.ctx.fillStyle = 'white';
@@ -369,5 +490,6 @@ function gameLoop(timestamp) {
   state.ctx.textAlign = 'left';
   state.ctx.fillText(`Level ${state.level} - Score: ${state.score}`, 20, 40);
   state.ctx.fillText(`FPS: ${state.fps.toFixed(1)}`, 20, 70);
+  state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
   requestAnimationFrame(gameLoop);
 }
