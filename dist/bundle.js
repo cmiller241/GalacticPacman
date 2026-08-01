@@ -43,7 +43,7 @@
   var ENEMY_JUMP_PROB = 5e-4;
   var STAR_COUNT = 800;
   var enemyColors = ["red", "pink", "cyan", "orange"];
-  var planetColors = ["blue", "green", "purple", "orange", "yellow", "red", "cyan"];
+  var planetColors = ["green", "purple", "orange", "yellow", "red", "cyan"];
 
   // js/vector2.js
   var Vector2 = class _Vector2 {
