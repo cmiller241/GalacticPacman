@@ -12,6 +12,7 @@ import {
 } from './constants.js';
 import { Vector2 } from './vector2.js';
 import { Planetoid } from './world/Planetoid.js';
+import { RoundedRectPlanetoid } from './world/RoundedRectPlanetoid.js';
 import { SpikeyPlanetoid } from './world/SpikeyPlanetoid.js';
 import { BeamPlanetoid } from './world/BeamPlanetoid.js';
 import { MazeInterior } from './interiors/MazeInterior.js';
@@ -35,8 +36,34 @@ state.ctx = state.canvas.getContext('2d');
 // Set initial canvas size
 state.canvas.width = window.innerWidth;
 state.canvas.height = window.innerHeight;
-state.sceneWidth = state.canvas.width * 2;
-state.sceneHeight = state.canvas.height * 2;
+
+// ----------------------------
+// CELL-BASED WORLD STREAMING
+// ----------------------------
+// The world is a fixed 20x20 grid of cells. state.sceneWidth/Height are
+// now the FULL world size — a constant, independent of the browser
+// window (unlike before, where they were derived from canvas size).
+// Only a 3x3 neighborhood of cells around the player is ever populated
+// at once; everything else is generated on approach and culled on
+// departure. See generateCell()/updateActiveCells()/cullDistantObjects()
+// below.
+const CELL_SIZE = 3000; // world units per cell, both axes
+const GRID_SIZE = 30;   // 20x20 cells total
+const CENTER_CELL = { col: 15, row: 15 }; // where the permanent planets + player start live
+const CELL_CHECK_INTERVAL = 15; // frames between generation/cull passes — doesn't need to run every frame
+
+state.sceneWidth = CELL_SIZE * GRID_SIZE;
+state.sceneHeight = CELL_SIZE * GRID_SIZE;
+
+// Per-cell density. Divided down from the original single-scene counts
+// (44 regular / 16 spikey / 24 asteroids) by roughly the 3x3 active-
+// neighborhood size, so the worst case (all 9 cells populated) lands
+// back near the original totals instead of ~9x them. Tune independently
+// once you've seen it in play — no need to match the old numbers exactly.
+const PLANETOIDS_PER_CELL = 10;
+const SPIKEY_PER_CELL = 10;
+const ASTEROIDS_PER_CELL = 10;
+const MAX_ENEMIES_PER_CELL = 5;
 
 // ----------------------------
 // ASSET LOADING
@@ -121,11 +148,7 @@ state.fireballs = [];
 state.explosions = [];
 
 // Camera zoom (1 = default view; >1 zooms in, <1 zooms out). Held
-// continuously with +/- (see gameLoop). ZOOM_MIN of 0.5 is chosen
-// deliberately: since sceneWidth/sceneHeight are 2x the canvas size,
-// a zoom of exactly 0.5 makes the visible area exactly match the full
-// scene, so the camera clamp never needs to handle "visible area
-// bigger than the whole scene."
+// continuously with +/- (see gameLoop).
 state.zoom = 1;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
@@ -135,24 +158,60 @@ const ZOOM_MAX = 2.5;
 state.zoomMax = ZOOM_MAX;
 const ZOOM_STEP_PER_FRAME = 0.02;
 
+// ----------------------------
+// AUTO-ZOOM ON MAZE ENTRY/EXIT
+// ----------------------------
+// While state.zoomTarget is non-null, gameLoop eases state.zoom toward
+// it each frame (a decelerating ease, not a linear step, for a
+// "graceful" feel) instead of waiting on +/- input. Entering the maze
+// remembers whatever zoom the player had (state.preMazeZoom) and sets
+// a target of ZOOM_MAX; leaving restores that remembered value.
+// Pressing +/- manually at any point immediately cancels the target
+// (sets it back to null), so auto-zoom never fights manual input.
+state.zoomTarget = null;
+state.preMazeZoom = state.zoom;
+let previousPlayerMode = null; // tracked frame-to-frame in gameLoop to detect maze entry/exit
+const ZOOM_EASE_RATE = 0.06; // fraction of remaining distance closed per frame — higher = snappier, lower = more gradual
+const ZOOM_EASE_SNAP_THRESHOLD = 0.01; // once this close to the target, just snap to it and stop easing
+
 // How hard a fireball impact shoves a planet (scaled by the fireball's
 // own speed, same pattern as GROUND_POUND_PUSH_STRENGTH). Tune to taste.
 const FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
 
-// Generate initial stars
-state.stars = [];
-for (let i = 0; i < STAR_COUNT; i++) {
-  state.stars.push({
-    x: Math.random() * state.sceneWidth,
-    y: Math.random() * state.sceneHeight,
-    size: Math.random() * 2 + 1
-  });
+// ----------------------------
+// STARFIELD (tileable, not world-sized)
+// ----------------------------
+// The old approach pre-rendered every star onto ONE canvas sized to the
+// whole scene. That worked at the old (canvas-sized) scene, but a
+// 20x20-cell world is 60000x60000 — far beyond what a <canvas> can even
+// be (and would be gigabytes of memory if it somehow could). Instead,
+// a small tile is rendered once and repeated across whatever's
+// currently visible each frame (see gameLoop) — same look, no cap on
+// world size, and it never needs rebuilding (not tied to window size,
+// unlike the old resize-triggered regeneration).
+const STAR_TILE_SIZE = 2000;
+state.starTileSize = STAR_TILE_SIZE;
+state.starCanvas = document.createElement('canvas');
+state.starCanvas.width = STAR_TILE_SIZE;
+state.starCanvas.height = STAR_TILE_SIZE;
+{
+  const starCtx = state.starCanvas.getContext('2d');
+  starCtx.fillStyle = 'white';
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const x = Math.random() * STAR_TILE_SIZE;
+    const y = Math.random() * STAR_TILE_SIZE;
+    const size = Math.random() * 2 + 1;
+    starCtx.beginPath();
+    starCtx.arc(x, y, size, 0, Math.PI * 2);
+    starCtx.fill();
+  }
 }
 
 // Systems
 let gravitySystem;
 let collisionSystem = new CollisionSystem();
 let aiSystem = new AISystem();
+let cellCheckCounter = 0;
 
 // Event listeners
 window.addEventListener('keydown', (e) => {
@@ -183,42 +242,203 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => { state.keys[e.key] = false; });
 
-function initGame() {
-  state.starCanvas = document.createElement('canvas');
-  state.starCanvas.width = state.sceneWidth;
-  state.starCanvas.height = state.sceneHeight;
-  const starCtx = state.starCanvas.getContext('2d');
-  starCtx.fillStyle = 'white';
-  state.stars.forEach(star => {
-    starCtx.beginPath();
-    starCtx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-    starCtx.fill();
+// ----------------------------
+// CELL HELPERS
+// ----------------------------
+function cellCoordFor(worldX, worldY) {
+  return {
+    col: Math.floor(worldX / CELL_SIZE),
+    row: Math.floor(worldY / CELL_SIZE)
+  };
+}
+
+function cellKey(col, row) {
+  return `${col},${row}`;
+}
+
+// Populates one cell with regular/spikey planetoids, asteroids, coins
+// (one batch per regular planetoid, same density formula as before),
+// and up to MAX_ENEMIES_PER_CELL enemies. No-ops (returns []) if this
+// cell is already active. Returns the regular planetoids it created —
+// only used by initGame() to pick a starting planet for the player.
+function generateCell(col, row) {
+  const key = cellKey(col, row);
+  if (state.activeCells.has(key)) return [];
+  state.activeCells.add(key);
+
+  const originX = col * CELL_SIZE;
+  const originY = row * CELL_SIZE;
+  const regularPlanetoids = [];
+
+  for (let i = 0; i < PLANETOIDS_PER_CELL; i++) {
+    const radius = 30 + Math.random() * 40; // 30-70
+    const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    const color = planetColors[Math.floor(Math.random() * planetColors.length)];
+    const p = new Planetoid(x, y, radius, color);
+    p.createOffscreen();
+    state.planetoids.push(p);
+    regularPlanetoids.push(p);
+  }
+
+  for (let i = 0; i < SPIKEY_PER_CELL; i++) {
+    const radius = 25 + Math.random() * 15; // 25-40
+    const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    const p = new SpikeyPlanetoid(x, y, radius);
+    p.createOffscreen();
+    state.planetoids.push(p);
+  }
+
+  for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
+    const radius = 20 + Math.random() * 25; // 20-45
+    const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    state.asteroids.push(new Asteroid(x, y, radius));
+  }
+
+  regularPlanetoids.forEach((planet) => {
+    const numCoins = 4 + Math.floor(planet.radius / 10);
+    for (let i = 0; i < numCoins; i++) {
+      const coin = new Coin(planet);
+      coin.angle = (i / numCoins) * Math.PI * 2 + Math.random() * 0.2;
+      state.coins.push(coin);
+    }
   });
 
+  const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, regularPlanetoids.length);
+  for (let i = 0; i < numEnemies; i++) {
+    const planet = regularPlanetoids[Math.floor(Math.random() * regularPlanetoids.length)];
+    const color = enemyColors[i % enemyColors.length];
+    state.enemies.push(new SpaceGhost(planet, color));
+  }
+
+  return regularPlanetoids;
+}
+
+// Removes anything whose CURRENT position (not spawn origin — objects
+// drift between cells via their own velocity) has fallen outside the
+// active neighborhood. Planetoids are mutated IN PLACE (spliced, not
+// filtered-and-reassigned) so GravitySystem's cached array reference —
+// captured once at construction — stays valid; reassigning
+// state.planetoids here would silently break gravity for anything
+// generated or culled after the first pass.
+function cullDistantObjects(activeCellKeys) {
+  for (let i = state.planetoids.length - 1; i >= 0; i--) {
+    const p = state.planetoids[i];
+    if (p.isPermanent) continue;
+    const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
+    if (!activeCellKeys.has(cellKey(col, row))) {
+      state.planetoids.splice(i, 1);
+    }
+  }
+
+  // Built AFTER the planetoid splice above, so it reflects exactly
+  // what survived — used below to detect "this coin/enemy's planet was
+  // just culled" in O(1) rather than an O(n) Array.includes() per item.
+  const survivingPlanetoids = new Set(state.planetoids);
+
+  state.asteroids = state.asteroids.filter(a => {
+    const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
+    return activeCellKeys.has(cellKey(col, row));
+  });
+
+  // Coins are tied to a planet's orbit, not an independent position —
+  // cull them by their PARENT planet's cell, not their own. Their own
+  // position drifts around the planet via the orbit offset, and right
+  // when a planet sits near a cell boundary, a coin at the wrong point
+  // in its orbit can momentarily compute into a DIFFERENT (still-
+  // active) cell than its planet's — letting that one coin survive a
+  // pass that removes its planet, which is exactly the "orbiting
+  // nothing" bug. Tying it directly to the planet's own position (and
+  // treating a just-culled planet as "gone") makes a coin's lifetime
+  // strictly match its planet's, with no gap for this to happen.
+  state.coins = state.coins.filter(c => {
+    if (!c.planet || !survivingPlanetoids.has(c.planet)) return false;
+    const { col, row } = cellCoordFor(c.planet.pos.x, c.planet.pos.y);
+    return activeCellKeys.has(cellKey(col, row));
+  });
+
+  // Enemies have the same risk while grounded (orbiting a planet the
+  // same way coins do), but can also be genuinely mid-flight between
+  // planets (onSurface === false), where they really do have an
+  // independent position — so only grounded enemies defer to their
+  // planet; flying ones are culled by their own position as before.
+  state.enemies = state.enemies.filter(e => {
+    if (e.onSurface && e.planet) {
+      if (!survivingPlanetoids.has(e.planet)) return false;
+      const { col, row } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    }
+    const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
+    return activeCellKeys.has(cellKey(col, row));
+  });
+}
+
+// The main streaming tick: figures out the player's current cell,
+// generates any of the surrounding 3x3 neighborhood that isn't already
+// active, deactivates any cell that fell 2+ away (so it regenerates
+// fresh if revisited later — no long-term memory of past contents is
+// kept), then culls anything outside the resulting active set.
+function updateActiveCells() {
+  const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
+  const activeCellKeys = new Set();
+
+  for (let dRow = -1; dRow <= 1; dRow++) {
+    for (let dCol = -1; dCol <= 1; dCol++) {
+      const col = playerCell.col + dCol;
+      const row = playerCell.row + dRow;
+      if (col < 0 || col >= GRID_SIZE || row < 0 || row >= GRID_SIZE) continue; // off the edge of the 20x20 world
+      const key = cellKey(col, row);
+      activeCellKeys.add(key);
+      generateCell(col, row); // no-op if already active
+    }
+  }
+
+  for (const key of Array.from(state.activeCells)) {
+    if (!activeCellKeys.has(key)) {
+      state.activeCells.delete(key);
+    }
+  }
+
+  cullDistantObjects(activeCellKeys);
+}
+
+function initGame() {
   state.planetoids = [];
-  // Create regular planetoids
-  for (let i = 0; i < 10; i++) {
-    const radius = 60 + Math.random() * 40; // 30-70
-    const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-    const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
-    const color = planetColors[Math.floor(Math.random() * planetColors.length)];
-    state.planetoids.push(new Planetoid(x, y, radius, color));
-  }
-  // Create spikey planetoids
-  for (let i = 0; i < 16; i++) {
-    const radius = 25 + Math.random() * 15; // 25-40
-    const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-    const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
-    state.planetoids.push(new SpikeyPlanetoid(x, y, radius));
-  }
-  // === SPECIAL MAZE PLANET ===
-  state.mazePlanet = new BeamPlanetoid(state.sceneWidth * 0.55, state.sceneHeight * 0.45, 250, '#8A2BE2', 'rgba(255,0,255,1)');
+  state.asteroids = [];
+  state.coins = [];
+  state.enemies = [];
+  state.activeCells = new Set();
+
+  const centerOriginX = CENTER_CELL.col * CELL_SIZE;
+  const centerOriginY = CENTER_CELL.row * CELL_SIZE;
+
+  // === SPECIAL MAZE PLANET === (fixed, permanent — lives in the center cell)
+  state.mazePlanet = new BeamPlanetoid(centerOriginX + CELL_SIZE * 0.55, centerOriginY + CELL_SIZE * 0.45, 250, '#8A2BE2', 'rgba(255,0,255,1)');
   state.mazePlanet.interior = new MazeInterior(state.mazePlanet);
+  state.mazePlanet.isPermanent = true;
   state.planetoids.push(state.mazePlanet);
+
   // === SPECIAL PLATFORM PLANET ===
-  state.platformPlanet = new BeamPlanetoid(state.sceneWidth * 0.3, state.sceneHeight * 0.6, 250, '#55aa55', 'rgba(57,255,20,1)');
+  state.platformPlanet = new BeamPlanetoid(centerOriginX + CELL_SIZE * 0.3, centerOriginY + CELL_SIZE * 0.6, 250, '#55aa55', 'rgba(57,255,20,1)');
   state.platformPlanet.interior = new PlatformInterior(state.platformPlanet);
+  state.platformPlanet.isPermanent = true;
   state.planetoids.push(state.platformPlanet);
+
+  // === ROUNDED-RECT PLANET ===
+  state.rectPlanet = new RoundedRectPlanetoid(
+    centerOriginX + CELL_SIZE * 0.75, centerOriginY + CELL_SIZE * 0.7,
+    150, 90, 35,
+    '#cc8844'
+  );
+  state.rectPlanet.isPermanent = true;
+  state.planetoids.push(state.rectPlanet);
+
+  // Bake all three permanent planets' textures once.
+  state.mazePlanet.createOffscreen();
+  state.platformPlanet.createOffscreen();
+  state.rectPlanet.createOffscreen();
 
   // === BLOB MONSTER on top platform ===
   const interior = state.platformPlanet.interior;
@@ -249,58 +469,26 @@ function initGame() {
     new MazeGhost(state.mazePlanet.interior, pos2.col, pos2.row, 'pink')
   ];
 
-  state.asteroids = [];
-  for (let i = 0; i < 60; i++) {
-    const radius = 40 + Math.random() * 25; // 20-45
-    const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-    const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
-    state.asteroids.push(new Asteroid(x, y, radius));
-  }
-  const regularPlanets = state.planetoids.filter(p => !p.isSpikey && p !== state.mazePlanet && p !== state.platformPlanet);
-  const startingPlanet = regularPlanets[Math.floor(Math.random() * regularPlanets.length)];
+  // Generate the center cell FIRST so there's something to spawn the
+  // player on; the rest of the starting 3x3 neighborhood is filled in
+  // right after, once the player (and thus their current cell) exists.
+  const centerRegulars = generateCell(CENTER_CELL.col, CENTER_CELL.row);
+  const startingPlanet = centerRegulars[Math.floor(Math.random() * centerRegulars.length)];
   const surfaceDist = startingPlanet.radius + PLAYER_RADIUS;
   state.player = new Player(startingPlanet.pos.x, startingPlanet.pos.y - surfaceDist);
   state.player.onSurface = true;
   state.player.currentPlanet = startingPlanet;
   state.player.lastInfluencePlanet = startingPlanet;
   state.player.angle = Math.atan2(state.player.pos.y - startingPlanet.pos.y, state.player.pos.x - startingPlanet.pos.x);
-  state.enemies = [];
-  const numEnemies = (2 + state.level) * 2;
-  for (let i = 0; i < numEnemies; i++) {
-    let planetIndex = Math.floor(Math.random() * regularPlanets.length);
-    let selectedPlanet = regularPlanets[planetIndex];
-    while (selectedPlanet === startingPlanet) {
-      planetIndex = Math.floor(Math.random() * regularPlanets.length);
-      selectedPlanet = regularPlanets[planetIndex];
-    }
-    const color = enemyColors[i % enemyColors.length];
-    state.enemies.push(new SpaceGhost(selectedPlanet, color));
-  }
-  // Ensure asteroids not too close to player
-  for (let a of state.asteroids) {
-    let dist = a.pos.subtract(state.player.pos).length();
-    while (dist < 200) {
-      a.pos.x = a.radius + Math.random() * (state.sceneWidth - 2 * a.radius);
-      a.pos.y = a.radius + Math.random() * (state.sceneHeight - 2 * a.radius);
-      dist = a.pos.subtract(state.player.pos).length();
-    }
-  }
-  state.coins = [];
-  regularPlanets.forEach((planet) => {
-    const numCoins = 4 + Math.floor(planet.radius / 10);
-    for (let i = 0; i < numCoins; i++) {
-      const coin = new Coin(planet);
-      coin.angle = (i / numCoins) * Math.PI * 2 + Math.random() * 0.2;
-      state.coins.push(coin);
-    }
-  });
-  state.planetoids.forEach(p => p.createOffscreen());
+  state.player.mode = "space";
+
+  updateActiveCells(); // fills in the other 8 cells around the player's starting position
+
   state.particles = [];
   state.fireballs = [];
   state.explosions = [];
   state.gameOver = false;
   state.levelComplete = false;
-  state.player.mode = "space";
   state.audioManager.reset(); // Reset sound index on restart
 
   gravitySystem = new GravitySystem(state.planetoids);
@@ -313,6 +501,9 @@ function updatePlanetoids() {
     if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
     if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
     if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+    if (p.isRoundedRect) {
+      p.rotationAngle += p.rotationSpeed;
+    }
   }
 }
 
@@ -409,6 +600,7 @@ function gameLoop(timestamp) {
   aiSystem.updateEnemies(state.enemies, state.planetoids);
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
     aiSystem.updateInteriorGhosts(state.player.currentPlanet.interior);
+    collisionSystem.handlePlayerMazeGhostCollisions(state.player, state.player.currentPlanet.interior.ghosts);
   }
   if (state.player.mode === "platform" && state.platformPlanet?.interior?.blobs) {
     state.platformPlanet.interior.blobs.forEach(b => b.update());
@@ -440,15 +632,60 @@ function gameLoop(timestamp) {
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
     state.player.checkMazeDots();
   }
-  if (state.coins.length === 0 && state.player.mode != "maze") {
-    state.levelComplete = true;
+
+  // Coin-based win condition removed — coins now stream in/out with
+  // the active cell neighborhood, so "collect every coin" is no longer
+  // a coherent goal (there's no longer a finite, knowable set of them).
+  // state.levelComplete is left in place structurally (see the
+  // gameOver/levelComplete branches above and the Enter-key handler)
+  // for whenever a new win condition gets designed, but nothing sets
+  // it true anymore.
+
+  // Cell-based world streaming: periodically (not every frame) check
+  // which 3x3 neighborhood of cells should be active around the
+  // player, generating any newly-entered cells and culling anything
+  // whose CURRENT position has drifted outside that neighborhood —
+  // including things that drifted in from elsewhere, which is exactly
+  // why this checks live position rather than tracking origin cells.
+  cellCheckCounter++;
+  if (cellCheckCounter >= CELL_CHECK_INTERVAL) {
+    cellCheckCounter = 0;
+    updateActiveCells();
   }
+
+  // Detect maze entry/exit and set an auto-zoom target accordingly.
+  // Checked every frame, cheap (two string comparisons).
+  if (state.player.mode === "maze" && previousPlayerMode !== "maze") {
+    state.preMazeZoom = state.zoom; // remember wherever they were zoomed to, to restore on exit
+    state.zoomTarget = ZOOM_MAX;
+  } else if (previousPlayerMode === "maze" && state.player.mode !== "maze") {
+    state.zoomTarget = state.preMazeZoom;
+  }
+  previousPlayerMode = state.player.mode;
+
   // Zoom controls: held continuously, same pattern as movement keys.
+  // Manual input immediately cancels any in-progress auto-zoom target,
+  // so the two never fight each other.
   if (state.keys['+'] || state.keys['=']) {
     state.zoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME);
+    state.zoomTarget = null;
   }
   if (state.keys['-'] || state.keys['_']) {
     state.zoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME);
+    state.zoomTarget = null;
+  }
+
+  // Graceful auto-zoom easing: closes a fraction of the remaining
+  // distance to the target each frame (decelerating, not a linear
+  // step), snapping once close enough to avoid an endless tiny creep.
+  if (state.zoomTarget !== null) {
+    const diff = state.zoomTarget - state.zoom;
+    if (Math.abs(diff) < ZOOM_EASE_SNAP_THRESHOLD) {
+      state.zoom = state.zoomTarget;
+      state.zoomTarget = null;
+    } else {
+      state.zoom += diff * ZOOM_EASE_RATE;
+    }
   }
 
   // Camera follows player. The visible world area shrinks as zoom
@@ -459,10 +696,10 @@ function gameLoop(timestamp) {
   const camera = new Vector2();
   camera.x = state.player.pos.x - visibleWidth / 2;
   camera.y = state.player.pos.y - visibleHeight / 2;
-  // Clamp camera to scene bounds. Guarded in case the visible area
-  // ever exceeds the scene size (shouldn't happen given ZOOM_MIN above,
-  // but cheap insurance against future tuning) — in that case, just
-  // center the camera instead of leaving it unclamped.
+  // Clamp camera to world bounds. Guarded in case the visible area
+  // ever exceeds the world size (shouldn't happen given ZOOM_MIN and a
+  // 60000x60000 world, but cheap insurance) — in that case, just center
+  // the camera instead of leaving it unclamped.
   const maxCameraX = state.sceneWidth - visibleWidth;
   const maxCameraY = state.sceneHeight - visibleHeight;
   camera.x = maxCameraX > 0 ? Math.min(Math.max(camera.x, 0), maxCameraX) : maxCameraX / 2;
@@ -473,7 +710,22 @@ function gameLoop(timestamp) {
   state.ctx.save();
   state.ctx.scale(zoom, zoom);
   state.ctx.translate(-camera.x, -camera.y);
-  state.ctx.drawImage(state.starCanvas, 0, 0);
+
+  // Tiled starfield: repeat the small pre-rendered tile across whatever
+  // is currently visible, rather than one canvas sized to the world
+  // (see the STARFIELD comment near the top of this file for why).
+  {
+    const ts = state.starTileSize;
+    const startX = Math.floor(camera.x / ts) * ts;
+    const startY = Math.floor(camera.y / ts) * ts;
+    const endX = camera.x + visibleWidth;
+    const endY = camera.y + visibleHeight;
+    for (let ty = startY; ty < endY; ty += ts) {
+      for (let tx = startX; tx < endX; tx += ts) {
+        state.ctx.drawImage(state.starCanvas, tx, ty);
+      }
+    }
+  }
 
   state.planetoids.forEach(p => p.draw());
   state.asteroids.forEach(a => a.draw());
@@ -491,5 +743,7 @@ function gameLoop(timestamp) {
   state.ctx.fillText(`Level ${state.level} - Score: ${state.score}`, 20, 40);
   state.ctx.fillText(`FPS: ${state.fps.toFixed(1)}`, 20, 70);
   state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
+  const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
+  state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
   requestAnimationFrame(gameLoop);
 }

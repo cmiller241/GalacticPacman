@@ -5,6 +5,18 @@ import { Vector2 } from '../vector2.js';
 import { createParticles } from '../utils.js';
 
 export class CollisionSystem {
+  // Shared helper: distance from a circle (pos, radius) to a planet's
+  // true surface — nearestSurfacePoint for rect planets, plain
+  // center-distance-minus-radius for circular ones. Used everywhere a
+  // planet might be either shape, so each collision method doesn't need
+  // its own copy of this branch.
+  distanceToPlanetSurface(pos, planet) {
+    if (planet.isRoundedRect) {
+      return planet.distanceToSurface(pos.x, pos.y);
+    }
+    return pos.subtract(planet.pos).length() - planet.radius;
+  }
+
   handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = 'radius', radiusProp2 = 'radius', massProp1 = 'mass', massProp2 = 'mass') {
     for (let i = 0; i < entities1.length; i++) {
       for (let j = (entities1 === entities2 ? i + 1 : 0); j < entities2.length; j++) {
@@ -47,6 +59,27 @@ export class CollisionSystem {
     if (player.onSurface) return;
 
     for (const planet of state.planetoids.filter(p => !p.isSpikey)) {
+      if (planet.isRoundedRect) {
+        const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
+        if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+          player.onSurface = true;
+          player.currentPlanet = planet;
+          player.lastInfluencePlanet = planet;
+          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+          const impactVel = player.vel.clone();
+          player.vel = new Vector2(0, 0);
+          if (player.isGroundPounding) {
+            player.isGroundPounding = false;
+            const pushDir = surface.normal.clone().multiply(-1);
+            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+            createParticles(player.pos, 20);
+          }
+          return;
+        }
+        continue;
+      }
+
       const offset = player.pos.subtract(planet.pos);
       const dist = offset.length();
       const surfaceDist = planet.radius + PLAYER_RADIUS;
@@ -110,8 +143,8 @@ export class CollisionSystem {
     // Original doesn't add to toBreak on every collision, but assume all planet-asteroid collisions break asteroid
     for (let p of planetoids) {
       for (let a of asteroids) {
-        const dist = p.pos.subtract(a.pos).length();
-        if (dist < p.radius + a.radius) {
+        const dist = this.distanceToPlanetSurface(a.pos, p);
+        if (dist < a.radius) {
           toBreak.add(a);
         }
       }
@@ -153,8 +186,8 @@ export class CollisionSystem {
       if (hit) continue;
 
       for (const p of planetoids) {
-        const dist = f.pos.subtract(p.pos).length();
-        if (dist < f.radius + p.radius) {
+        const dist = this.distanceToPlanetSurface(f.pos, p);
+        if (dist < f.radius) {
           hitFireballs.add(f);
           planetHits.push({ fireball: f, planet: p });
           break;
@@ -163,5 +196,20 @@ export class CollisionSystem {
     }
 
     return { hitFireballs, toBreakAsteroids, planetHits };
+  }
+
+  // Maze ghosts track grid coordinates (mazeCol/mazeRow), same as the
+  // player does while in the maze — so this is a tile match, not a
+  // distance check. Any death this triggers goes through
+  // player.startDeath(), which already handles the invincibility
+  // window on its own, so no special-casing is needed here.
+  handlePlayerMazeGhostCollisions(player, ghosts) {
+    if (!ghosts) return;
+    for (const g of ghosts) {
+      if (player.mazeCol === g.mazeCol && player.mazeRow === g.mazeRow) {
+        player.startDeath();
+        return;
+      }
+    }
   }
 }

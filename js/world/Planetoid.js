@@ -12,6 +12,51 @@ export class Planetoid {
   static SHADOW_PADDING = 40;
   static SHADOW_COLOR = 'rgba(173,216,230,0.3)';
 
+  // ----------------------------
+  // SUN-RELATIVE SHADING (perf note)
+  // ----------------------------
+  // The sun is assumed fixed at the center of the level (sceneWidth/2,
+  // sceneHeight/2) — not shown yet, per the plan.
+  //
+  // Rather than recomputing a gradient per planet per frame (real cost,
+  // 60+ times a frame), a SINGLE overlay circle is baked ONCE, shared
+  // by every planet instance, with its highlight pointing "up" by
+  // convention. Each frame, draw() just rotates and blits that shared
+  // overlay per planet — a rotate+drawImage is cheap, comparable to the
+  // existing ring-canvas blit, not a shadowBlur/gradient-rebuild cost.
+  static SUN_OVERLAY_DIAMETER = 200; // reference bake size; scaled per-planet at draw time (soft gradients upscale fine, unlike sharp sprites)
+  static SUN_MIN_ALPHA = 0.25; // shading strength for planets farthest from the sun
+  static SUN_MAX_ALPHA = 0.9;  // shading strength for planets closest to the sun
+  static SUN_MAX_DARKNESS = 0.5; // overall (non-directional) dimming applied to the farthest planets — 0 = none, 1 = fully black. Grows linearly with distance; planets at the sun get none.
+  static sunOverlayCanvas = null; // built lazily, shared across all instances
+
+  static getSunOverlayCanvas() {
+    if (Planetoid.sunOverlayCanvas) return Planetoid.sunOverlayCanvas;
+
+    const d = Planetoid.SUN_OVERLAY_DIAMETER;
+    const r = d / 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = d;
+    canvas.height = d;
+    const ctx = canvas.getContext('2d');
+
+    // Highlight offset toward -y ("up") by convention — same offset
+    // style as the old static lightGradient this replaces. draw()
+    // rotates this per planet so "up" instead points at the actual sun.
+    const offset = -r * 0.5;
+    const grad = ctx.createRadialGradient(r, r + offset, 0, r, r + offset, r * 1.5);
+    grad.addColorStop(0, 'white');
+    grad.addColorStop(1, 'black');
+
+    ctx.beginPath();
+    ctx.arc(r, r, r, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    Planetoid.sunOverlayCanvas = canvas;
+    return canvas;
+  }
+
   constructor(x, y, radius, color) {
     this.pos = new Vector2(x, y);
     this.radius = radius;
@@ -30,8 +75,10 @@ export class Planetoid {
   }
 
   createOffscreen() {
-    // ---- Step 1: render the flat planet body (texture + color tint +
-    // lighting) onto an unshadowed working canvas, same as before. ----
+    // ---- Step 1: render the flat planet body (texture + color tint
+    // ONLY — no static directional lighting anymore, since that's now
+    // handled dynamically, per-frame, relative to the sun in draw()) onto
+    // an unshadowed working canvas. ----
     const bodyCanvas = document.createElement('canvas');
     bodyCanvas.width = this.radius * 2;
     bodyCanvas.height = this.radius * 2;
@@ -52,23 +99,6 @@ export class Planetoid {
     bodyCtx.beginPath();
     bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
     bodyCtx.fillStyle = this.color;
-    bodyCtx.fill();
-    bodyCtx.globalCompositeOperation = 'source-over';
-    bodyCtx.restore();
-
-    bodyCtx.save();
-    bodyCtx.globalCompositeOperation = 'multiply';
-    const offsetX = -this.radius * 0.5;
-    const offsetY = -this.radius * 0.5;
-    const lightGradient = bodyCtx.createRadialGradient(
-      this.radius + offsetX, this.radius + offsetY, 0,
-      this.radius + offsetX, this.radius + offsetY, this.radius * 1.5
-    );
-    lightGradient.addColorStop(0, 'white');
-    lightGradient.addColorStop(1, 'black');
-    bodyCtx.beginPath();
-    bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
-    bodyCtx.fillStyle = lightGradient;
     bodyCtx.fill();
     bodyCtx.globalCompositeOperation = 'source-over';
     bodyCtx.restore();
@@ -156,6 +186,65 @@ export class Planetoid {
       ctx.beginPath();
       ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
       ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Sun-relative shading ----
+    // Rotates the shared overlay (see getSunOverlayCanvas) so its
+    // baked-in highlight points at the sun's actual direction from this
+    // planet, and multiply-blends it on top of the body. Alpha (shading
+    // strength) falls off with distance from the sun, so nearby planets
+    // show a more pronounced lit/shadowed contrast than distant ones.
+    const sunX = state.sceneWidth / 2;
+    const sunY = state.sceneHeight / 2;
+    const toSunX = sunX - this.pos.x;
+    const toSunY = sunY - this.pos.y;
+    const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+    const angleToSun = Math.atan2(toSunY, toSunX);
+
+    // The overlay's highlight is baked pointing "up" (-90°) by default;
+    // rotate it so that direction points at the sun instead.
+    const overlayRotation = angleToSun + Math.PI / 2;
+
+    // Falloff: minimal shadow (SUN_MIN_ALPHA) right at the sun, growing
+    // to a more prominent shadow (SUN_MAX_ALPHA) toward the far corners
+    // of the level. Note this overlay only ever DARKENS (multiply blend
+    // can't brighten past the original color), so alpha here directly
+    // controls shadow strength, not overall brightness — low alpha near
+    // the sun means "barely any shadow" (planet reads as its plain,
+    // bright, undimmed texture), high alpha far away means "pronounced
+    // dark side."
+    const maxDist = Math.sqrt(state.sceneWidth * state.sceneWidth + state.sceneHeight * state.sceneHeight) / 2;
+    const distT = Math.min(distToSun / maxDist, 1);
+    const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.globalAlpha = overlayAlpha;
+    ctx.translate(this.pos.x, this.pos.y);
+    ctx.rotate(overlayRotation);
+    const overlay = Planetoid.getSunOverlayCanvas();
+    const d = this.radius * 2;
+    ctx.drawImage(overlay, -this.radius, -this.radius, d, d);
+    ctx.restore();
+
+    // ---- Overall distance darkening ----
+    // The directional overlay above can only ever DARKEN (multiply
+    // can't brighten past the original color), so it can shape WHERE
+    // the shadow falls but can't dim the lit side. This is a separate,
+    // flat (non-directional) darkening pass — a plain black circle,
+    // multiply-blended — whose strength grows with distT (already
+    // computed above), so far planets get dimmer everywhere, not just
+    // on their shadowed side. Cheap: one more solid-color fill.
+    const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
+    if (overallDarkness > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = overallDarkness;
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }

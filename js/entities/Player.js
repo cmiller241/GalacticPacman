@@ -32,6 +32,11 @@ export class Player extends Entity {
     this.currentInterior = null;
     this.lastInfluencePlanet = null;
     this.angle = 0;
+    // Rounded-rect equivalent of `angle` above — an arc-length position
+    // along the planet's perimeter (see RoundedRectPlanetoid), used only
+    // while this.currentPlanet.isRoundedRect. Set on landing by
+    // CollisionSystem, advanced by move() while walking.
+    this.surfaceArcPos = 0;
     this.mouthAngle = 0;
     this.facingDirection = 1;
     this.isGroundPounding = false;
@@ -56,7 +61,7 @@ export class Player extends Entity {
     this.deathAlpha = 1;
 
     // ----------------------------
-    // BOOT SPRITE (used for maze/platform/death — small stylized modes)
+    // BOOT SPRITE (used for platform/death — small stylized modes)
     // ----------------------------
     this.bootNaturalWidth = 232;
     this.bootNaturalHeight = 312;
@@ -67,7 +72,8 @@ export class Player extends Entity {
     // of the source PNG dimensions.
 
     // ----------------------------
-    // FULL BODY SPRITE (used for the main planet-surface/space mode)
+    // FULL BODY SPRITE (used for the main planet-surface/space mode AND
+    // the maze mode)
     // Offsets/joints are in each image's native pixel space — ported
     // directly from the standalone astronaut prototype, since those
     // values are what make the limbs line up anatomically.
@@ -166,6 +172,29 @@ export class Player extends Entity {
     this.mouseIdleThreshold = 2000;
     this.mouseIdle = true;
 
+    // How much smaller the full-body rig renders inside the maze
+    // interior versus the main planet-surface/space mode. Tune to
+    // taste — 0.1 is roughly "fits in one tile."
+    this.mazeBodyScale = 0.1;
+
+    // How long (ms) without a successful tile-hop before the maze legs/
+    // head settle back to a neutral standing pose, instead of freezing
+    // mid-stride forever. Reuses this.lastMoveTime, which move()'s maze
+    // branch already updates on every hop.
+    this.mazeMoveIdleThreshold = 300;
+
+    // Brief invincibility window after teleporting into/out of the
+    // maze, so an enemy sitting near the beam entrance can't get a free
+    // kill the instant he arrives somewhere new. Set at the end of
+    // enterMazeMode()/exitMazeMode(). startDeath() checks isInvincible()
+    // and simply no-ops while it's active — centralized there rather
+    // than in each individual collision check, so it automatically
+    // covers every current and future cause of death, not just ghosts.
+    // draw() flickers him while it's in effect so it's visibly
+    // communicated, not just a silent grace period.
+    this.invincibleDuration = 2000; // ms
+    this.invincibleUntil = 0;
+
     // ----------------------------
     // PRE-SCALED SPRITE CACHE (perf)
     // ----------------------------
@@ -187,6 +216,9 @@ export class Player extends Entity {
     // the correct WORLD-SPACE size to actually draw it at (i.e. what its
     // size would be at zoom=1) — draws always pass these explicitly to
     // drawImage rather than relying on the canvas's own pixel size.
+    // This same cache is reused for both planet-surface/space mode and
+    // maze mode; maze mode just applies an additional mazeBodyScale
+    // shrink as an outer transform in draw().
     //
     // NOTE: if you ever change bodyScale or bootScale after construction,
     // call this.invalidateScaledAssets() so these get rebuilt at the
@@ -379,9 +411,17 @@ export class Player extends Entity {
   }
 
   // ----------------------------
+  // INVINCIBILITY
+  // ----------------------------
+  isInvincible() {
+    return Date.now() < this.invincibleUntil;
+  }
+
+  // ----------------------------
   // DEATH
   // ----------------------------
   startDeath() {
+    if (this.isInvincible()) return;
     if (!this.isDying) {
       this.isDying = true;
       this.deathStartTime = Date.now();
@@ -447,6 +487,7 @@ export class Player extends Entity {
     this.lastMoveTime = Date.now();
   
     this.updateMazePosition();
+    this.invincibleUntil = Date.now() + this.invincibleDuration;
   }
 
   exitMazeMode() {
@@ -460,6 +501,7 @@ export class Player extends Entity {
       this.onSurface = true;
       this.lastInfluencePlanet = this.currentPlanet;
     }
+    this.invincibleUntil = Date.now() + this.invincibleDuration;
   }
 
   updatePlatformPosition() {
@@ -531,6 +573,16 @@ export class Player extends Entity {
           this.mazeCol = newCol;
           this.mazeRow = newRow;
           this.mazeDir = new Vector2(dx || this.mazeDir.x, dy || this.mazeDir.y).normalize();
+          // Only horizontal movement changes which way he's facing —
+          // moving up/down keeps whatever left/right he was last
+          // facing, rather than rotating him to face up/down.
+          if (dx !== 0) this.facingDirection = dx > 0 ? 1 : -1;
+          // Advance the same walk-cycle phase used on planet surfaces,
+          // by one tile's worth of "distance" per hop — ties the small
+          // leg/arm wiggle directly to actual tile hops (discrete,
+          // matching the maze's stop-motion-style movement) rather than
+          // a continuous per-frame timer.
+          this.walkTime += (this.currentInterior.tileSize / this.strideLength) * Math.PI * 2;
           this.lastMoveTime = now;
           this.updateMazePosition();
         }
@@ -643,7 +695,26 @@ export class Player extends Entity {
     // ----------------------------
     // PLANET SURFACE
     // ----------------------------
-    if (this.onSurface && this.currentPlanet) {
+    if (this.onSurface && this.currentPlanet && this.currentPlanet.isRoundedRect) {
+      const planet = this.currentPlanet;
+      this.isWalking = false;
+      let ds = 0;
+
+      if (keys['ArrowLeft']) { ds = -PLAYER_LINEAR_SPEED; this.facingDirection = -1; this.isWalking = true; }
+      if (keys['ArrowRight']) { ds = PLAYER_LINEAR_SPEED; this.facingDirection = 1; this.isWalking = true; }
+
+      // Recomputed every frame (not just when ds !== 0) so the player
+      // stays glued to the surface as the planet rotates, the same way
+      // circular-planet walking already recomputes pos from the
+      // planet's current pos every frame regardless of input.
+      this.surfaceArcPos += ds;
+      const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
+      this.pos = worldSurface.point;
+
+      if (this.isWalking) {
+        this.walkTime += (Math.abs(ds) / this.strideLength) * Math.PI * 2;
+      }
+    } else if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
       const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
 
@@ -833,7 +904,14 @@ export class Player extends Entity {
 
     let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
     let downDir = new Vector2(0, 1);
-    if (planet) downDir = planet.pos.subtract(this.pos).normalize();
+    if (planet) {
+      if (planet.isRoundedRect) {
+        const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+        downDir = surface.normal.clone().multiply(-1);
+      } else {
+        downDir = planet.pos.subtract(this.pos).normalize();
+      }
+    }
     const downAngle = Math.atan2(downDir.y, downDir.x);
     const orientation = downAngle - Math.PI / 2;
 
@@ -858,7 +936,7 @@ export class Player extends Entity {
   }
 
   // ----------------------------
-  // BOOT DRAW HELPER (maze / platform / death modes)
+  // BOOT DRAW HELPER (platform / death modes)
   // ----------------------------
   drawBoot(ctx) {
     const sprite = this.scaledBootCanvas;
@@ -873,7 +951,7 @@ export class Player extends Entity {
   }
 
   // ----------------------------
-  // FULL BODY DRAW HELPERS (main planet-surface / space mode)
+  // FULL BODY DRAW HELPERS (planet-surface/space mode AND maze mode)
   // Ported from the standalone astronaut prototype: each limb has a
   // fixed offset from the rig's origin (rotated by `orientation`, the
   // same "up is away from the planet" angle already computed by the
@@ -911,33 +989,50 @@ export class Player extends Entity {
     const s = this.bodyScale;
     const cosO = Math.cos(orientation);
     const sinO = Math.sin(orientation);
+    const inMaze = this.mode === "maze";
 
-    const walkAngle = (this.onSurface && this.isWalking) ? Math.sin(this.walkTime) * 0.6 : 0;
+    // In the maze there's no continuous "walking" flag (movement is
+    // discrete tile hops, throttled in move()) — walkTime only ever
+    // advances when a hop actually happens there, so this reflects
+    // whatever phase it's currently at. mazeRecentlyMoved additionally
+    // requires that hop to have been recent, so legs/head settle back
+    // to neutral if he's just standing still rather than freezing
+    // mid-stride forever.
+    const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
+    const walkAngle = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
     const dirSign = this.facingDirection < 0 ? -1 : 1;
 
     let leftBootAngle = walkAngle;
     let rightBootAngle = -walkAngle;
-
-    // Always compute the aim angle (even while idle) so aimShoulderPos/
-    // aimWorldAngle stay accurate to the mouse's current world position
-    // for shootFireball() — but only actually use it for the arm's
-    // visual angle when the mouse isn't idle. While idle, both arms
-    // sway together instead: in sync with the walk cycle if walking, or
-    // a slow gentle idle sway if just standing still.
-    const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
     let leftArmAngle, rightArmAngle;
-    if (this.mouseIdle) {
-      const swayAngle = (this.onSurface && this.isWalking)
-        ? walkAngle * this.armSwingScale
-        : Math.sin(Date.now() * 0.0015) * 0.15;
+
+    if (inMaze) {
+      // No mouse/aim concept in the maze — both arms just sway
+      // together, tied to the same hop-driven walk phase as the legs.
+      const swayAngle = walkAngle * this.armSwingScale;
       leftArmAngle = swayAngle;
       rightArmAngle = swayAngle;
     } else {
-      leftArmAngle = aimAngle;
-      rightArmAngle = walkAngle * this.armSwingScale;
+      // Always compute the aim angle (even while idle) so aimShoulderPos/
+      // aimWorldAngle stay accurate to the mouse's current world position
+      // for shootFireball() — but only actually use it for the arm's
+      // visual angle when the mouse isn't idle. While idle, both arms
+      // sway together instead: in sync with the walk cycle if walking, or
+      // a slow gentle idle sway if just standing still.
+      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+      if (this.mouseIdle) {
+        const swayAngle = (this.onSurface && this.isWalking)
+          ? walkAngle * this.armSwingScale
+          : Math.sin(Date.now() * 0.0015) * 0.15;
+        leftArmAngle = swayAngle;
+        rightArmAngle = swayAngle;
+      } else {
+        leftArmAngle = aimAngle;
+        rightArmAngle = walkAngle * this.armSwingScale;
+      }
     }
 
-    if (!this.onSurface) {
+    if (!inMaze && !this.onSurface) {
       // Simple in-flight pose: legs splayed. Right arm settles back to
       // rest (walkAngle is 0 while airborne); left arm keeps aiming.
       leftBootAngle = -0.7;
@@ -970,12 +1065,13 @@ export class Player extends Entity {
       ctx.save();
       const headWX = -cfg.headY * sinO;
       const headWY = cfg.headY * cosO;
-      const headBob = (this.onSurface && this.isWalking) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+      const headBob = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
       // Look toward the aim target (up if aiming up, down if aiming
-      // down), same idea as the arm. Returns to neutral while the
-      // mouse is idle, matching the arms swaying together instead of
+      // down), same idea as the arm. Not applicable in the maze (no
+      // aim concept there) or while the mouse is idle — both just stay
+      // neutral, matching the arms swaying together instead of
       // tracking a stale aim point.
-      const headLookTilt = this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+      const headLookTilt = (inMaze || this.mouseIdle) ? 0 : this.computeHeadLookTilt(orientation, dirSign);
       const headTilt = headBob + headLookTilt;
       ctx.translate(originPos.x + headWX * s, originPos.y + headWY * s);
       ctx.rotate(orientation + headTilt);
@@ -1015,6 +1111,17 @@ export class Player extends Entity {
       glow = this.teleportGlow;
     }
 
+    // Invincibility flicker: applies to whichever mode is drawn below
+    // (platform, maze, or planet). Balanced by the ctx.restore() calls
+    // added at the platform branch's return and at the very end of this
+    // function — each mode's own internal save/restore pairs nest
+    // inside this one without interfering with it.
+    ctx.save();
+    if (this.isInvincible()) {
+      const blink = Math.floor(Date.now() / 100) % 2 === 0;
+      ctx.globalAlpha = blink ? 1 : 0.3;
+    }
+
   // ----------------------------
    // PLATFORM MODE
    // ----------------------------
@@ -1026,44 +1133,51 @@ export class Player extends Entity {
      if (this.platformVel.x < 0) ctx.scale(-1,1);
      this.drawBoot(ctx);
      ctx.restore();
+     ctx.restore(); // matches the outer invincibility-flicker save above
      return;
    }
 
     // ----------------------------
-    // MAZE MODE
+    // MAZE MODE and PLANET MODE (full body) share the same drawing
+    // pipeline. The only differences are how `orientation`/`visualPos`
+    // are derived, and an extra uniform scale for the maze's smaller
+    // size — the mirror math below (which reflects about the axis at
+    // angle `orientation` through this.pos) reduces to a plain
+    // left/right flip when orientation = 0, which is exactly the
+    // "always face left or right, up/down never rotates him" behavior
+    // wanted in the maze. facingDirection itself is only ever changed
+    // by horizontal movement (see move()), so vertical-only movement
+    // naturally keeps whichever way he was last facing.
     // ----------------------------
-    if (this.mode=="maze") {
-      const mazeScale = 0.4;
-      ctx.save();
-      ctx.translate(this.pos.x,this.pos.y);
-      if (this.isTeleporting) {
-        ctx.shadowColor='yellow';
-        ctx.shadowBlur=40*glow;
+    let orientation;
+    let visualPos;
+    let modeScale = 1;
+
+    if (this.mode === "maze") {
+      orientation = 0; // always upright; no gravity/surface concept here
+      visualPos = this.pos; // no ground-offset concept in the maze
+      modeScale = this.mazeBodyScale;
+    } else {
+      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+      let downDir = new Vector2(0, 1);
+      if (planet) {
+        if (planet.isRoundedRect) {
+          const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+          downDir = surface.normal.clone().multiply(-1);
+        } else {
+          downDir = planet.pos.subtract(this.pos).normalize();
+        }
       }
-      const rot = Math.atan2(this.mazeDir.y,this.mazeDir.x);
-      ctx.rotate(rot);
-      ctx.scale(scale*mazeScale, scale*mazeScale);
-      this.drawBoot(ctx);
-      ctx.shadowBlur=0;
-      ctx.restore();
-      return;
+      const downAngle = Math.atan2(downDir.y, downDir.x);
+      orientation = downAngle - Math.PI / 2;
+
+      // Shift the visual draw origin outward (away from the planet) so
+      // the boots' soles rest on the surface instead of this.pos —
+      // which marks roughly the belt — sinking into it. This only
+      // affects drawing; the physics position (this.pos) is untouched.
+      const outwardDir = downDir.multiply(-1);
+      visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
     }
-
-    // ----------------------------
-    // PLANET MODE (full body)
-    // ----------------------------
-    let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-    let downDir = new Vector2(0,1);
-    if (planet) downDir = planet.pos.subtract(this.pos).normalize();
-    const downAngle = Math.atan2(downDir.y, downDir.x);
-    const orientation = downAngle - Math.PI/2;
-
-    // Shift the visual draw origin outward (away from the planet) so
-    // the boots' soles rest on the surface instead of this.pos — which
-    // marks roughly the belt — sinking into it. This only affects
-    // drawing; the physics position (this.pos) is untouched.
-    const outwardDir = downDir.multiply(-1);
-    const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
 
     ctx.save();
     if (this.isTeleporting) {
@@ -1073,24 +1187,27 @@ export class Player extends Entity {
 
     // Mirror the whole rig about the character's own local vertical
     // axis (the line through this.pos at angle `orientation`) when
-    // facing left, and apply the teleport pulse (`scale`) the same way.
-    // Doing this as translate→rotate→scale→rotate-back→translate-back
-    // reflects/scales everything drawn afterward around that axis,
-    // regardless of where on the planet the character currently is —
-    // a plain ctx.scale(-1,1) would mirror around the canvas' raw
-    // x-axis instead, which isn't what we want here. Using a transform
-    // for the pulse (rather than temporarily inflating bodyScale, as
-    // before) keeps the pre-scaled sprite cache valid — it never needs
-    // to be regenerated mid-animation.
+    // facing left, and apply the teleport pulse (`scale`) and the maze
+    // size reduction (`modeScale`) the same way. Doing this as
+    // translate→rotate→scale→rotate-back→translate-back reflects/scales
+    // everything drawn afterward around that axis, regardless of where
+    // on the planet the character currently is — a plain ctx.scale(-1,1)
+    // would mirror around the canvas' raw x-axis instead, which isn't
+    // what we want here. Using a transform for the pulse/mode-scale
+    // (rather than temporarily inflating bodyScale, as before) keeps
+    // the pre-scaled sprite cache valid — it never needs to be
+    // regenerated mid-animation or per-mode.
     const dirSign = this.facingDirection < 0 ? -1 : 1;
+    const totalScale = scale * modeScale;
     ctx.translate(this.pos.x, this.pos.y);
     ctx.rotate(orientation);
-    ctx.scale(dirSign * scale, scale);
+    ctx.scale(dirSign * totalScale, totalScale);
     ctx.rotate(-orientation);
     ctx.translate(-this.pos.x, -this.pos.y);
 
     this.drawFullBody(ctx, orientation, visualPos);
     ctx.shadowBlur=0;
     ctx.restore();
+    ctx.restore(); // matches the outer invincibility-flicker save above
   }
 }

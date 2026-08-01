@@ -14,7 +14,7 @@ export class Asteroid extends Entity {
     this.vel = direction.multiply(PLANET_SPEED);
     this.angularSpeed = (Math.random() * 2 - 1) * 0.05;
     this.angle = Math.random() * Math.PI * 2;
-    this.color = '#8B4513'; // Dark brown
+    this.color = '#A85417'; // ~10% brighter again on top of the previous '#994C15'
     this.points = this.generatePoints();
 
     // --- Generate interior points once for stable facets ---
