@@ -16,7 +16,7 @@ export const PLANET_SPEED = 1;
 export const ENEMY_JUMP_PROB = 0.0005;
 export const STAR_COUNT = 800;
 export const enemyColors = ['red', 'pink', 'cyan', 'orange'];
-export const planetColors = ['blue', 'green', 'purple', 'orange', 'yellow', 'red', 'cyan'];
+export const planetColors = ['green', 'purple', 'orange', 'yellow', 'red', 'cyan'];
 
 // export const GRAVITY_STRENGTH = 0.35;
 // export const GROUND_POUND_GRAV_MULTIPLIER = 3;
