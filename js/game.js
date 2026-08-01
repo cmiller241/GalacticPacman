@@ -29,6 +29,8 @@ import { CollisionSystem } from './systems/CollisionSystem.js';
 import { AISystem } from './systems/AISystem.js';
 import { AudioManager } from './AudioManager.js';
 import { angleDiff, initResizeListener, createParticles } from './utils.js';
+import { Minimap } from './ui/MiniMap.js';
+import { drawPullIndicator } from './effects/PullBeam.js';
 
 // Setup canvas and ctx
 state.canvas = document.getElementById('gameCanvas');
@@ -48,12 +50,15 @@ state.canvas.height = window.innerHeight;
 // departure. See generateCell()/updateActiveCells()/cullDistantObjects()
 // below.
 const CELL_SIZE = 3000; // world units per cell, both axes
-const GRID_SIZE = 30;   // 20x20 cells total
-const CENTER_CELL = { col: 15, row: 15 }; // where the permanent planets + player start live
+const GRID_SIZE = 20;   // 20x20 cells total
+const CENTER_CELL = { col: 10, row: 10 }; // where the permanent planets + player start live
 const CELL_CHECK_INTERVAL = 15; // frames between generation/cull passes — doesn't need to run every frame
 
 state.sceneWidth = CELL_SIZE * GRID_SIZE;
 state.sceneHeight = CELL_SIZE * GRID_SIZE;
+// Exposed so Minimap.js can draw the correct number of grid lines
+// without needing a (circular) import back into this file.
+state.gridSize = GRID_SIZE;
 
 // Per-cell density. Divided down from the original single-scene counts
 // (44 regular / 16 spikey / 24 asteroids) by roughly the 3x3 active-
@@ -62,7 +67,7 @@ state.sceneHeight = CELL_SIZE * GRID_SIZE;
 // once you've seen it in play — no need to match the old numbers exactly.
 const PLANETOIDS_PER_CELL = 10;
 const SPIKEY_PER_CELL = 10;
-const ASTEROIDS_PER_CELL = 10;
+const ASTEROIDS_PER_CELL = 20;
 const MAX_ENEMIES_PER_CELL = 5;
 
 // ----------------------------
@@ -133,15 +138,28 @@ state.canvas.addEventListener('mousemove', (e) => {
 // handled per-frame in gameLoop via state.mouseDown). We also fire
 // immediately here on mousedown itself, so a quick click always
 // produces at least one shot rather than depending on frame timing.
+//
+// Right mouse button selects/releases a "pull star" target (see
+// Player.trySelectPullTarget/clearPullTarget) — right-clicking a new
+// planet while already pulling something else just switches targets
+// directly, no need to release first. The browser's default right-
+// click context menu is suppressed so it doesn't pop up over the game.
 state.mouseDown = false;
+state.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 state.canvas.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return;
-  state.mouseDown = true;
-  if (state.player) state.player.shootFireball();
+  if (e.button === 0) {
+    state.mouseDown = true;
+    if (state.player) state.player.shootFireball();
+  } else if (e.button === 2) {
+    if (state.player) state.player.trySelectPullTarget();
+  }
 });
 window.addEventListener('mouseup', (e) => {
-  if (e.button !== 0) return;
-  state.mouseDown = false;
+  if (e.button === 0) {
+    state.mouseDown = false;
+  } else if (e.button === 2) {
+    if (state.player) state.player.clearPullTarget();
+  }
 });
 
 state.fireballs = [];
@@ -211,6 +229,7 @@ state.starCanvas.height = STAR_TILE_SIZE;
 let gravitySystem;
 let collisionSystem = new CollisionSystem();
 let aiSystem = new AISystem();
+const minimap = new Minimap();
 let cellCheckCounter = 0;
 
 // Event listeners
@@ -261,11 +280,13 @@ function cellKey(col, row) {
 // and up to MAX_ENEMIES_PER_CELL enemies. No-ops (returns []) if this
 // cell is already active. Returns the regular planetoids it created —
 // only used by initGame() to pick a starting planet for the player.
-function generateCell(col, row) {
-  const key = cellKey(col, row);
-  if (state.activeCells.has(key)) return [];
-  state.activeCells.add(key);
-
+// Phase 1: just the regular (non-hazardous) planetoids for a cell.
+// Split out from hazard generation below specifically so initGame() can
+// generate these FIRST, pick a starting planet from them, and only then
+// generate hazards for that same cell — now knowing exactly what to
+// steer them away from. Every other cell just runs both phases back to
+// back via generateCell() with no avoidance, same as before.
+function generateRegularPlanetoidsInCell(col, row) {
   const originX = col * CELL_SIZE;
   const originY = row * CELL_SIZE;
   const regularPlanetoids = [];
@@ -281,10 +302,33 @@ function generateCell(col, row) {
     regularPlanetoids.push(p);
   }
 
+  return regularPlanetoids;
+}
+
+// Phase 2: spikey planetoids, asteroids, coins, and enemies for a cell.
+// avoidPos/avoidRadius are optional — when given (only used for the
+// player's starting cell, see initGame()), spikey planetoids and
+// asteroids reroll their position (up to a bounded number of attempts,
+// rather than looping forever if a cell is crowded) until they land
+// outside avoidRadius of avoidPos, and enemies are only assigned to
+// planets that are themselves far enough away. Coins aren't touched —
+// they aren't hazards, and regular planetoids close to the player are
+// fine (only spikey/asteroids/enemies can kill on contact).
+function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoidPos = null, avoidRadius = 0) {
+  const originX = col * CELL_SIZE;
+  const originY = row * CELL_SIZE;
+  const MAX_REROLLS = 20;
+  const avoidRadiusSq = avoidRadius * avoidRadius;
+  const isSafe = (x, y) => !avoidPos || ((x - avoidPos.x) ** 2 + (y - avoidPos.y) ** 2) >= avoidRadiusSq;
+
   for (let i = 0; i < SPIKEY_PER_CELL; i++) {
     const radius = 25 + Math.random() * 15; // 25-40
-    const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-    const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    let x, y, attempts = 0;
+    do {
+      x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      attempts++;
+    } while (!isSafe(x, y) && attempts < MAX_REROLLS);
     const p = new SpikeyPlanetoid(x, y, radius);
     p.createOffscreen();
     state.planetoids.push(p);
@@ -292,8 +336,12 @@ function generateCell(col, row) {
 
   for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
     const radius = 20 + Math.random() * 25; // 20-45
-    const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-    const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+    let x, y, attempts = 0;
+    do {
+      x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      attempts++;
+    } while (!isSafe(x, y) && attempts < MAX_REROLLS);
     state.asteroids.push(new Asteroid(x, y, radius));
   }
 
@@ -306,13 +354,29 @@ function generateCell(col, row) {
     }
   });
 
-  const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, regularPlanetoids.length);
+  // Enemies don't have an independent spawn position to reroll — they're
+  // tied to a planet — so instead we just restrict which planets are
+  // eligible to host one.
+  const safePlanetsForEnemies = avoidPos
+    ? regularPlanetoids.filter(p => isSafe(p.pos.x, p.pos.y))
+    : regularPlanetoids;
+  const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, safePlanetsForEnemies.length);
   for (let i = 0; i < numEnemies; i++) {
-    const planet = regularPlanetoids[Math.floor(Math.random() * regularPlanetoids.length)];
+    const planet = safePlanetsForEnemies[Math.floor(Math.random() * safePlanetsForEnemies.length)];
     const color = enemyColors[i % enemyColors.length];
     state.enemies.push(new SpaceGhost(planet, color));
   }
+}
 
+// Normal (no-avoidance) full generation for a cell — both phases back
+// to back. Used for every cell EXCEPT the player's starting one, which
+// initGame() generates in two separate steps instead (see there).
+function generateCell(col, row) {
+  const key = cellKey(col, row);
+  if (state.activeCells.has(key)) return [];
+  state.activeCells.add(key);
+  const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
+  generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
   return regularPlanetoids;
 }
 
@@ -469,10 +533,12 @@ function initGame() {
     new MazeGhost(state.mazePlanet.interior, pos2.col, pos2.row, 'pink')
   ];
 
-  // Generate the center cell FIRST so there's something to spawn the
-  // player on; the rest of the starting 3x3 neighborhood is filled in
-  // right after, once the player (and thus their current cell) exists.
-  const centerRegulars = generateCell(CENTER_CELL.col, CENTER_CELL.row);
+  // Generate the center cell's REGULAR planetoids first (Phase 1 only —
+  // no hazards yet) so there's something to spawn the player on; we
+  // need to know exactly where the player ends up before we can steer
+  // spikey planetoids/asteroids/enemies away from that spot.
+  state.activeCells.add(cellKey(CENTER_CELL.col, CENTER_CELL.row));
+  const centerRegulars = generateRegularPlanetoidsInCell(CENTER_CELL.col, CENTER_CELL.row);
   const startingPlanet = centerRegulars[Math.floor(Math.random() * centerRegulars.length)];
   const surfaceDist = startingPlanet.radius + PLAYER_RADIUS;
   state.player = new Player(startingPlanet.pos.x, startingPlanet.pos.y - surfaceDist);
@@ -481,6 +547,14 @@ function initGame() {
   state.player.lastInfluencePlanet = startingPlanet;
   state.player.angle = Math.atan2(state.player.pos.y - startingPlanet.pos.y, state.player.pos.x - startingPlanet.pos.x);
   state.player.mode = "space";
+
+  // Now that the player's starting position is known, generate hazards
+  // for that same cell (Phase 2), steering spikey planetoids, asteroids,
+  // and enemy placement away from it — so nothing instantly-lethal ever
+  // spawns right on top of a brand new player. "Moderately away" — tune
+  // to taste.
+  const SAFE_SPAWN_RADIUS = 400;
+  generateHazardsAndExtrasInCell(CENTER_CELL.col, CENTER_CELL.row, centerRegulars, state.player.pos, SAFE_SPAWN_RADIUS);
 
   updateActiveCells(); // fills in the other 8 cells around the player's starting position
 
@@ -589,7 +663,16 @@ function gameLoop(timestamp) {
   // Only do normal player logic when NOT dying
   if (!state.player.isDying) {
     state.player.move(state.keys);
-    if (state.player.mode != "maze") gravitySystem.applyTo(state.player);
+    if (state.player.mode != "maze") {
+      // While pulling toward a right-clicked planet, that pull replaces
+      // normal gravity entirely for this frame rather than adding to
+      // it — see the comment on Player's pullTarget for why.
+      if (state.player.pullTarget) {
+        state.player.applyPullForce();
+      } else {
+        gravitySystem.applyTo(state.player);
+      }
+    }
     state.player.update();
     if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
     if (state.mouseDown) state.player.shootFireball();
@@ -730,6 +813,7 @@ function gameLoop(timestamp) {
   state.planetoids.forEach(p => p.draw());
   state.asteroids.forEach(a => a.draw());
   state.player.draw();
+  drawPullIndicator();
   state.enemies.forEach(e => e.draw());
   state.coins.forEach(c => c.draw());
   state.fireballs.forEach(f => f.draw());
@@ -745,5 +829,6 @@ function gameLoop(timestamp) {
   state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
   const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
   state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
+  minimap.draw();
   requestAnimationFrame(gameLoop);
 }

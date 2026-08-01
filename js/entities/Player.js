@@ -164,6 +164,27 @@ export class Player extends Entity {
     this.fireCooldown = 150;
     this.lastShotTime = 0;
 
+    // ----------------------------
+    // PULL TARGET (right-click "pull star")
+    // ----------------------------
+    // this.pullTarget is a reference to whichever planetoid the player
+    // right-clicked on (null if not currently pulling). While set, and
+    // only in "space" mode, gameLoop applies a constant acceleration
+    // toward it instead of normal gravity (see applyPullForce below) —
+    // suspending gravity while pulling, rather than adding the two
+    // together, keeps the pull feeling like a deliberate, authoritative
+    // move rather than something fighting other nearby planets' pull.
+    // Cleared automatically on release, on landing, or if the target
+    // gets culled while out of range — never needs manual cleanup
+    // elsewhere.
+    this.pullTarget = null;
+    // Acceleration per frame while pulling, and a speed cap so holding
+    // it indefinitely (or starting very close to the target) doesn't
+    // build unbounded velocity. Both are guesses — tune once you see it
+    // in motion.
+    this.pullAccel = 0.6;
+    this.pullMaxSpeed = 9;
+
     // How long (ms) the mouse can go without moving before we consider
     // it "idle": facing stops following it (reverts to whatever
     // movement set), and both arms switch to a synchronized sway
@@ -390,6 +411,102 @@ export class Player extends Entity {
     state.fireballs.push(new Fireball(tipX, tipY, angle));
     if (state.audioManager && typeof state.audioManager.playShoot === 'function') {
       state.audioManager.playShoot();
+    }
+  }
+
+  // ----------------------------
+  // PULL TARGET (right-click "pull star")
+  // ----------------------------
+  // Converts the current mouse position to world space (same approach
+  // computeLeftArmAimAngle already uses) and checks it against every
+  // planetoid — circular ones via a plain distance-to-center check,
+  // the rounded-rect one via its own containsPoint(), since it isn't
+  // truly circular. On a hit: sets pullTarget, and if currently
+  // grounded, launches off the current planet with a real jump-strength
+  // kick so the pull can actually take hold immediately (see below for
+  // why that launch matters, not just a bare onSurface flip).
+  trySelectPullTarget() {
+    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+
+    const cam = state.camera || { x: 0, y: 0 };
+    const zoom = state.zoom || 1;
+    const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+    const worldX = mouse.x / zoom + cam.x;
+    const worldY = mouse.y / zoom + cam.y;
+
+    let best = null;
+    let bestDistSq = Infinity;
+    for (const planet of state.planetoids) {
+      let hit;
+      if (planet.isRoundedRect) {
+        hit = typeof planet.containsPoint === 'function' && planet.containsPoint(worldX, worldY);
+      } else {
+        const dx = worldX - planet.pos.x;
+        const dy = worldY - planet.pos.y;
+        hit = (dx * dx + dy * dy) <= planet.radius * planet.radius;
+      }
+      if (!hit) continue;
+      const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = planet;
+      }
+    }
+
+    if (best) {
+      // If currently standing on something, launch off it exactly like
+      // a normal jump does (same JUMP_STRENGTH kick, same direction —
+      // straight out from the planet's center). Without this, onSurface
+      // flips to false but position doesn't move at all this instant,
+      // so the very next landing-collision check (which still runs
+      // every frame regardless of pulling) finds him still within
+      // landing range of the SAME planet and immediately re-catches
+      // him before the pull force has had any real distance to work
+      // with. The jump kick gives him genuine separation in the first
+      // frame; applyPullForce() then bends that trajectory toward the
+      // target over subsequent frames.
+      if (this.onSurface && this.currentPlanet) {
+        const launchDir = this.pos.subtract(this.currentPlanet.pos).normalize();
+        this.vel = launchDir.multiply(JUMP_STRENGTH);
+      }
+      this.pullTarget = best;
+      this.onSurface = false;
+      this.currentPlanet = null;
+    }
+  }
+
+  clearPullTarget() {
+    this.pullTarget = null;
+  }
+
+  // Called from gameLoop INSTEAD OF normal gravity while pullTarget is
+  // set (see the comment on pullTarget in the constructor for why).
+  // Constant acceleration toward the target's current center — not
+  // distance-scaled like gravity — so it reads as a deliberate pull
+  // rather than a weak ambient force, with a speed cap so it can't
+  // build unbounded velocity if held a long time.
+  applyPullForce() {
+    if (this.onSurface) { this.pullTarget = null; return; }
+    if (!this.pullTarget) return;
+    if (!state.planetoids.includes(this.pullTarget)) {
+      // Target drifted out of the active cell neighborhood and got
+      // culled while still far away — let the player keep whatever
+      // velocity they already had rather than erroring or snapping.
+      this.pullTarget = null;
+      return;
+    }
+
+    const dx = this.pullTarget.pos.x - this.pos.x;
+    const dy = this.pullTarget.pos.y - this.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1e-6) return;
+
+    this.vel.x += (dx / dist) * this.pullAccel;
+    this.vel.y += (dy / dist) * this.pullAccel;
+
+    const speed = this.vel.length();
+    if (speed > this.pullMaxSpeed) {
+      this.vel = this.vel.multiply(this.pullMaxSpeed / speed);
     }
   }
 

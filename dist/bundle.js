@@ -354,6 +354,22 @@
     distanceToSurface(worldX, worldY) {
       return this.nearestSurfacePoint(worldX, worldY).distance;
     }
+    // Standard rounded-box point-containment test: clamp to the core
+    // (unrounded) rect, then check whether the leftover offset falls
+    // within the corner radius — correctly covers flat-edge regions,
+    // corner regions, and fully-interior points with one formula, same
+    // spirit as nearestSurfacePoint above. Used for right-click "pull
+    // star" target selection (see Player.trySelectPullTarget).
+    containsPoint(worldX, worldY) {
+      const local = this.worldToLocal(worldX, worldY);
+      const coreHW = this.halfWidth - this.cornerRadius;
+      const coreHH = this.halfHeight - this.cornerRadius;
+      const cr = this.cornerRadius;
+      const cx = Math.max(-coreHW, Math.min(coreHW, local.x));
+      const cy = Math.max(-coreHH, Math.min(coreHH, local.y));
+      const dx = local.x - cx, dy = local.y - cy;
+      return dx * dx + dy * dy <= cr * cr;
+    }
     // Segment order (clockwise from the right edge's midpoint): right
     // edge -> BR corner -> bottom edge -> BL corner -> left edge -> TL
     // corner -> top edge -> TR corner -> (back to start). Each corner's
@@ -1497,6 +1513,9 @@
       this.blasterAngleOffset = -5 * Math.PI / 180;
       this.fireCooldown = 150;
       this.lastShotTime = 0;
+      this.pullTarget = null;
+      this.pullAccel = 0.6;
+      this.pullMaxSpeed = 9;
       this.mouseIdleThreshold = 2e3;
       this.mouseIdle = true;
       this.mazeBodyScale = 0.1;
@@ -1638,6 +1657,82 @@
       state.fireballs.push(new Fireball(tipX, tipY, angle));
       if (state.audioManager && typeof state.audioManager.playShoot === "function") {
         state.audioManager.playShoot();
+      }
+    }
+    // ----------------------------
+    // PULL TARGET (right-click "pull star")
+    // ----------------------------
+    // Converts the current mouse position to world space (same approach
+    // computeLeftArmAimAngle already uses) and checks it against every
+    // planetoid — circular ones via a plain distance-to-center check,
+    // the rounded-rect one via its own containsPoint(), since it isn't
+    // truly circular. On a hit: sets pullTarget, and if currently
+    // grounded, launches off the current planet with a real jump-strength
+    // kick so the pull can actually take hold immediately (see below for
+    // why that launch matters, not just a bare onSurface flip).
+    trySelectPullTarget() {
+      if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+      const worldX = mouse.x / zoom + cam.x;
+      const worldY = mouse.y / zoom + cam.y;
+      let best = null;
+      let bestDistSq = Infinity;
+      for (const planet of state.planetoids) {
+        let hit;
+        if (planet.isRoundedRect) {
+          hit = typeof planet.containsPoint === "function" && planet.containsPoint(worldX, worldY);
+        } else {
+          const dx = worldX - planet.pos.x;
+          const dy = worldY - planet.pos.y;
+          hit = dx * dx + dy * dy <= planet.radius * planet.radius;
+        }
+        if (!hit) continue;
+        const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = planet;
+        }
+      }
+      if (best) {
+        if (this.onSurface && this.currentPlanet) {
+          const launchDir = this.pos.subtract(this.currentPlanet.pos).normalize();
+          this.vel = launchDir.multiply(JUMP_STRENGTH);
+        }
+        this.pullTarget = best;
+        this.onSurface = false;
+        this.currentPlanet = null;
+      }
+    }
+    clearPullTarget() {
+      this.pullTarget = null;
+    }
+    // Called from gameLoop INSTEAD OF normal gravity while pullTarget is
+    // set (see the comment on pullTarget in the constructor for why).
+    // Constant acceleration toward the target's current center — not
+    // distance-scaled like gravity — so it reads as a deliberate pull
+    // rather than a weak ambient force, with a speed cap so it can't
+    // build unbounded velocity if held a long time.
+    applyPullForce() {
+      if (this.onSurface) {
+        this.pullTarget = null;
+        return;
+      }
+      if (!this.pullTarget) return;
+      if (!state.planetoids.includes(this.pullTarget)) {
+        this.pullTarget = null;
+        return;
+      }
+      const dx = this.pullTarget.pos.x - this.pos.x;
+      const dy = this.pullTarget.pos.y - this.pos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 1e-6) return;
+      this.vel.x += dx / dist * this.pullAccel;
+      this.vel.y += dy / dist * this.pullAccel;
+      const speed = this.vel.length();
+      if (speed > this.pullMaxSpeed) {
+        this.vel = this.vel.multiply(this.pullMaxSpeed / speed);
       }
     }
     // ----------------------------
@@ -3080,6 +3175,216 @@
     }
   };
 
+  // js/ui/MiniMap.js
+  var Minimap = class {
+    constructor() {
+      this.size = 240;
+      this.margin = 20;
+      this.backgroundColor = "rgba(6, 14, 24, 0.72)";
+      this.gridColor = "rgba(80, 200, 255, 0.18)";
+      this.borderColor = "rgba(100, 220, 255, 0.85)";
+      this.cornerColor = "rgba(140, 230, 255, 1)";
+      this.labelColor = "rgba(150, 230, 255, 0.85)";
+      this.playerColor = "#ffffff";
+      this.playerGlowColor = "rgba(255,255,255,0.35)";
+      this.playerRadius = 5;
+      this.specialColor = "#ffd23f";
+      this.specialGlowColor = "rgba(255,210,63,0.5)";
+      this.specialRadius = 3;
+    }
+    // Which planetoids get plotted as the yellow "special" dots. Reads
+    // directly from state each call (rather than being passed in) to
+    // match how every other system in this codebase already works.
+    // Add state.rectPlanet here too if you want the rounded-rect planet
+    // included on the map as well.
+    getSpecialPlanets() {
+      return [state.mazePlanet, state.platformPlanet].filter(Boolean);
+    }
+    worldToMapPoint(worldX, worldY, x0, y0) {
+      return {
+        x: x0 + worldX / state.sceneWidth * this.size,
+        y: y0 + worldY / state.sceneHeight * this.size
+      };
+    }
+    drawGlowDot(ctx, x, y, radius, dotColor, glowColor) {
+      ctx.beginPath();
+      ctx.fillStyle = glowColor;
+      ctx.arc(x, y, radius * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = dotColor;
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    draw() {
+      if (!state.player || !state.sceneWidth || !state.sceneHeight || !state.canvas) return;
+      const ctx = state.ctx;
+      const gridSize = state.gridSize || 20;
+      const x0 = state.canvas.width - this.margin - this.size;
+      const y0 = state.canvas.height - this.margin - this.size;
+      ctx.save();
+      ctx.fillStyle = this.backgroundColor;
+      ctx.fillRect(x0, y0, this.size, this.size);
+      ctx.strokeStyle = this.gridColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= gridSize; i++) {
+        const gx = x0 + i / gridSize * this.size;
+        ctx.moveTo(gx, y0);
+        ctx.lineTo(gx, y0 + this.size);
+        const gy = y0 + i / gridSize * this.size;
+        ctx.moveTo(x0, gy);
+        ctx.lineTo(x0 + this.size, gy);
+      }
+      ctx.stroke();
+      for (const planet of this.getSpecialPlanets()) {
+        const p = this.worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0);
+        this.drawGlowDot(ctx, p.x, p.y, this.specialRadius, this.specialColor, this.specialGlowColor);
+      }
+      {
+        const p = this.worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0);
+        this.drawGlowDot(ctx, p.x, p.y, this.playerRadius, this.playerColor, this.playerGlowColor);
+      }
+      ctx.strokeStyle = this.borderColor;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0, y0, this.size, this.size);
+      const bracket = Math.min(20, this.size * 0.12);
+      ctx.strokeStyle = this.cornerColor;
+      ctx.lineWidth = 2;
+      const corners = [
+        [x0, y0, 1, 1],
+        [x0 + this.size, y0, -1, 1],
+        [x0, y0 + this.size, 1, -1],
+        [x0 + this.size, y0 + this.size, -1, -1]
+      ];
+      for (const [cx, cy, dx, dy] of corners) {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + bracket * dy);
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx + bracket * dx, cy);
+        ctx.stroke();
+      }
+      ctx.fillStyle = this.labelColor;
+      ctx.font = "12px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("SECTOR MAP", x0 + 8, y0 - 8);
+      ctx.restore();
+    }
+  };
+
+  // js/effects/PullBeam.js
+  var BEAM_COLOR = "rgba(120, 210, 255, 1)";
+  var BEAM_GLOW_COLOR = "rgba(120, 210, 255, 0.35)";
+  var BEAM_GLOW_WIDTH = 13;
+  var BEAM_CORE_WIDTH = 4;
+  var OUTLINE_COLOR = "rgba(120, 210, 255, 0.9)";
+  var OUTLINE_GLOW_COLOR = "rgba(120, 210, 255, 0.3)";
+  var OUTLINE_GLOW_WIDTH = 9;
+  var OUTLINE_CORE_WIDTH = 3;
+  var OUTLINE_PADDING = 8;
+  var WAVE_COLOR = "rgba(215, 246, 255, 1)";
+  var WAVE_GLOW_COLOR = "rgba(215, 246, 255, 0.4)";
+  var WAVE_GLOW_WIDTH = 4;
+  var WAVE_CORE_WIDTH = 1.5;
+  var WAVE_AMPLITUDE = 5;
+  var WAVE_FREQUENCY = 0.05;
+  var WAVE_FREQUENCY_2 = 0.065;
+  var WAVE_SPEED = 0.012;
+  var WAVE_SAMPLE_SPACING = 8;
+  function buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, frequency, phaseOffset, now) {
+    const points = [];
+    const numSamples = Math.max(2, Math.floor(beamLength / WAVE_SAMPLE_SPACING));
+    for (let i = 0; i <= numSamples; i++) {
+      const s = i / numSamples * beamLength;
+      const wave = WAVE_AMPLITUDE * Math.sin(s * frequency - now * WAVE_SPEED + phaseOffset);
+      points.push({
+        x: originX + dirX * s + perpX * wave,
+        y: originY + dirY * s + perpY * wave
+      });
+    }
+    return points;
+  }
+  function strokePolyline(ctx, points) {
+    if (points.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.stroke();
+  }
+  function drawPullIndicator() {
+    const player = state.player;
+    if (!player || !player.pullTarget || player.mode !== "space") return;
+    const target = player.pullTarget;
+    const ctx = state.ctx;
+    const pulse = (Math.sin(Date.now() * 6e-3) + 1) / 2;
+    const now = Date.now();
+    ctx.save();
+    const originX = player.aimShoulderPos ? player.aimShoulderPos.x : player.pos.x;
+    const originY = player.aimShoulderPos ? player.aimShoulderPos.y : player.pos.y;
+    const dx = target.pos.x - originX;
+    const dy = target.pos.y - originY;
+    const beamLength = Math.sqrt(dx * dx + dy * dy);
+    ctx.beginPath();
+    ctx.moveTo(originX, originY);
+    ctx.lineTo(target.pos.x, target.pos.y);
+    ctx.globalAlpha = 0.4 + pulse * 0.3;
+    ctx.strokeStyle = BEAM_GLOW_COLOR;
+    ctx.lineWidth = BEAM_GLOW_WIDTH;
+    ctx.stroke();
+    ctx.globalAlpha = 0.7 + pulse * 0.3;
+    ctx.strokeStyle = BEAM_COLOR;
+    ctx.lineWidth = BEAM_CORE_WIDTH;
+    ctx.stroke();
+    if (beamLength > 1e-3) {
+      const dirX = dx / beamLength, dirY = dy / beamLength;
+      const perpX = -dirY, perpY = dirX;
+      const strand1 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY, 0, now);
+      const strand2 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY_2, Math.PI, now);
+      ctx.globalAlpha = 0.3 + pulse * 0.25;
+      ctx.strokeStyle = WAVE_GLOW_COLOR;
+      ctx.lineWidth = WAVE_GLOW_WIDTH;
+      strokePolyline(ctx, strand1);
+      strokePolyline(ctx, strand2);
+      ctx.globalAlpha = 0.6 + pulse * 0.3;
+      ctx.strokeStyle = WAVE_COLOR;
+      ctx.lineWidth = WAVE_CORE_WIDTH;
+      strokePolyline(ctx, strand1);
+      strokePolyline(ctx, strand2);
+    }
+    if (target.isRoundedRect) {
+      ctx.save();
+      ctx.translate(target.pos.x, target.pos.y);
+      ctx.rotate(target.rotationAngle);
+      const w = target.halfWidth + OUTLINE_PADDING;
+      const h = target.halfHeight + OUTLINE_PADDING;
+      ctx.beginPath();
+      ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + OUTLINE_PADDING);
+      ctx.globalAlpha = 0.4 + pulse * 0.4;
+      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
+      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.strokeStyle = OUTLINE_COLOR;
+      ctx.lineWidth = OUTLINE_CORE_WIDTH;
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(target.pos.x, target.pos.y, target.radius + OUTLINE_PADDING, 0, Math.PI * 2);
+      ctx.globalAlpha = 0.4 + pulse * 0.4;
+      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
+      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.strokeStyle = OUTLINE_COLOR;
+      ctx.lineWidth = OUTLINE_CORE_WIDTH;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   // js/game.js
   state.canvas = document.getElementById("gameCanvas");
   state.ctx = state.canvas.getContext("2d");
@@ -3091,9 +3396,10 @@
   var CELL_CHECK_INTERVAL = 15;
   state.sceneWidth = CELL_SIZE * GRID_SIZE;
   state.sceneHeight = CELL_SIZE * GRID_SIZE;
+  state.gridSize = GRID_SIZE;
   var PLANETOIDS_PER_CELL = 10;
   var SPIKEY_PER_CELL = 10;
-  var ASTEROIDS_PER_CELL = 10;
+  var ASTEROIDS_PER_CELL = 20;
   var MAX_ENEMIES_PER_CELL = 5;
   var CHARACTER_IMAGE_SOURCES = {
     body: "img/body.png",
@@ -3134,14 +3440,21 @@
     state.lastMouseMoveTime = Date.now();
   });
   state.mouseDown = false;
+  state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   state.canvas.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    state.mouseDown = true;
-    if (state.player) state.player.shootFireball();
+    if (e.button === 0) {
+      state.mouseDown = true;
+      if (state.player) state.player.shootFireball();
+    } else if (e.button === 2) {
+      if (state.player) state.player.trySelectPullTarget();
+    }
   });
   window.addEventListener("mouseup", (e) => {
-    if (e.button !== 0) return;
-    state.mouseDown = false;
+    if (e.button === 0) {
+      state.mouseDown = false;
+    } else if (e.button === 2) {
+      if (state.player) state.player.clearPullTarget();
+    }
   });
   state.fireballs = [];
   state.explosions = [];
@@ -3176,6 +3489,7 @@
   var gravitySystem;
   var collisionSystem = new CollisionSystem();
   var aiSystem = new AISystem();
+  var minimap = new Minimap();
   var cellCheckCounter = 0;
   window.addEventListener("keydown", (e) => {
     state.keys[e.key] = true;
@@ -3215,10 +3529,7 @@
   function cellKey(col, row) {
     return `${col},${row}`;
   }
-  function generateCell(col, row) {
-    const key = cellKey(col, row);
-    if (state.activeCells.has(key)) return [];
-    state.activeCells.add(key);
+  function generateRegularPlanetoidsInCell(col, row) {
     const originX = col * CELL_SIZE;
     const originY = row * CELL_SIZE;
     const regularPlanetoids = [];
@@ -3232,18 +3543,34 @@
       state.planetoids.push(p);
       regularPlanetoids.push(p);
     }
+    return regularPlanetoids;
+  }
+  function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoidPos = null, avoidRadius = 0) {
+    const originX = col * CELL_SIZE;
+    const originY = row * CELL_SIZE;
+    const MAX_REROLLS = 20;
+    const avoidRadiusSq = avoidRadius * avoidRadius;
+    const isSafe = (x, y) => !avoidPos || (x - avoidPos.x) ** 2 + (y - avoidPos.y) ** 2 >= avoidRadiusSq;
     for (let i = 0; i < SPIKEY_PER_CELL; i++) {
       const radius = 25 + Math.random() * 15;
-      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      let x, y, attempts = 0;
+      do {
+        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        attempts++;
+      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
       const p = new SpikeyPlanetoid(x, y, radius);
       p.createOffscreen();
       state.planetoids.push(p);
     }
     for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
       const radius = 20 + Math.random() * 25;
-      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      let x, y, attempts = 0;
+      do {
+        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        attempts++;
+      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
       state.asteroids.push(new Asteroid(x, y, radius));
     }
     regularPlanetoids.forEach((planet) => {
@@ -3254,12 +3581,20 @@
         state.coins.push(coin);
       }
     });
-    const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, regularPlanetoids.length);
+    const safePlanetsForEnemies = avoidPos ? regularPlanetoids.filter((p) => isSafe(p.pos.x, p.pos.y)) : regularPlanetoids;
+    const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, safePlanetsForEnemies.length);
     for (let i = 0; i < numEnemies; i++) {
-      const planet = regularPlanetoids[Math.floor(Math.random() * regularPlanetoids.length)];
+      const planet = safePlanetsForEnemies[Math.floor(Math.random() * safePlanetsForEnemies.length)];
       const color = enemyColors[i % enemyColors.length];
       state.enemies.push(new SpaceGhost(planet, color));
     }
+  }
+  function generateCell(col, row) {
+    const key = cellKey(col, row);
+    if (state.activeCells.has(key)) return [];
+    state.activeCells.add(key);
+    const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
+    generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
     return regularPlanetoids;
   }
   function cullDistantObjects(activeCellKeys) {
@@ -3367,7 +3702,8 @@
       new MazeGhost(state.mazePlanet.interior, pos1.col, pos1.row, "red"),
       new MazeGhost(state.mazePlanet.interior, pos2.col, pos2.row, "pink")
     ];
-    const centerRegulars = generateCell(CENTER_CELL.col, CENTER_CELL.row);
+    state.activeCells.add(cellKey(CENTER_CELL.col, CENTER_CELL.row));
+    const centerRegulars = generateRegularPlanetoidsInCell(CENTER_CELL.col, CENTER_CELL.row);
     const startingPlanet = centerRegulars[Math.floor(Math.random() * centerRegulars.length)];
     const surfaceDist = startingPlanet.radius + PLAYER_RADIUS;
     state.player = new Player(startingPlanet.pos.x, startingPlanet.pos.y - surfaceDist);
@@ -3376,6 +3712,8 @@
     state.player.lastInfluencePlanet = startingPlanet;
     state.player.angle = Math.atan2(state.player.pos.y - startingPlanet.pos.y, state.player.pos.x - startingPlanet.pos.x);
     state.player.mode = "space";
+    const SAFE_SPAWN_RADIUS = 400;
+    generateHazardsAndExtrasInCell(CENTER_CELL.col, CENTER_CELL.row, centerRegulars, state.player.pos, SAFE_SPAWN_RADIUS);
     updateActiveCells();
     state.particles = [];
     state.fireballs = [];
@@ -3481,7 +3819,13 @@
     }
     if (!state.player.isDying) {
       state.player.move(state.keys);
-      if (state.player.mode != "maze") gravitySystem.applyTo(state.player);
+      if (state.player.mode != "maze") {
+        if (state.player.pullTarget) {
+          state.player.applyPullForce();
+        } else {
+          gravitySystem.applyTo(state.player);
+        }
+      }
       state.player.update();
       if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
       if (state.mouseDown) state.player.shootFireball();
@@ -3578,6 +3922,7 @@
     state.planetoids.forEach((p) => p.draw());
     state.asteroids.forEach((a) => a.draw());
     state.player.draw();
+    drawPullIndicator();
     state.enemies.forEach((e) => e.draw());
     state.coins.forEach((c) => c.draw());
     state.fireballs.forEach((f) => f.draw());
@@ -3592,6 +3937,7 @@
     state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
     const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
     state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
+    minimap.draw();
     requestAnimationFrame(gameLoop);
   }
 })();

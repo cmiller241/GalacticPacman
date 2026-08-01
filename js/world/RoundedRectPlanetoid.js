@@ -125,6 +125,23 @@ export class RoundedRectPlanetoid {
     return this.nearestSurfacePoint(worldX, worldY).distance;
   }
 
+  // Standard rounded-box point-containment test: clamp to the core
+  // (unrounded) rect, then check whether the leftover offset falls
+  // within the corner radius — correctly covers flat-edge regions,
+  // corner regions, and fully-interior points with one formula, same
+  // spirit as nearestSurfacePoint above. Used for right-click "pull
+  // star" target selection (see Player.trySelectPullTarget).
+  containsPoint(worldX, worldY) {
+    const local = this.worldToLocal(worldX, worldY);
+    const coreHW = this.halfWidth - this.cornerRadius;
+    const coreHH = this.halfHeight - this.cornerRadius;
+    const cr = this.cornerRadius;
+    const cx = Math.max(-coreHW, Math.min(coreHW, local.x));
+    const cy = Math.max(-coreHH, Math.min(coreHH, local.y));
+    const dx = local.x - cx, dy = local.y - cy;
+    return (dx * dx + dy * dy) <= cr * cr;
+  }
+
   // Segment order (clockwise from the right edge's midpoint): right
   // edge -> BR corner -> bottom edge -> BL corner -> left edge -> TL
   // corner -> top edge -> TR corner -> (back to start). Each corner's
