@@ -32,7 +32,7 @@
   var JUMP_STRENGTH = 10;
   var MOVE_SPEED = 0.5;
   var PLAYER_LINEAR_SPEED = 5;
-  var PLAYER_RADIUS = 20;
+  var PLAYER_RADIUS = 30;
   var ENEMY_RADIUS = 20;
   var COIN_RADIUS = 5;
   var COIN_ORBIT_OFFSET = 18;
@@ -93,6 +93,47 @@
     static SHADOW_BLUR = 25;
     static SHADOW_PADDING = 40;
     static SHADOW_COLOR = "rgba(173,216,230,0.3)";
+    // ----------------------------
+    // SUN-RELATIVE SHADING (perf note)
+    // ----------------------------
+    // The sun is assumed fixed at the center of the level (sceneWidth/2,
+    // sceneHeight/2) — not shown yet, per the plan.
+    //
+    // Rather than recomputing a gradient per planet per frame (real cost,
+    // 60+ times a frame), a SINGLE overlay circle is baked ONCE, shared
+    // by every planet instance, with its highlight pointing "up" by
+    // convention. Each frame, draw() just rotates and blits that shared
+    // overlay per planet — a rotate+drawImage is cheap, comparable to the
+    // existing ring-canvas blit, not a shadowBlur/gradient-rebuild cost.
+    static SUN_OVERLAY_DIAMETER = 200;
+    // reference bake size; scaled per-planet at draw time (soft gradients upscale fine, unlike sharp sprites)
+    static SUN_MIN_ALPHA = 0.25;
+    // shading strength for planets farthest from the sun
+    static SUN_MAX_ALPHA = 0.9;
+    // shading strength for planets closest to the sun
+    static SUN_MAX_DARKNESS = 0.5;
+    // overall (non-directional) dimming applied to the farthest planets — 0 = none, 1 = fully black. Grows linearly with distance; planets at the sun get none.
+    static sunOverlayCanvas = null;
+    // built lazily, shared across all instances
+    static getSunOverlayCanvas() {
+      if (_Planetoid.sunOverlayCanvas) return _Planetoid.sunOverlayCanvas;
+      const d = _Planetoid.SUN_OVERLAY_DIAMETER;
+      const r = d / 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = d;
+      canvas.height = d;
+      const ctx = canvas.getContext("2d");
+      const offset = -r * 0.5;
+      const grad = ctx.createRadialGradient(r, r + offset, 0, r, r + offset, r * 1.5);
+      grad.addColorStop(0, "white");
+      grad.addColorStop(1, "black");
+      ctx.beginPath();
+      ctx.arc(r, r, r, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      _Planetoid.sunOverlayCanvas = canvas;
+      return canvas;
+    }
     constructor(x, y, radius, color) {
       this.pos = new Vector2(x, y);
       this.radius = radius;
@@ -128,26 +169,6 @@
       bodyCtx.beginPath();
       bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
       bodyCtx.fillStyle = this.color;
-      bodyCtx.fill();
-      bodyCtx.globalCompositeOperation = "source-over";
-      bodyCtx.restore();
-      bodyCtx.save();
-      bodyCtx.globalCompositeOperation = "multiply";
-      const offsetX = -this.radius * 0.5;
-      const offsetY = -this.radius * 0.5;
-      const lightGradient = bodyCtx.createRadialGradient(
-        this.radius + offsetX,
-        this.radius + offsetY,
-        0,
-        this.radius + offsetX,
-        this.radius + offsetY,
-        this.radius * 1.5
-      );
-      lightGradient.addColorStop(0, "white");
-      lightGradient.addColorStop(1, "black");
-      bodyCtx.beginPath();
-      bodyCtx.arc(this.radius, this.radius, this.radius, 0, Math.PI * 2);
-      bodyCtx.fillStyle = lightGradient;
       bodyCtx.fill();
       bodyCtx.globalCompositeOperation = "source-over";
       bodyCtx.restore();
@@ -223,6 +244,315 @@
         ctx.fill();
         ctx.restore();
       }
+      const sunX = state.sceneWidth / 2;
+      const sunY = state.sceneHeight / 2;
+      const toSunX = sunX - this.pos.x;
+      const toSunY = sunY - this.pos.y;
+      const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+      const angleToSun = Math.atan2(toSunY, toSunX);
+      const overlayRotation = angleToSun + Math.PI / 2;
+      const maxDist = Math.sqrt(state.sceneWidth * state.sceneWidth + state.sceneHeight * state.sceneHeight) / 2;
+      const distT = Math.min(distToSun / maxDist, 1);
+      const overlayAlpha = _Planetoid.SUN_MIN_ALPHA + distT * (_Planetoid.SUN_MAX_ALPHA - _Planetoid.SUN_MIN_ALPHA);
+      ctx.save();
+      ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = overlayAlpha;
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(overlayRotation);
+      const overlay = _Planetoid.getSunOverlayCanvas();
+      const d = this.radius * 2;
+      ctx.drawImage(overlay, -this.radius, -this.radius, d, d);
+      ctx.restore();
+      const overallDarkness = _Planetoid.SUN_MAX_DARKNESS * distT;
+      if (overallDarkness > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = "multiply";
+        ctx.globalAlpha = overallDarkness;
+        ctx.fillStyle = "#000000";
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  };
+
+  // js/world/RoundedRectPlanetoid.js
+  var RoundedRectPlanetoid = class {
+    constructor(x, y, halfWidth, halfHeight, cornerRadius, color) {
+      this.pos = new Vector2(x, y);
+      this.halfWidth = halfWidth;
+      this.halfHeight = halfHeight;
+      this.cornerRadius = Math.min(cornerRadius, halfWidth, halfHeight);
+      this.color = color;
+      this.radius = Math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
+      this.mass = 2 * halfWidth * (2 * halfHeight);
+      this.influenceRadius = this.radius + INFLUENCE_PADDING;
+      let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+      this.vel = direction.multiply(PLANET_SPEED);
+      this.rotationAngle = Math.random() * Math.PI * 2;
+      this.rotationSpeed = 6e-4;
+      this.isSpikey = false;
+      this.isRoundedRect = true;
+      this.offscreen = null;
+      this.offscreenPadding = 0;
+      this.ringCanvas = null;
+      this.interiorType = null;
+      this.cachedAlpha = 0.3;
+      this.lastAlphaUpdate = 0;
+      this._segments = this.buildSegments();
+    }
+    worldToLocal(worldX, worldY) {
+      const dx = worldX - this.pos.x;
+      const dy = worldY - this.pos.y;
+      const c = Math.cos(-this.rotationAngle), s = Math.sin(-this.rotationAngle);
+      return { x: dx * c - dy * s, y: dx * s + dy * c };
+    }
+    localDirToWorld(lx, ly) {
+      const c = Math.cos(this.rotationAngle), s = Math.sin(this.rotationAngle);
+      return new Vector2(lx * c - ly * s, lx * s + ly * c);
+    }
+    localPointToWorld(lx, ly) {
+      const w = this.localDirToWorld(lx, ly);
+      w.x += this.pos.x;
+      w.y += this.pos.y;
+      return w;
+    }
+    // Returns { point: Vector2 (world), normal: Vector2 (world, unit,
+    // outward), distance: number >= 0 } for the nearest boundary point to
+    // the given WORLD point.
+    nearestSurfacePoint(worldX, worldY) {
+      const local = this.worldToLocal(worldX, worldY);
+      const coreHW = this.halfWidth - this.cornerRadius;
+      const coreHH = this.halfHeight - this.cornerRadius;
+      const cr = this.cornerRadius;
+      const cx = Math.max(-coreHW, Math.min(coreHW, local.x));
+      const cy = Math.max(-coreHH, Math.min(coreHH, local.y));
+      let dx = local.x - cx, dy = local.y - cy;
+      let len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 1e-6) {
+        const distV = coreHW - Math.abs(local.x), distH = coreHH - Math.abs(local.y);
+        if (distV < distH) {
+          dx = local.x >= 0 ? 1 : -1;
+          dy = 0;
+        } else {
+          dx = 0;
+          dy = local.y >= 0 ? 1 : -1;
+        }
+        len = 1;
+      }
+      dx /= len;
+      dy /= len;
+      const sx = cx + dx * cr, sy = cy + dy * cr;
+      const distance = Math.sqrt((local.x - sx) ** 2 + (local.y - sy) ** 2);
+      return {
+        point: this.localPointToWorld(sx, sy),
+        normal: this.localDirToWorld(dx, dy),
+        distance
+      };
+    }
+    distanceToSurface(worldX, worldY) {
+      return this.nearestSurfacePoint(worldX, worldY).distance;
+    }
+    // Segment order (clockwise from the right edge's midpoint): right
+    // edge -> BR corner -> bottom edge -> BL corner -> left edge -> TL
+    // corner -> top edge -> TR corner -> (back to start). Each corner's
+    // startAngle is chosen so consecutive segments meet exactly, with
+    // continuous position/tangent/normal across every seam.
+    buildSegments() {
+      const coreHW = this.halfWidth - this.cornerRadius;
+      const coreHH = this.halfHeight - this.cornerRadius;
+      const hw = this.halfWidth, hh = this.halfHeight, cr = this.cornerRadius;
+      return [
+        { type: "edge", length: 2 * coreHH, start: { x: hw, y: -coreHH }, dir: { x: 0, y: 1 }, normal: { x: 1, y: 0 } },
+        { type: "corner", length: Math.PI / 2 * cr, center: { x: coreHW, y: coreHH }, startAngle: 0 },
+        { type: "edge", length: 2 * coreHW, start: { x: coreHW, y: hh }, dir: { x: -1, y: 0 }, normal: { x: 0, y: 1 } },
+        { type: "corner", length: Math.PI / 2 * cr, center: { x: -coreHW, y: coreHH }, startAngle: Math.PI / 2 },
+        { type: "edge", length: 2 * coreHH, start: { x: -hw, y: coreHH }, dir: { x: 0, y: -1 }, normal: { x: -1, y: 0 } },
+        { type: "corner", length: Math.PI / 2 * cr, center: { x: -coreHW, y: -coreHH }, startAngle: Math.PI },
+        { type: "edge", length: 2 * coreHW, start: { x: -coreHW, y: -hh }, dir: { x: 1, y: 0 }, normal: { x: 0, y: -1 } },
+        { type: "corner", length: Math.PI / 2 * cr, center: { x: coreHW, y: -coreHH }, startAngle: 3 * Math.PI / 2 }
+      ];
+    }
+    getPerimeter() {
+      let t = 0;
+      for (const seg of this._segments) t += seg.length;
+      return t;
+    }
+    // Given arc-length s (wraps), returns local { point:{x,y},
+    // tangent:{x,y} (unit, direction of increasing s), normal:{x,y} (unit,
+    // outward) }.
+    pointAtLocalArcPosition(s) {
+      const perimeter = this.getPerimeter();
+      let remaining = (s % perimeter + perimeter) % perimeter;
+      for (const seg2 of this._segments) {
+        if (remaining <= seg2.length) {
+          if (seg2.type === "edge") {
+            return {
+              point: { x: seg2.start.x + seg2.dir.x * remaining, y: seg2.start.y + seg2.dir.y * remaining },
+              tangent: seg2.dir,
+              normal: seg2.normal
+            };
+          }
+          const angle = seg2.startAngle + remaining / this.cornerRadius;
+          const c = Math.cos(angle), s2 = Math.sin(angle);
+          return {
+            point: { x: seg2.center.x + this.cornerRadius * c, y: seg2.center.y + this.cornerRadius * s2 },
+            tangent: { x: -s2, y: c },
+            normal: { x: c, y: s2 }
+          };
+        }
+        remaining -= seg2.length;
+      }
+      const seg = this._segments[0];
+      return { point: seg.start, tangent: seg.dir, normal: seg.normal };
+    }
+    // Inverse: given a LOCAL point already on/near the boundary, returns
+    // the arc-length s that produced it. Used when the player lands, to
+    // initialize their walk position from wherever they touched down.
+    arcPositionForLocalPoint(lx, ly) {
+      const coreHW = this.halfWidth - this.cornerRadius;
+      const coreHH = this.halfHeight - this.cornerRadius;
+      const cr = this.cornerRadius;
+      const cumRightEdge = 2 * coreHH;
+      const cumBR = cumRightEdge + Math.PI / 2 * cr;
+      const cumBottomEdge = cumBR + 2 * coreHW;
+      const cumBL = cumBottomEdge + Math.PI / 2 * cr;
+      const cumLeftEdge = cumBL + 2 * coreHH;
+      const cumTL = cumLeftEdge + Math.PI / 2 * cr;
+      const cumTopEdge = cumTL + 2 * coreHW;
+      const norm = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+      if (lx >= coreHW && ly >= coreHH) return cumRightEdge + norm(Math.atan2(ly - coreHH, lx - coreHW)) * cr;
+      if (lx <= -coreHW && ly >= coreHH) return cumBottomEdge + (norm(Math.atan2(ly - coreHH, lx + coreHW)) - Math.PI / 2) * cr;
+      if (lx <= -coreHW && ly <= -coreHH) return cumLeftEdge + (norm(Math.atan2(ly + coreHH, lx + coreHW)) - Math.PI) * cr;
+      if (lx >= coreHW && ly <= -coreHH) return cumTopEdge + (norm(Math.atan2(ly + coreHH, lx - coreHW)) - 3 * Math.PI / 2) * cr;
+      if (lx > coreHW) return ly + coreHH;
+      if (ly > coreHH) return cumBR + (coreHW - lx);
+      if (lx < -coreHW) return cumBL + (coreHH - ly);
+      if (ly < -coreHH) return cumTL + (lx + coreHW);
+      const distR = coreHW - lx, distL = lx + coreHW, distB = coreHH - ly, distT = ly + coreHH;
+      const minH = Math.min(distR, distL), minV = Math.min(distB, distT);
+      if (minH < minV) return distR < distL ? ly + coreHH : cumBL + (coreHH - ly);
+      return distB < distT ? cumBR + (coreHW - lx) : cumTL + (lx + coreHW);
+    }
+    arcPositionForWorldPoint(worldX, worldY) {
+      const local = this.worldToLocal(worldX, worldY);
+      return this.arcPositionForLocalPoint(local.x, local.y);
+    }
+    // World-space wrapper: returns { point: Vector2 (world, pushed
+    // outward by pushDistance), normal: Vector2 (world, unit) }. Player
+    // uses pushDistance=PLAYER_RADIUS, Coin uses pushDistance=
+    // COIN_ORBIT_OFFSET — same parameterization, different offset.
+    worldPointAtArcPosition(s, pushDistance = 0) {
+      const local = this.pointAtLocalArcPosition(s);
+      const normal = this.localDirToWorld(local.normal.x, local.normal.y);
+      const surfacePoint = this.localPointToWorld(local.point.x, local.point.y);
+      const point = pushDistance !== 0 ? surfacePoint.add(normal.clone().multiply(pushDistance)) : surfacePoint;
+      return { point, normal };
+    }
+    // Same recipe as Planetoid.js: bake texture+color tint once, then
+    // bake the glow once onto a padded canvas, then bake the dashed
+    // influence ring once. Uses ctx.roundRect() instead of a circular
+    // arc. Reuses Planetoid's static shadow constants + shared sun-
+    // overlay sprite for visual consistency without extending that
+    // (circle-specific) class.
+    createOffscreen() {
+      const w = this.halfWidth * 2, h = this.halfHeight * 2;
+      const bodyCanvas = document.createElement("canvas");
+      bodyCanvas.width = w;
+      bodyCanvas.height = h;
+      const bodyCtx = bodyCanvas.getContext("2d");
+      bodyCtx.save();
+      bodyCtx.beginPath();
+      bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
+      bodyCtx.clip();
+      const tiles = 2.5;
+      const texSize = Math.max(w, h) * tiles;
+      bodyCtx.drawImage(state.planetTexture, w / 2 - texSize / 2, h / 2 - texSize / 2, texSize, texSize);
+      bodyCtx.restore();
+      bodyCtx.save();
+      bodyCtx.globalCompositeOperation = "multiply";
+      bodyCtx.beginPath();
+      bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
+      bodyCtx.fillStyle = this.color;
+      bodyCtx.fill();
+      bodyCtx.globalCompositeOperation = "source-over";
+      bodyCtx.restore();
+      const padding = Planetoid.SHADOW_PADDING;
+      this.offscreenPadding = padding;
+      this.offscreen = document.createElement("canvas");
+      this.offscreen.width = w + padding * 2;
+      this.offscreen.height = h + padding * 2;
+      const finalCtx = this.offscreen.getContext("2d");
+      finalCtx.shadowColor = Planetoid.SHADOW_COLOR;
+      finalCtx.shadowBlur = Planetoid.SHADOW_BLUR;
+      finalCtx.drawImage(bodyCanvas, padding, padding);
+      const ringPad = this.influenceRadius - this.radius;
+      this.ringCanvas = document.createElement("canvas");
+      this.ringCanvas.width = w + ringPad * 2;
+      this.ringCanvas.height = h + ringPad * 2;
+      const ringCtx = this.ringCanvas.getContext("2d");
+      ringCtx.strokeStyle = "rgba(173,216,230,1)";
+      ringCtx.lineWidth = 3;
+      ringCtx.setLineDash([10, 5]);
+      ringCtx.beginPath();
+      ringCtx.roundRect(0, 0, w + ringPad * 2, h + ringPad * 2, this.cornerRadius + ringPad);
+      ringCtx.stroke();
+    }
+    draw() {
+      const ctx = state.ctx;
+      const now = Date.now();
+      if (now - this.lastAlphaUpdate > 500) {
+        const dist = this.pos.subtract(state.player.pos).length();
+        this.cachedAlpha = Math.max(0.01, 0.3 - dist / 1e3 * 0.65);
+        this.lastAlphaUpdate = now;
+      }
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(this.rotationAngle);
+      if (this.ringCanvas) {
+        ctx.save();
+        ctx.globalAlpha = this.cachedAlpha;
+        ctx.drawImage(this.ringCanvas, -this.ringCanvas.width / 2, -this.ringCanvas.height / 2);
+        ctx.restore();
+      }
+      if (this.offscreen) {
+        ctx.drawImage(this.offscreen, -this.offscreen.width / 2, -this.offscreen.height / 2);
+      }
+      const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
+      const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
+      const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+      const worldAngleToSun = Math.atan2(toSunY, toSunX);
+      const localAngle = worldAngleToSun - this.rotationAngle;
+      const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
+      const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
+      const distT = Math.min(distToSun / maxDist, 1);
+      const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
+      const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
+      ctx.clip();
+      ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = overlayAlpha;
+      const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
+      grad.addColorStop(0, "black");
+      grad.addColorStop(1, "white");
+      ctx.fillStyle = grad;
+      ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
+      ctx.restore();
+      const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
+      if (overallDarkness > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = "multiply";
+        ctx.globalAlpha = overallDarkness;
+        ctx.fillStyle = "#000000";
+        ctx.beginPath();
+        ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
     }
   };
 
@@ -838,7 +1168,7 @@
       this.vel = direction.multiply(PLANET_SPEED);
       this.angularSpeed = (Math.random() * 2 - 1) * 0.05;
       this.angle = Math.random() * Math.PI * 2;
-      this.color = "#8B4513";
+      this.color = "#A85417";
       this.points = this.generatePoints();
       this.interiorPoints = [];
       const numInterior = 2 + Math.floor(Math.random() * 2);
@@ -989,16 +1319,6 @@
     window.addEventListener("resize", () => {
       state.canvas.width = window.innerWidth;
       state.canvas.height = window.innerHeight;
-      state.sceneWidth = state.canvas.width * 2;
-      state.sceneHeight = state.canvas.height * 2;
-      state.stars.length = 0;
-      for (let i = 0; i < STAR_COUNT; i++) {
-        state.stars.push({
-          x: Math.random() * state.sceneWidth,
-          y: Math.random() * state.sceneHeight,
-          size: Math.random() * 2 + 1
-        });
-      }
     });
   }
   function angleDiff(a, b) {
@@ -1114,6 +1434,7 @@
       this.currentInterior = null;
       this.lastInfluencePlanet = null;
       this.angle = 0;
+      this.surfaceArcPos = 0;
       this.mouthAngle = 0;
       this.facingDirection = 1;
       this.isGroundPounding = false;
@@ -1178,6 +1499,10 @@
       this.lastShotTime = 0;
       this.mouseIdleThreshold = 2e3;
       this.mouseIdle = true;
+      this.mazeBodyScale = 0.1;
+      this.mazeMoveIdleThreshold = 300;
+      this.invincibleDuration = 2e3;
+      this.invincibleUntil = 0;
       this.scaledPartsReady = false;
       this.scaledParts = {};
       this.scaledBootCanvas = null;
@@ -1331,9 +1656,16 @@
       }
     }
     // ----------------------------
+    // INVINCIBILITY
+    // ----------------------------
+    isInvincible() {
+      return Date.now() < this.invincibleUntil;
+    }
+    // ----------------------------
     // DEATH
     // ----------------------------
     startDeath() {
+      if (this.isInvincible()) return;
       if (!this.isDying) {
         this.isDying = true;
         this.deathStartTime = Date.now();
@@ -1390,6 +1722,7 @@
       this.mazeDir = new Vector2(1, 0);
       this.lastMoveTime = Date.now();
       this.updateMazePosition();
+      this.invincibleUntil = Date.now() + this.invincibleDuration;
     }
     exitMazeMode() {
       this.mode = "space";
@@ -1402,6 +1735,7 @@
         this.onSurface = true;
         this.lastInfluencePlanet = this.currentPlanet;
       }
+      this.invincibleUntil = Date.now() + this.invincibleDuration;
     }
     updatePlatformPosition() {
       const interior = this.currentInterior;
@@ -1455,6 +1789,8 @@
             this.mazeCol = newCol;
             this.mazeRow = newRow;
             this.mazeDir = new Vector2(dx || this.mazeDir.x, dy || this.mazeDir.y).normalize();
+            if (dx !== 0) this.facingDirection = dx > 0 ? 1 : -1;
+            this.walkTime += this.currentInterior.tileSize / this.strideLength * Math.PI * 2;
             this.lastMoveTime = now;
             this.updateMazePosition();
           }
@@ -1531,7 +1867,27 @@
         this.updatePlatformPosition();
         return;
       }
-      if (this.onSurface && this.currentPlanet) {
+      if (this.onSurface && this.currentPlanet && this.currentPlanet.isRoundedRect) {
+        const planet = this.currentPlanet;
+        this.isWalking = false;
+        let ds = 0;
+        if (keys["ArrowLeft"]) {
+          ds = -PLAYER_LINEAR_SPEED;
+          this.facingDirection = -1;
+          this.isWalking = true;
+        }
+        if (keys["ArrowRight"]) {
+          ds = PLAYER_LINEAR_SPEED;
+          this.facingDirection = 1;
+          this.isWalking = true;
+        }
+        this.surfaceArcPos += ds;
+        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
+        this.pos = worldSurface.point;
+        if (this.isWalking) {
+          this.walkTime += Math.abs(ds) / this.strideLength * Math.PI * 2;
+        }
+      } else if (this.onSurface && this.currentPlanet) {
         const surfaceDist = this.currentPlanet.radius + this.radius;
         const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
         this.isWalking = false;
@@ -1694,7 +2050,14 @@
       if (this.mouseIdle) return;
       let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
       let downDir = new Vector2(0, 1);
-      if (planet) downDir = planet.pos.subtract(this.pos).normalize();
+      if (planet) {
+        if (planet.isRoundedRect) {
+          const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+          downDir = surface.normal.clone().multiply(-1);
+        } else {
+          downDir = planet.pos.subtract(this.pos).normalize();
+        }
+      }
       const downAngle = Math.atan2(downDir.y, downDir.x);
       const orientation = downAngle - Math.PI / 2;
       const cam = state.camera || { x: 0, y: 0 };
@@ -1710,7 +2073,7 @@
       this.facingDirection = projection >= 0 ? 1 : -1;
     }
     // ----------------------------
-    // BOOT DRAW HELPER (maze / platform / death modes)
+    // BOOT DRAW HELPER (platform / death modes)
     // ----------------------------
     drawBoot(ctx) {
       const sprite = this.scaledBootCanvas;
@@ -1724,7 +2087,7 @@
       );
     }
     // ----------------------------
-    // FULL BODY DRAW HELPERS (main planet-surface / space mode)
+    // FULL BODY DRAW HELPERS (planet-surface/space mode AND maze mode)
     // Ported from the standalone astronaut prototype: each limb has a
     // fixed offset from the rig's origin (rotated by `orientation`, the
     // same "up is away from the planet" angle already computed by the
@@ -1763,21 +2126,29 @@
       const s = this.bodyScale;
       const cosO = Math.cos(orientation);
       const sinO = Math.sin(orientation);
-      const walkAngle = this.onSurface && this.isWalking ? Math.sin(this.walkTime) * 0.6 : 0;
+      const inMaze = this.mode === "maze";
+      const mazeRecentlyMoved = inMaze && Date.now() - this.lastMoveTime < this.mazeMoveIdleThreshold;
+      const walkAngle = mazeRecentlyMoved || this.onSurface && this.isWalking ? Math.sin(this.walkTime) * 0.6 : 0;
       const dirSign = this.facingDirection < 0 ? -1 : 1;
       let leftBootAngle = walkAngle;
       let rightBootAngle = -walkAngle;
-      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
       let leftArmAngle, rightArmAngle;
-      if (this.mouseIdle) {
-        const swayAngle = this.onSurface && this.isWalking ? walkAngle * this.armSwingScale : Math.sin(Date.now() * 15e-4) * 0.15;
+      if (inMaze) {
+        const swayAngle = walkAngle * this.armSwingScale;
         leftArmAngle = swayAngle;
         rightArmAngle = swayAngle;
       } else {
-        leftArmAngle = aimAngle;
-        rightArmAngle = walkAngle * this.armSwingScale;
+        const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+        if (this.mouseIdle) {
+          const swayAngle = this.onSurface && this.isWalking ? walkAngle * this.armSwingScale : Math.sin(Date.now() * 15e-4) * 0.15;
+          leftArmAngle = swayAngle;
+          rightArmAngle = swayAngle;
+        } else {
+          leftArmAngle = aimAngle;
+          rightArmAngle = walkAngle * this.armSwingScale;
+        }
       }
-      if (!this.onSurface) {
+      if (!inMaze && !this.onSurface) {
         leftBootAngle = -0.7;
         rightBootAngle = 0.7;
       }
@@ -1804,8 +2175,8 @@
         ctx.save();
         const headWX = -cfg.headY * sinO;
         const headWY = cfg.headY * cosO;
-        const headBob = this.onSurface && this.isWalking ? Math.sin(this.walkTime * 2) * 0.03 : 0;
-        const headLookTilt = this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+        const headBob = mazeRecentlyMoved || this.onSurface && this.isWalking ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+        const headLookTilt = inMaze || this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
         const headTilt = headBob + headLookTilt;
         ctx.translate(originPos.x + headWX * s, originPos.y + headWY * s);
         ctx.rotate(orientation + headTilt);
@@ -1841,6 +2212,11 @@
         scale = this.teleportScale;
         glow = this.teleportGlow;
       }
+      ctx.save();
+      if (this.isInvincible()) {
+        const blink = Math.floor(Date.now() / 100) % 2 === 0;
+        ctx.globalAlpha = blink ? 1 : 0.3;
+      }
       if (this.mode === "platform") {
         const platformScale = 0.4;
         ctx.save();
@@ -1849,44 +2225,47 @@
         if (this.platformVel.x < 0) ctx.scale(-1, 1);
         this.drawBoot(ctx);
         ctx.restore();
-        return;
-      }
-      if (this.mode == "maze") {
-        const mazeScale = 0.4;
-        ctx.save();
-        ctx.translate(this.pos.x, this.pos.y);
-        if (this.isTeleporting) {
-          ctx.shadowColor = "yellow";
-          ctx.shadowBlur = 40 * glow;
-        }
-        const rot = Math.atan2(this.mazeDir.y, this.mazeDir.x);
-        ctx.rotate(rot);
-        ctx.scale(scale * mazeScale, scale * mazeScale);
-        this.drawBoot(ctx);
-        ctx.shadowBlur = 0;
         ctx.restore();
         return;
       }
-      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-      let downDir = new Vector2(0, 1);
-      if (planet) downDir = planet.pos.subtract(this.pos).normalize();
-      const downAngle = Math.atan2(downDir.y, downDir.x);
-      const orientation = downAngle - Math.PI / 2;
-      const outwardDir = downDir.multiply(-1);
-      const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+      let orientation;
+      let visualPos;
+      let modeScale = 1;
+      if (this.mode === "maze") {
+        orientation = 0;
+        visualPos = this.pos;
+        modeScale = this.mazeBodyScale;
+      } else {
+        let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+        let downDir = new Vector2(0, 1);
+        if (planet) {
+          if (planet.isRoundedRect) {
+            const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+            downDir = surface.normal.clone().multiply(-1);
+          } else {
+            downDir = planet.pos.subtract(this.pos).normalize();
+          }
+        }
+        const downAngle = Math.atan2(downDir.y, downDir.x);
+        orientation = downAngle - Math.PI / 2;
+        const outwardDir = downDir.multiply(-1);
+        visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+      }
       ctx.save();
       if (this.isTeleporting) {
         ctx.shadowColor = "yellow";
         ctx.shadowBlur = 40 * glow;
       }
       const dirSign = this.facingDirection < 0 ? -1 : 1;
+      const totalScale = scale * modeScale;
       ctx.translate(this.pos.x, this.pos.y);
       ctx.rotate(orientation);
-      ctx.scale(dirSign * scale, scale);
+      ctx.scale(dirSign * totalScale, totalScale);
       ctx.rotate(-orientation);
       ctx.translate(-this.pos.x, -this.pos.y);
       this.drawFullBody(ctx, orientation, visualPos);
       ctx.shadowBlur = 0;
+      ctx.restore();
       ctx.restore();
     }
   };
@@ -2075,14 +2454,27 @@
       this.angle = 0;
       this.radius = COIN_RADIUS;
       this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
+      this.orbitOffset = COIN_ORBIT_OFFSET;
+      this.arcPos = planet.isRoundedRect ? Math.random() * planet.getPerimeter() : 0;
+      this.arcSpeed = (Math.random() - 0.5) * 2;
       this.updatePosition();
     }
     updatePosition() {
-      this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
-      this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+      if (this.planet.isRoundedRect) {
+        const world = this.planet.worldPointAtArcPosition(this.arcPos, this.orbitOffset);
+        this.pos.x = world.point.x;
+        this.pos.y = world.point.y;
+      } else {
+        this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
+        this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+      }
     }
     update() {
-      this.angle += this.angularSpeed;
+      if (this.planet.isRoundedRect) {
+        this.arcPos += this.arcSpeed;
+      } else {
+        this.angle += this.angularSpeed;
+      }
       this.updatePosition();
     }
     draw() {
@@ -2385,18 +2777,40 @@
       const dominant = this.findDominantPlanet(entity.pos);
       if (dominant) {
         entity.lastInfluencePlanet = dominant;
-        const dir = dominant.pos.subtract(entity.pos).normalize();
+        let dir;
+        if (dominant.isRoundedRect) {
+          const surface = dominant.nearestSurfacePoint(entity.pos.x, entity.pos.y);
+          dir = surface.distance > 1e-6 ? new Vector2(surface.point.x - entity.pos.x, surface.point.y - entity.pos.y).normalize() : surface.normal.clone().multiply(-1);
+        } else {
+          dir = dominant.pos.subtract(entity.pos).normalize();
+        }
         let grav = entity.GRAVITY_STRENGTH || 0.35;
         if (entity.isGroundPounding) grav *= entity.GROUND_POUND_GRAV_MULTIPLIER || 3;
         entity.vel.add(dir.multiply(grav));
       }
     }
+    // For rect planets, "distance" is measured to the nearest SURFACE
+    // point (not the center) — otherwise gravity range/direction near a
+    // wide, non-circular shape would feel wrong (e.g. pulling toward the
+    // center from far off to the side instead of straight down). Compared
+    // against a plain circle's center-distance when picking the closest
+    // candidate across mixed planet types — not perfectly apples-to-
+    // apples, but both represent "how close/urgent this planet's gravity
+    // is" in their own natural terms, and it's a reasonable simplification
+    // given how large this feature already is.
     findDominantPlanet(pos) {
       let closest = null;
       let minDist = Infinity;
       for (const planet of this.planetoids) {
-        const dist = pos.subtract(planet.pos).length();
-        if (dist < planet.influenceRadius && dist < minDist) {
+        let dist, withinRange;
+        if (planet.isRoundedRect) {
+          dist = planet.distanceToSurface(pos.x, pos.y);
+          withinRange = dist < INFLUENCE_PADDING;
+        } else {
+          dist = pos.subtract(planet.pos).length();
+          withinRange = dist < planet.influenceRadius;
+        }
+        if (withinRange && dist < minDist) {
           minDist = dist;
           closest = planet;
         }
@@ -2407,6 +2821,17 @@
 
   // js/systems/CollisionSystem.js
   var CollisionSystem = class {
+    // Shared helper: distance from a circle (pos, radius) to a planet's
+    // true surface — nearestSurfacePoint for rect planets, plain
+    // center-distance-minus-radius for circular ones. Used everywhere a
+    // planet might be either shape, so each collision method doesn't need
+    // its own copy of this branch.
+    distanceToPlanetSurface(pos, planet) {
+      if (planet.isRoundedRect) {
+        return planet.distanceToSurface(pos.x, pos.y);
+      }
+      return pos.subtract(planet.pos).length() - planet.radius;
+    }
     handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = "radius", radiusProp2 = "radius", massProp1 = "mass", massProp2 = "mass") {
       for (let i = 0; i < entities1.length; i++) {
         for (let j = entities1 === entities2 ? i + 1 : 0; j < entities2.length; j++) {
@@ -2446,6 +2871,26 @@
       }
       if (player.onSurface) return;
       for (const planet of state.planetoids.filter((p) => !p.isSpikey)) {
+        if (planet.isRoundedRect) {
+          const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
+          if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
+            player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+            player.onSurface = true;
+            player.currentPlanet = planet;
+            player.lastInfluencePlanet = planet;
+            player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+            const impactVel = player.vel.clone();
+            player.vel = new Vector2(0, 0);
+            if (player.isGroundPounding) {
+              player.isGroundPounding = false;
+              const pushDir = surface.normal.clone().multiply(-1);
+              planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+              createParticles(player.pos, 20);
+            }
+            return;
+          }
+          continue;
+        }
         const offset = player.pos.subtract(planet.pos);
         const dist = offset.length();
         const surfaceDist = planet.radius + PLAYER_RADIUS;
@@ -2503,8 +2948,8 @@
       const toBreak = /* @__PURE__ */ new Set();
       for (let p of planetoids) {
         for (let a of asteroids) {
-          const dist = p.pos.subtract(a.pos).length();
-          if (dist < p.radius + a.radius) {
+          const dist = this.distanceToPlanetSurface(a.pos, p);
+          if (dist < a.radius) {
             toBreak.add(a);
           }
         }
@@ -2542,8 +2987,8 @@
         }
         if (hit) continue;
         for (const p of planetoids) {
-          const dist = f.pos.subtract(p.pos).length();
-          if (dist < f.radius + p.radius) {
+          const dist = this.distanceToPlanetSurface(f.pos, p);
+          if (dist < f.radius) {
             hitFireballs.add(f);
             planetHits.push({ fireball: f, planet: p });
             break;
@@ -2551,6 +2996,20 @@
         }
       }
       return { hitFireballs, toBreakAsteroids, planetHits };
+    }
+    // Maze ghosts track grid coordinates (mazeCol/mazeRow), same as the
+    // player does while in the maze — so this is a tile match, not a
+    // distance check. Any death this triggers goes through
+    // player.startDeath(), which already handles the invincibility
+    // window on its own, so no special-casing is needed here.
+    handlePlayerMazeGhostCollisions(player, ghosts) {
+      if (!ghosts) return;
+      for (const g of ghosts) {
+        if (player.mazeCol === g.mazeCol && player.mazeRow === g.mazeRow) {
+          player.startDeath();
+          return;
+        }
+      }
     }
   };
 
@@ -2626,8 +3085,16 @@
   state.ctx = state.canvas.getContext("2d");
   state.canvas.width = window.innerWidth;
   state.canvas.height = window.innerHeight;
-  state.sceneWidth = state.canvas.width * 2;
-  state.sceneHeight = state.canvas.height * 2;
+  var CELL_SIZE = 3e3;
+  var GRID_SIZE = 20;
+  var CENTER_CELL = { col: 10, row: 10 };
+  var CELL_CHECK_INTERVAL = 15;
+  state.sceneWidth = CELL_SIZE * GRID_SIZE;
+  state.sceneHeight = CELL_SIZE * GRID_SIZE;
+  var PLANETOIDS_PER_CELL = 10;
+  var SPIKEY_PER_CELL = 10;
+  var ASTEROIDS_PER_CELL = 10;
+  var MAX_ENEMIES_PER_CELL = 5;
   var CHARACTER_IMAGE_SOURCES = {
     body: "img/body.png",
     head: "img/head.png",
@@ -2683,18 +3150,33 @@
   var ZOOM_MAX = 2.5;
   state.zoomMax = ZOOM_MAX;
   var ZOOM_STEP_PER_FRAME = 0.02;
+  state.zoomTarget = null;
+  state.preMazeZoom = state.zoom;
+  var previousPlayerMode = null;
+  var ZOOM_EASE_RATE = 0.06;
+  var ZOOM_EASE_SNAP_THRESHOLD = 0.01;
   var FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
-  state.stars = [];
-  for (let i = 0; i < STAR_COUNT; i++) {
-    state.stars.push({
-      x: Math.random() * state.sceneWidth,
-      y: Math.random() * state.sceneHeight,
-      size: Math.random() * 2 + 1
-    });
+  var STAR_TILE_SIZE = 2e3;
+  state.starTileSize = STAR_TILE_SIZE;
+  state.starCanvas = document.createElement("canvas");
+  state.starCanvas.width = STAR_TILE_SIZE;
+  state.starCanvas.height = STAR_TILE_SIZE;
+  {
+    const starCtx = state.starCanvas.getContext("2d");
+    starCtx.fillStyle = "white";
+    for (let i = 0; i < STAR_COUNT; i++) {
+      const x = Math.random() * STAR_TILE_SIZE;
+      const y = Math.random() * STAR_TILE_SIZE;
+      const size = Math.random() * 2 + 1;
+      starCtx.beginPath();
+      starCtx.arc(x, y, size, 0, Math.PI * 2);
+      starCtx.fill();
+    }
   }
   var gravitySystem;
   var collisionSystem = new CollisionSystem();
   var aiSystem = new AISystem();
+  var cellCheckCounter = 0;
   window.addEventListener("keydown", (e) => {
     state.keys[e.key] = true;
     if (e.key === " ") {
@@ -2724,37 +3206,140 @@
   window.addEventListener("keyup", (e) => {
     state.keys[e.key] = false;
   });
-  function initGame() {
-    state.starCanvas = document.createElement("canvas");
-    state.starCanvas.width = state.sceneWidth;
-    state.starCanvas.height = state.sceneHeight;
-    const starCtx = state.starCanvas.getContext("2d");
-    starCtx.fillStyle = "white";
-    state.stars.forEach((star) => {
-      starCtx.beginPath();
-      starCtx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
-      starCtx.fill();
-    });
-    state.planetoids = [];
-    for (let i = 0; i < 10; i++) {
-      const radius = 60 + Math.random() * 40;
-      const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-      const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
+  function cellCoordFor(worldX, worldY) {
+    return {
+      col: Math.floor(worldX / CELL_SIZE),
+      row: Math.floor(worldY / CELL_SIZE)
+    };
+  }
+  function cellKey(col, row) {
+    return `${col},${row}`;
+  }
+  function generateCell(col, row) {
+    const key = cellKey(col, row);
+    if (state.activeCells.has(key)) return [];
+    state.activeCells.add(key);
+    const originX = col * CELL_SIZE;
+    const originY = row * CELL_SIZE;
+    const regularPlanetoids = [];
+    for (let i = 0; i < PLANETOIDS_PER_CELL; i++) {
+      const radius = 30 + Math.random() * 40;
+      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
       const color = planetColors[Math.floor(Math.random() * planetColors.length)];
-      state.planetoids.push(new Planetoid(x, y, radius, color));
+      const p = new Planetoid(x, y, radius, color);
+      p.createOffscreen();
+      state.planetoids.push(p);
+      regularPlanetoids.push(p);
     }
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < SPIKEY_PER_CELL; i++) {
       const radius = 25 + Math.random() * 15;
-      const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-      const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
-      state.planetoids.push(new SpikeyPlanetoid(x, y, radius));
+      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const p = new SpikeyPlanetoid(x, y, radius);
+      p.createOffscreen();
+      state.planetoids.push(p);
     }
-    state.mazePlanet = new BeamPlanetoid(state.sceneWidth * 0.55, state.sceneHeight * 0.45, 250, "#8A2BE2", "rgba(255,0,255,1)");
+    for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
+      const radius = 20 + Math.random() * 25;
+      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      state.asteroids.push(new Asteroid(x, y, radius));
+    }
+    regularPlanetoids.forEach((planet) => {
+      const numCoins = 4 + Math.floor(planet.radius / 10);
+      for (let i = 0; i < numCoins; i++) {
+        const coin = new Coin(planet);
+        coin.angle = i / numCoins * Math.PI * 2 + Math.random() * 0.2;
+        state.coins.push(coin);
+      }
+    });
+    const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, regularPlanetoids.length);
+    for (let i = 0; i < numEnemies; i++) {
+      const planet = regularPlanetoids[Math.floor(Math.random() * regularPlanetoids.length)];
+      const color = enemyColors[i % enemyColors.length];
+      state.enemies.push(new SpaceGhost(planet, color));
+    }
+    return regularPlanetoids;
+  }
+  function cullDistantObjects(activeCellKeys) {
+    for (let i = state.planetoids.length - 1; i >= 0; i--) {
+      const p = state.planetoids[i];
+      if (p.isPermanent) continue;
+      const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
+      if (!activeCellKeys.has(cellKey(col, row))) {
+        state.planetoids.splice(i, 1);
+      }
+    }
+    const survivingPlanetoids = new Set(state.planetoids);
+    state.asteroids = state.asteroids.filter((a) => {
+      const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+    state.coins = state.coins.filter((c) => {
+      if (!c.planet || !survivingPlanetoids.has(c.planet)) return false;
+      const { col, row } = cellCoordFor(c.planet.pos.x, c.planet.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+    state.enemies = state.enemies.filter((e) => {
+      if (e.onSurface && e.planet) {
+        if (!survivingPlanetoids.has(e.planet)) return false;
+        const { col: col2, row: row2 } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
+        return activeCellKeys.has(cellKey(col2, row2));
+      }
+      const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+  }
+  function updateActiveCells() {
+    const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
+    const activeCellKeys = /* @__PURE__ */ new Set();
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        const col = playerCell.col + dCol;
+        const row = playerCell.row + dRow;
+        if (col < 0 || col >= GRID_SIZE || row < 0 || row >= GRID_SIZE) continue;
+        const key = cellKey(col, row);
+        activeCellKeys.add(key);
+        generateCell(col, row);
+      }
+    }
+    for (const key of Array.from(state.activeCells)) {
+      if (!activeCellKeys.has(key)) {
+        state.activeCells.delete(key);
+      }
+    }
+    cullDistantObjects(activeCellKeys);
+  }
+  function initGame() {
+    state.planetoids = [];
+    state.asteroids = [];
+    state.coins = [];
+    state.enemies = [];
+    state.activeCells = /* @__PURE__ */ new Set();
+    const centerOriginX = CENTER_CELL.col * CELL_SIZE;
+    const centerOriginY = CENTER_CELL.row * CELL_SIZE;
+    state.mazePlanet = new BeamPlanetoid(centerOriginX + CELL_SIZE * 0.55, centerOriginY + CELL_SIZE * 0.45, 250, "#8A2BE2", "rgba(255,0,255,1)");
     state.mazePlanet.interior = new MazeInterior(state.mazePlanet);
+    state.mazePlanet.isPermanent = true;
     state.planetoids.push(state.mazePlanet);
-    state.platformPlanet = new BeamPlanetoid(state.sceneWidth * 0.3, state.sceneHeight * 0.6, 250, "#55aa55", "rgba(57,255,20,1)");
+    state.platformPlanet = new BeamPlanetoid(centerOriginX + CELL_SIZE * 0.3, centerOriginY + CELL_SIZE * 0.6, 250, "#55aa55", "rgba(57,255,20,1)");
     state.platformPlanet.interior = new PlatformInterior(state.platformPlanet);
+    state.platformPlanet.isPermanent = true;
     state.planetoids.push(state.platformPlanet);
+    state.rectPlanet = new RoundedRectPlanetoid(
+      centerOriginX + CELL_SIZE * 0.75,
+      centerOriginY + CELL_SIZE * 0.7,
+      150,
+      90,
+      35,
+      "#cc8844"
+    );
+    state.rectPlanet.isPermanent = true;
+    state.planetoids.push(state.rectPlanet);
+    state.mazePlanet.createOffscreen();
+    state.platformPlanet.createOffscreen();
+    state.rectPlanet.createOffscreen();
     const interior = state.platformPlanet.interior;
     const tile = interior.tileSize;
     interior.blobs = [
@@ -2782,57 +3367,21 @@
       new MazeGhost(state.mazePlanet.interior, pos1.col, pos1.row, "red"),
       new MazeGhost(state.mazePlanet.interior, pos2.col, pos2.row, "pink")
     ];
-    state.asteroids = [];
-    for (let i = 0; i < 60; i++) {
-      const radius = 40 + Math.random() * 25;
-      const x = radius + Math.random() * (state.sceneWidth - 2 * radius);
-      const y = radius + Math.random() * (state.sceneHeight - 2 * radius);
-      state.asteroids.push(new Asteroid(x, y, radius));
-    }
-    const regularPlanets = state.planetoids.filter((p) => !p.isSpikey && p !== state.mazePlanet && p !== state.platformPlanet);
-    const startingPlanet = regularPlanets[Math.floor(Math.random() * regularPlanets.length)];
+    const centerRegulars = generateCell(CENTER_CELL.col, CENTER_CELL.row);
+    const startingPlanet = centerRegulars[Math.floor(Math.random() * centerRegulars.length)];
     const surfaceDist = startingPlanet.radius + PLAYER_RADIUS;
     state.player = new Player(startingPlanet.pos.x, startingPlanet.pos.y - surfaceDist);
     state.player.onSurface = true;
     state.player.currentPlanet = startingPlanet;
     state.player.lastInfluencePlanet = startingPlanet;
     state.player.angle = Math.atan2(state.player.pos.y - startingPlanet.pos.y, state.player.pos.x - startingPlanet.pos.x);
-    state.enemies = [];
-    const numEnemies = (2 + state.level) * 2;
-    for (let i = 0; i < numEnemies; i++) {
-      let planetIndex = Math.floor(Math.random() * regularPlanets.length);
-      let selectedPlanet = regularPlanets[planetIndex];
-      while (selectedPlanet === startingPlanet) {
-        planetIndex = Math.floor(Math.random() * regularPlanets.length);
-        selectedPlanet = regularPlanets[planetIndex];
-      }
-      const color = enemyColors[i % enemyColors.length];
-      state.enemies.push(new SpaceGhost(selectedPlanet, color));
-    }
-    for (let a of state.asteroids) {
-      let dist = a.pos.subtract(state.player.pos).length();
-      while (dist < 200) {
-        a.pos.x = a.radius + Math.random() * (state.sceneWidth - 2 * a.radius);
-        a.pos.y = a.radius + Math.random() * (state.sceneHeight - 2 * a.radius);
-        dist = a.pos.subtract(state.player.pos).length();
-      }
-    }
-    state.coins = [];
-    regularPlanets.forEach((planet) => {
-      const numCoins = 4 + Math.floor(planet.radius / 10);
-      for (let i = 0; i < numCoins; i++) {
-        const coin = new Coin(planet);
-        coin.angle = i / numCoins * Math.PI * 2 + Math.random() * 0.2;
-        state.coins.push(coin);
-      }
-    });
-    state.planetoids.forEach((p) => p.createOffscreen());
+    state.player.mode = "space";
+    updateActiveCells();
     state.particles = [];
     state.fireballs = [];
     state.explosions = [];
     state.gameOver = false;
     state.levelComplete = false;
-    state.player.mode = "space";
     state.audioManager.reset();
     gravitySystem = new GravitySystem(state.planetoids);
   }
@@ -2854,6 +3403,9 @@
       if (p.pos.y + p.radius > state.sceneHeight) {
         p.pos.y = state.sceneHeight - p.radius;
         p.vel.y = -p.vel.y;
+      }
+      if (p.isRoundedRect) {
+        p.rotationAngle += p.rotationSpeed;
       }
     }
   }
@@ -2939,6 +3491,7 @@
     aiSystem.updateEnemies(state.enemies, state.planetoids);
     if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
       aiSystem.updateInteriorGhosts(state.player.currentPlanet.interior);
+      collisionSystem.handlePlayerMazeGhostCollisions(state.player, state.player.currentPlanet.interior.ghosts);
     }
     if (state.player.mode === "platform" && state.platformPlanet?.interior?.blobs) {
       state.platformPlanet.interior.blobs.forEach((b) => b.update());
@@ -2967,14 +3520,34 @@
     if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
       state.player.checkMazeDots();
     }
-    if (state.coins.length === 0 && state.player.mode != "maze") {
-      state.levelComplete = true;
+    cellCheckCounter++;
+    if (cellCheckCounter >= CELL_CHECK_INTERVAL) {
+      cellCheckCounter = 0;
+      updateActiveCells();
     }
+    if (state.player.mode === "maze" && previousPlayerMode !== "maze") {
+      state.preMazeZoom = state.zoom;
+      state.zoomTarget = ZOOM_MAX;
+    } else if (previousPlayerMode === "maze" && state.player.mode !== "maze") {
+      state.zoomTarget = state.preMazeZoom;
+    }
+    previousPlayerMode = state.player.mode;
     if (state.keys["+"] || state.keys["="]) {
       state.zoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME);
+      state.zoomTarget = null;
     }
     if (state.keys["-"] || state.keys["_"]) {
       state.zoom = Math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME);
+      state.zoomTarget = null;
+    }
+    if (state.zoomTarget !== null) {
+      const diff = state.zoomTarget - state.zoom;
+      if (Math.abs(diff) < ZOOM_EASE_SNAP_THRESHOLD) {
+        state.zoom = state.zoomTarget;
+        state.zoomTarget = null;
+      } else {
+        state.zoom += diff * ZOOM_EASE_RATE;
+      }
     }
     const zoom = state.zoom;
     const visibleWidth = state.canvas.width / zoom;
@@ -2990,7 +3563,18 @@
     state.ctx.save();
     state.ctx.scale(zoom, zoom);
     state.ctx.translate(-camera.x, -camera.y);
-    state.ctx.drawImage(state.starCanvas, 0, 0);
+    {
+      const ts = state.starTileSize;
+      const startX = Math.floor(camera.x / ts) * ts;
+      const startY = Math.floor(camera.y / ts) * ts;
+      const endX = camera.x + visibleWidth;
+      const endY = camera.y + visibleHeight;
+      for (let ty = startY; ty < endY; ty += ts) {
+        for (let tx = startX; tx < endX; tx += ts) {
+          state.ctx.drawImage(state.starCanvas, tx, ty);
+        }
+      }
+    }
     state.planetoids.forEach((p) => p.draw());
     state.asteroids.forEach((a) => a.draw());
     state.player.draw();
@@ -3006,6 +3590,8 @@
     state.ctx.fillText(`Level ${state.level} - Score: ${state.score}`, 20, 40);
     state.ctx.fillText(`FPS: ${state.fps.toFixed(1)}`, 20, 70);
     state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
+    const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
+    state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
     requestAnimationFrame(gameLoop);
   }
 })();

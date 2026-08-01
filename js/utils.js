@@ -1,6 +1,6 @@
 // js/utils.js
 import { state } from './state.js';
-import { STAR_COUNT, PLAYER_RADIUS } from './constants.js';
+import { PLAYER_RADIUS } from './constants.js';
 import { Vector2 } from './vector2.js';
 import { Particle } from './entities/Particle.js';
 
@@ -45,21 +45,16 @@ export function createDeathParticles(atPos, count = 30) {
   }
 }
 
-// Resize listener
+// Resize listener. World size (state.sceneWidth/sceneHeight) is now a
+// FIXED constant tied to the cell grid (see game.js), independent of
+// the browser window — so resizing only ever touches the canvas'
+// pixel dimensions, never the world itself. The starfield is a small
+// tileable pattern (see game.js) rather than one canvas sized to the
+// whole world, so it doesn't need regenerating on resize either.
 export function initResizeListener() {
   window.addEventListener('resize', () => {
     state.canvas.width = window.innerWidth;
     state.canvas.height = window.innerHeight;
-    state.sceneWidth = state.canvas.width * 2;
-    state.sceneHeight = state.canvas.height * 2;
-    state.stars.length = 0;
-    for (let i = 0; i < STAR_COUNT; i++) {
-      state.stars.push({
-        x: Math.random() * state.sceneWidth,
-        y: Math.random() * state.sceneHeight,
-        size: Math.random() * 2 + 1
-      });
-    }
   });
 }
 
