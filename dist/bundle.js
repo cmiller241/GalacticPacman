@@ -3175,7 +3175,194 @@
     }
   };
 
-  // js/ui/MiniMap.js
+  // js/world/CellManifest.js
+  var BELT_START = { col: 0, row: 15 };
+  var BELT_END = { col: 15, row: 20 };
+  var BELT_THICKNESS_CELLS = 0.75;
+  var BELT_SPEED = 1.5;
+  var BELT_RADIUS_MIN = 30;
+  var BELT_RADIUS_MAX = 70;
+  var BELT_COLOR = "#dcc48a";
+  var BELT_SPAWN_INTERVAL_MS = 100;
+  var BELT_MAX_TOTAL_PLANETOIDS = 500;
+  var BELT_HIDE_MARGIN = 350;
+  var BELT_HIDE_STEP = 150;
+  var BELT_HIDE_MAX_STEPS = 35;
+  var BELT_EXTRA_STAGGER_CELLS = 0.4;
+  var BELT_CULL_RADIUS_CELLS = 3;
+  var cellSizeRef = 1;
+  var beltDirWorld = null;
+  var beltStartWorld = null;
+  function initCellManifest(cellSize) {
+    cellSizeRef = cellSize;
+    beltStartWorld = { x: BELT_START.col * cellSize, y: BELT_START.row * cellSize };
+    const endWorld = { x: BELT_END.col * cellSize, y: BELT_END.row * cellSize };
+    beltDirWorld = new Vector2(endWorld.x - beltStartWorld.x, endWorld.y - beltStartWorld.y).normalize();
+  }
+  function distancePointToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lengthSq = dx * dx + dy * dy;
+    if (lengthSq === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  }
+  function isBeltCell(col, row) {
+    return distancePointToSegment(col, row, BELT_START.col, BELT_START.row, BELT_END.col, BELT_END.row) <= BELT_THICKNESS_CELLS;
+  }
+  function isEmptyBufferCell(col, row) {
+    if (isBeltCell(col, row)) return false;
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        if (dRow === 0 && dCol === 0) continue;
+        if (isBeltCell(col + dCol, row + dRow)) return true;
+      }
+    }
+    return false;
+  }
+  function getCellManifest(col, row) {
+    if (isBeltCell(col, row)) return { type: "belt" };
+    if (isEmptyBufferCell(col, row)) return { type: "empty" };
+    return null;
+  }
+  function isPositionHiddenFromCamera(x, y) {
+    const cam = state.camera;
+    const zoom = state.zoom;
+    const canvas = state.canvas;
+    if (!cam || !zoom || !canvas) return true;
+    const visibleWidth = canvas.width / zoom;
+    const visibleHeight = canvas.height / zoom;
+    return x < cam.x - BELT_HIDE_MARGIN || x > cam.x + visibleWidth + BELT_HIDE_MARGIN || y < cam.y - BELT_HIDE_MARGIN || y > cam.y + visibleHeight + BELT_HIDE_MARGIN;
+  }
+  function beltProgress(worldX, worldY) {
+    const dx = worldX - beltStartWorld.x, dy = worldY - beltStartWorld.y;
+    return dx * beltDirWorld.x + dy * beltDirWorld.y;
+  }
+  function shouldKeepBeltPlanetoid(planetoid, playerWorldX, playerWorldY) {
+    const dx = planetoid.pos.x - playerWorldX;
+    const dy = planetoid.pos.y - playerWorldY;
+    const maxDist = cellSizeRef * BELT_CULL_RADIUS_CELLS;
+    return dx * dx + dy * dy <= maxDist * maxDist;
+  }
+  function projectOntoBeltLine(x, y) {
+    const dx = x - beltStartWorld.x, dy = y - beltStartWorld.y;
+    const t = dx * beltDirWorld.x + dy * beltDirWorld.y;
+    return {
+      x: beltStartWorld.x + beltDirWorld.x * t,
+      y: beltStartWorld.y + beltDirWorld.y * t
+    };
+  }
+  function spawnBeltPlanetoidNear(refX, refY) {
+    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
+    const perpX = -beltDirWorld.y, perpY = beltDirWorld.x;
+    const jitter = (Math.random() * 2 - 1) * cellSizeRef * BELT_THICKNESS_CELLS;
+    let x = refX + perpX * jitter;
+    let y = refY + perpY * jitter;
+    let steps = 0;
+    while (!isPositionHiddenFromCamera(x, y) && steps < BELT_HIDE_MAX_STEPS) {
+      x -= beltDirWorld.x * BELT_HIDE_STEP;
+      y -= beltDirWorld.y * BELT_HIDE_STEP;
+      steps++;
+    }
+    const extraStagger = Math.random() * cellSizeRef * BELT_EXTRA_STAGGER_CELLS;
+    x -= beltDirWorld.x * extraStagger;
+    y -= beltDirWorld.y * extraStagger;
+    const p = new Planetoid(x, y, radius, BELT_COLOR);
+    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
+    p.isBeltPlanetoid = true;
+    p.createOffscreen();
+    state.planetoids.push(p);
+    return p;
+  }
+  function generateSpecialCell(col, row, manifest) {
+    if (manifest.type === "belt") {
+      establishBeltCell(col, row);
+    }
+  }
+  var lastBeltSpawnTime = 0;
+  var lastPlayerBeltProgress = null;
+  var BELT_ESTABLISH_COUNT = 40;
+  var BELT_SPAWN_SPACING = 300;
+  function isPlayerNearBeltCell(playerWorldX, playerWorldY) {
+    const playerCol = Math.floor(playerWorldX / cellSizeRef);
+    const playerRow = Math.floor(playerWorldY / cellSizeRef);
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        if (getCellManifest(playerCol + dCol, playerRow + dRow)) return true;
+      }
+    }
+    return false;
+  }
+  function establishBeltCell(col, row) {
+    let totalBeltCount = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) totalBeltCount++;
+    }
+    const originX = col * cellSizeRef;
+    const originY = row * cellSizeRef;
+    for (let i = 0; i < BELT_ESTABLISH_COUNT; i++) {
+      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
+      spawnBeltPlanetoidInCell(originX, originY);
+      totalBeltCount++;
+    }
+  }
+  function spawnBeltPlanetoidInCell(originX, originY) {
+    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
+    const x = originX + radius + Math.random() * (cellSizeRef - 2 * radius);
+    const y = originY + radius + Math.random() * (cellSizeRef - 2 * radius);
+    const p = new Planetoid(x, y, radius, BELT_COLOR);
+    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
+    p.isBeltPlanetoid = true;
+    p.createOffscreen();
+    state.planetoids.push(p);
+    return p;
+  }
+  function updateBeltSpawning(playerWorldX, playerWorldY) {
+    if (!beltDirWorld || !beltStartWorld) return;
+    const nearNow = isPlayerNearBeltCell(playerWorldX, playerWorldY);
+    if (!nearNow) {
+      lastPlayerBeltProgress = null;
+      return;
+    }
+    const now = Date.now();
+    if (now - lastBeltSpawnTime < BELT_SPAWN_INTERVAL_MS) return;
+    lastBeltSpawnTime = now;
+    const currentProgress = beltProgress(playerWorldX, playerWorldY);
+    let spawnsNeeded = 1;
+    if (lastPlayerBeltProgress !== null) {
+      const distanceTraveled = Math.abs(currentProgress - lastPlayerBeltProgress);
+      spawnsNeeded = Math.max(1, Math.ceil(distanceTraveled / BELT_SPAWN_SPACING));
+    }
+    lastPlayerBeltProgress = currentProgress;
+    let totalBeltCount = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) totalBeltCount++;
+    }
+    const projected = projectOntoBeltLine(playerWorldX, playerWorldY);
+    for (let i = 0; i < spawnsNeeded; i++) {
+      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
+      spawnBeltPlanetoidNear(projected.x, projected.y);
+      totalBeltCount++;
+    }
+  }
+  function resetBeltState() {
+    lastBeltSpawnTime = 0;
+    lastPlayerBeltProgress = null;
+  }
+  function getBeltPlanetoidCount() {
+    let count = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) count++;
+    }
+    return count;
+  }
+  function getCellKindLabel(col, row) {
+    const manifest = getCellManifest(col, row);
+    if (!manifest) return "normal";
+    return manifest.type;
+  }
+
+  // js/ui/Minimap.js
   var Minimap = class {
     constructor() {
       this.size = 240;
@@ -3191,6 +3378,10 @@
       this.specialColor = "#ffd23f";
       this.specialGlowColor = "rgba(255,210,63,0.5)";
       this.specialRadius = 3;
+      this.beltDotColor = "#ff4d4d";
+      this.beltDotCount = 130;
+      this.beltJitterCells = BELT_THICKNESS_CELLS * 1.8;
+      this._beltDots = null;
     }
     // Which planetoids get plotted as the yellow "special" dots. Reads
     // directly from state each call (rather than being passed in) to
@@ -3205,6 +3396,42 @@
         x: x0 + worldX / state.sceneWidth * this.size,
         y: y0 + worldY / state.sceneHeight * this.size
       };
+    }
+    // Same idea as worldToMapPoint, but for a point already expressed in
+    // CELL-space (fractional col/row) rather than world pixel coordinates
+    // — used for the belt scatter, since BELT_START/END are cell-space.
+    cellToMapPoint(col, row, x0, y0) {
+      const gridSize = state.gridSize || 20;
+      return {
+        x: x0 + col / gridSize * this.size,
+        y: y0 + row / gridSize * this.size
+      };
+    }
+    // Builds and caches the belt's scatter-dot pattern in CELL-space
+    // (not map-pixel-space), so it stays correct if this.size ever
+    // changes — each cached point is converted to map pixels fresh at
+    // draw time via cellToMapPoint.
+    buildBeltDots() {
+      const dx = BELT_END.col - BELT_START.col;
+      const dy = BELT_END.row - BELT_START.row;
+      const len = Math.hypot(dx, dy);
+      const dirX = len > 0 ? dx / len : 1;
+      const dirY = len > 0 ? dy / len : 0;
+      const perpX = -dirY, perpY = dirX;
+      const dots = [];
+      for (let i = 0; i < this.beltDotCount; i++) {
+        const t = Math.random();
+        const baseCol = BELT_START.col + dx * t;
+        const baseRow = BELT_START.row + dy * t;
+        const jitter = (Math.random() * 2 - 1) * this.beltJitterCells;
+        dots.push({
+          col: baseCol + perpX * jitter,
+          row: baseRow + perpY * jitter,
+          alpha: 0.5 + Math.random() * 0.5
+          // slight per-dot variation for visual texture
+        });
+      }
+      return dots;
     }
     drawGlowDot(ctx, x, y, radius, dotColor, glowColor) {
       ctx.beginPath();
@@ -3237,6 +3464,16 @@
         ctx.lineTo(x0 + this.size, gy);
       }
       ctx.stroke();
+      if (!this._beltDots) this._beltDots = this.buildBeltDots();
+      ctx.fillStyle = this.beltDotColor;
+      for (const dot of this._beltDots) {
+        const p = this.cellToMapPoint(dot.col, dot.row, x0, y0);
+        ctx.globalAlpha = dot.alpha;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
       for (const planet of this.getSpecialPlanets()) {
         const p = this.worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0);
         this.drawGlowDot(ctx, p.x, p.y, this.specialRadius, this.specialColor, this.specialGlowColor);
@@ -3392,11 +3629,12 @@
   state.canvas.height = window.innerHeight;
   var CELL_SIZE = 3e3;
   var GRID_SIZE = 20;
-  var CENTER_CELL = { col: 10, row: 10 };
+  var CENTER_CELL = { col: 5, row: 13 };
   var CELL_CHECK_INTERVAL = 15;
   state.sceneWidth = CELL_SIZE * GRID_SIZE;
   state.sceneHeight = CELL_SIZE * GRID_SIZE;
   state.gridSize = GRID_SIZE;
+  initCellManifest(CELL_SIZE);
   var PLANETOIDS_PER_CELL = 10;
   var SPIKEY_PER_CELL = 10;
   var ASTEROIDS_PER_CELL = 20;
@@ -3593,6 +3831,11 @@
     const key = cellKey(col, row);
     if (state.activeCells.has(key)) return [];
     state.activeCells.add(key);
+    const manifest = getCellManifest(col, row);
+    if (manifest) {
+      generateSpecialCell(col, row, manifest);
+      return [];
+    }
     const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
     generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
     return regularPlanetoids;
@@ -3601,6 +3844,12 @@
     for (let i = state.planetoids.length - 1; i >= 0; i--) {
       const p = state.planetoids[i];
       if (p.isPermanent) continue;
+      if (p.isBeltPlanetoid) {
+        if (!shouldKeepBeltPlanetoid(p, state.player.pos.x, state.player.pos.y)) {
+          state.planetoids.splice(i, 1);
+        }
+        continue;
+      }
       const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
       if (!activeCellKeys.has(cellKey(col, row))) {
         state.planetoids.splice(i, 1);
@@ -3645,6 +3894,7 @@
       }
     }
     cullDistantObjects(activeCellKeys);
+    updateBeltSpawning(state.player.pos.x, state.player.pos.y);
   }
   function initGame() {
     state.planetoids = [];
@@ -3652,6 +3902,7 @@
     state.coins = [];
     state.enemies = [];
     state.activeCells = /* @__PURE__ */ new Set();
+    resetBeltState();
     const centerOriginX = CENTER_CELL.col * CELL_SIZE;
     const centerOriginY = CENTER_CELL.row * CELL_SIZE;
     state.mazePlanet = new BeamPlanetoid(centerOriginX + CELL_SIZE * 0.55, centerOriginY + CELL_SIZE * 0.45, 250, "#8A2BE2", "rgba(255,0,255,1)");
@@ -3726,21 +3977,23 @@
   function updatePlanetoids() {
     for (const p of state.planetoids) {
       p.pos.add(p.vel);
-      if (p.pos.x - p.radius < 0) {
-        p.pos.x = p.radius;
-        p.vel.x = -p.vel.x;
-      }
-      if (p.pos.x + p.radius > state.sceneWidth) {
-        p.pos.x = state.sceneWidth - p.radius;
-        p.vel.x = -p.vel.x;
-      }
-      if (p.pos.y - p.radius < 0) {
-        p.pos.y = p.radius;
-        p.vel.y = -p.vel.y;
-      }
-      if (p.pos.y + p.radius > state.sceneHeight) {
-        p.pos.y = state.sceneHeight - p.radius;
-        p.vel.y = -p.vel.y;
+      if (!p.isBeltPlanetoid) {
+        if (p.pos.x - p.radius < 0) {
+          p.pos.x = p.radius;
+          p.vel.x = -p.vel.x;
+        }
+        if (p.pos.x + p.radius > state.sceneWidth) {
+          p.pos.x = state.sceneWidth - p.radius;
+          p.vel.x = -p.vel.x;
+        }
+        if (p.pos.y - p.radius < 0) {
+          p.pos.y = p.radius;
+          p.vel.y = -p.vel.y;
+        }
+        if (p.pos.y + p.radius > state.sceneHeight) {
+          p.pos.y = state.sceneHeight - p.radius;
+          p.vel.y = -p.vel.y;
+        }
       }
       if (p.isRoundedRect) {
         p.rotationAngle += p.rotationSpeed;
@@ -3937,6 +4190,7 @@
     state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
     const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
     state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
+    state.ctx.fillText(`Cell type: ${getCellKindLabel(playerCell.col, playerCell.row)} | Belt planetoids: ${getBeltPlanetoidCount()}`, 20, 160);
     minimap.draw();
     requestAnimationFrame(gameLoop);
   }
