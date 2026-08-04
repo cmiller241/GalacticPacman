@@ -29,7 +29,8 @@ import { CollisionSystem } from './systems/CollisionSystem.js';
 import { AISystem } from './systems/AISystem.js';
 import { AudioManager } from './AudioManager.js';
 import { angleDiff, initResizeListener, createParticles } from './utils.js';
-import { Minimap } from './ui/MiniMap.js';
+import { Minimap } from './ui/Minimap.js';
+import { initCellManifest, getCellManifest, generateSpecialCell, updateBeltSpawning, shouldKeepBeltPlanetoid, resetBeltState, getBeltPlanetoidCount, getCellKindLabel } from './world/CellManifest.js';
 import { drawPullIndicator } from './effects/PullBeam.js';
 
 // Setup canvas and ctx
@@ -51,7 +52,7 @@ state.canvas.height = window.innerHeight;
 // below.
 const CELL_SIZE = 3000; // world units per cell, both axes
 const GRID_SIZE = 20;   // 20x20 cells total
-const CENTER_CELL = { col: 10, row: 10 }; // where the permanent planets + player start live
+const CENTER_CELL = { col: 5, row: 13 }; // where the permanent planets + player start live
 const CELL_CHECK_INTERVAL = 15; // frames between generation/cull passes — doesn't need to run every frame
 
 state.sceneWidth = CELL_SIZE * GRID_SIZE;
@@ -59,6 +60,10 @@ state.sceneHeight = CELL_SIZE * GRID_SIZE;
 // Exposed so Minimap.js can draw the correct number of grid lines
 // without needing a (circular) import back into this file.
 state.gridSize = GRID_SIZE;
+// Lets CellManifest.js convert its cell-space belt coordinates into
+// world-space once CELL_SIZE is known, without it needing to import
+// (and hardcode a dependency on) this file's constants directly.
+initCellManifest(CELL_SIZE);
 
 // Per-cell density. Divided down from the original single-scene counts
 // (44 regular / 16 spikey / 24 asteroids) by roughly the 3x3 active-
@@ -371,10 +376,24 @@ function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoidPos = 
 // Normal (no-avoidance) full generation for a cell — both phases back
 // to back. Used for every cell EXCEPT the player's starting one, which
 // initGame() generates in two separate steps instead (see there).
+//
+// Checks CellManifest first — a non-null result means this cell is
+// hand-authored (e.g. part of the asteroid belt), and normal
+// procedural generation is skipped entirely for it. Special cells
+// return an empty regularPlanetoids list, since nothing currently
+// picks a player-starting-spawn from a special cell (CENTER_CELL is
+// nowhere near the belt) — worth revisiting if that ever changes.
 function generateCell(col, row) {
   const key = cellKey(col, row);
   if (state.activeCells.has(key)) return [];
   state.activeCells.add(key);
+
+  const manifest = getCellManifest(col, row);
+  if (manifest) {
+    generateSpecialCell(col, row, manifest);
+    return [];
+  }
+
   const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
   generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
   return regularPlanetoids;
@@ -391,6 +410,26 @@ function cullDistantObjects(activeCellKeys) {
   for (let i = state.planetoids.length - 1; i >= 0; i--) {
     const p = state.planetoids[i];
     if (p.isPermanent) continue;
+
+    if (p.isBeltPlanetoid) {
+      // Grid-cell membership doesn't work for belt planetoids — hiding
+      // one from camera view can require pushing it into negative/
+      // out-of-grid coordinates when the player is near the world's
+      // edge column, and no cell index out there can ever be "active."
+      // shouldKeepBeltPlanetoid measures plain distance along the
+      // belt's own direction instead, which has no concept of grid
+      // boundaries at all.
+      if (!shouldKeepBeltPlanetoid(p, state.player.pos.x, state.player.pos.y)) {
+        state.planetoids.splice(i, 1);
+      }
+      continue;
+    }
+
+    // Note: this does NOT stop non-belt content from drifting INTO
+    // belt/buffer territory over time — only from being GENERATED
+    // there in the first place (see getCellManifest / generateCell).
+    // That's intentional: drifting in is fine, it's only unwanted
+    // GENERATION inside the corridor that's the actual problem.
     const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
     if (!activeCellKeys.has(cellKey(col, row))) {
       state.planetoids.splice(i, 1);
@@ -466,6 +505,11 @@ function updateActiveCells() {
   }
 
   cullDistantObjects(activeCellKeys);
+
+  // Belt spawning: gated on actual distance to the belt (see
+  // updateBeltSpawning's own comment in CellManifest.js), so it starts
+  // filling in before the player arrives, not only once already there.
+  updateBeltSpawning(state.player.pos.x, state.player.pos.y);
 }
 
 function initGame() {
@@ -474,6 +518,7 @@ function initGame() {
   state.coins = [];
   state.enemies = [];
   state.activeCells = new Set();
+  resetBeltState(); // module-level in CellManifest.js, doesn't reset itself on restart otherwise
 
   const centerOriginX = CENTER_CELL.col * CELL_SIZE;
   const centerOriginY = CENTER_CELL.row * CELL_SIZE;
@@ -571,10 +616,18 @@ function initGame() {
 function updatePlanetoids() {
   for (const p of state.planetoids) {
     p.pos.add(p.vel);
-    if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
-    if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
-    if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
-    if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+    // Belt planetoids are exempt from the world-edge bounce: their
+    // trajectory is deliberately authored (see CellManifest.js), and
+    // the upstream spawn setback used to avoid visible pop-in can
+    // briefly place a fresh one just outside world bounds near
+    // BELT_START (col 0) — bouncing would flip its velocity and break
+    // the belt's shared direction for that one planetoid.
+    if (!p.isBeltPlanetoid) {
+      if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
+      if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
+      if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
+      if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+    }
     if (p.isRoundedRect) {
       p.rotationAngle += p.rotationSpeed;
     }
@@ -829,6 +882,7 @@ function gameLoop(timestamp) {
   state.ctx.fillText(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 100);
   const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
   state.ctx.fillText(`Cell: (${playerCell.col}, ${playerCell.row})`, 20, 130);
+  state.ctx.fillText(`Cell type: ${getCellKindLabel(playerCell.col, playerCell.row)} | Belt planetoids: ${getBeltPlanetoidCount()}`, 20, 160);
   minimap.draw();
   requestAnimationFrame(gameLoop);
 }

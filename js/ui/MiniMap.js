@@ -1,5 +1,6 @@
 // js/ui/Minimap.js
 import { state } from '../state.js';
+import { BELT_START, BELT_END, BELT_THICKNESS_CELLS } from '../world/CellManifest.js';
 
 // A fixed-position, screen-space overview of the ENTIRE world grid —
 // drawn after the camera/zoom transform is restored each frame (see
@@ -27,6 +28,23 @@ export class Minimap {
     this.specialColor = '#ffd23f';
     this.specialGlowColor = 'rgba(255,210,63,0.5)';
     this.specialRadius = 3;
+
+    // Belt visualization: a STATIC scatter of red dots along the
+    // belt's path, generated once and cached (not regenerated every
+    // frame — that would look like flickering static rather than a
+    // stable asteroid field). This is a stylized MAP representation,
+    // not a live readout of currently-generated belt planetoids —
+    // those only ever exist within the player's active 3x3 cell
+    // neighborhood at any moment, which would make the map's belt
+    // visualization flicker in and out as cells activate/deactivate.
+    this.beltDotColor = '#ff4d4d';
+    this.beltDotCount = 130;
+    // How far the scatter can jitter perpendicular to the belt's ideal
+    // line, in cell-widths — deliberately a bit wider than the actual
+    // gameplay corridor (BELT_THICKNESS_CELLS) for a natural, uneven
+    // "scattered asteroid field" look rather than a razor-straight line.
+    this.beltJitterCells = BELT_THICKNESS_CELLS * 1.8;
+    this._beltDots = null; // cache, built lazily on first draw()
   }
 
   // Which planetoids get plotted as the yellow "special" dots. Reads
@@ -43,6 +61,44 @@ export class Minimap {
       x: x0 + (worldX / state.sceneWidth) * this.size,
       y: y0 + (worldY / state.sceneHeight) * this.size
     };
+  }
+
+  // Same idea as worldToMapPoint, but for a point already expressed in
+  // CELL-space (fractional col/row) rather than world pixel coordinates
+  // — used for the belt scatter, since BELT_START/END are cell-space.
+  cellToMapPoint(col, row, x0, y0) {
+    const gridSize = state.gridSize || 20;
+    return {
+      x: x0 + (col / gridSize) * this.size,
+      y: y0 + (row / gridSize) * this.size
+    };
+  }
+
+  // Builds and caches the belt's scatter-dot pattern in CELL-space
+  // (not map-pixel-space), so it stays correct if this.size ever
+  // changes — each cached point is converted to map pixels fresh at
+  // draw time via cellToMapPoint.
+  buildBeltDots() {
+    const dx = BELT_END.col - BELT_START.col;
+    const dy = BELT_END.row - BELT_START.row;
+    const len = Math.hypot(dx, dy);
+    const dirX = len > 0 ? dx / len : 1;
+    const dirY = len > 0 ? dy / len : 0;
+    const perpX = -dirY, perpY = dirX;
+
+    const dots = [];
+    for (let i = 0; i < this.beltDotCount; i++) {
+      const t = Math.random(); // random position along the belt, not evenly spaced — reads as scatter, not a ruler
+      const baseCol = BELT_START.col + dx * t;
+      const baseRow = BELT_START.row + dy * t;
+      const jitter = (Math.random() * 2 - 1) * this.beltJitterCells;
+      dots.push({
+        col: baseCol + perpX * jitter,
+        row: baseRow + perpY * jitter,
+        alpha: 0.5 + Math.random() * 0.5 // slight per-dot variation for visual texture
+      });
+    }
+    return dots;
   }
 
   drawGlowDot(ctx, x, y, radius, dotColor, glowColor) {
@@ -86,6 +142,19 @@ export class Minimap {
       ctx.lineTo(x0 + this.size, gy);
     }
     ctx.stroke();
+
+    // Belt scatter (red) — cached on first draw, reused every frame
+    // after that.
+    if (!this._beltDots) this._beltDots = this.buildBeltDots();
+    ctx.fillStyle = this.beltDotColor;
+    for (const dot of this._beltDots) {
+      const p = this.cellToMapPoint(dot.col, dot.row, x0, y0);
+      ctx.globalAlpha = dot.alpha;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
 
     // Special planetoids (yellow)
     for (const planet of this.getSpecialPlanets()) {
