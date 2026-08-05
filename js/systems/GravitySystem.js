@@ -43,7 +43,23 @@ export class GravitySystem {
       let dist, withinRange;
       if (planet.isRoundedRect) {
         dist = planet.distanceToSurface(pos.x, pos.y);
-        withinRange = dist < INFLUENCE_PADDING;
+        if (planet.isSkyDome) {
+          // isWithinGravityWindow is a COMPLETE proximity test on its
+          // own for this planet type (bounded by the dome shell, or a
+          // platform's own narrow band if it has no dome) — it must
+          // NOT also be ANDed with the generic distanceToSurface <
+          // INFLUENCE_PADDING check below. That check is a small fixed
+          // constant (~200 units), designed for an ordinary rect
+          // planet with no dome; applying it here would silently
+          // re-impose that same ~200-unit cap regardless of how wide
+          // the dome itself is — which is exactly why gravity stopped
+          // working the moment a jump carried the player higher than
+          // that, even after isWithinGravityWindow was correctly fixed
+          // to allow the whole dome interior.
+          withinRange = planet.isWithinGravityWindow(pos.x, pos.y);
+        } else {
+          withinRange = dist < INFLUENCE_PADDING;
+        }
       } else {
         dist = pos.subtract(planet.pos).length();
         withinRange = dist < planet.influenceRadius;

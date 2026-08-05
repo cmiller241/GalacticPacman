@@ -572,6 +572,270 @@
     }
   };
 
+  // js/world/FireBar.js
+  var FireEmber = class {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.3 + Math.random() * 0.6;
+      this.vx = Math.cos(angle) * speed;
+      this.vy = Math.sin(angle) * speed - 0.35;
+      this.life = 1;
+      this.decay = 0.025 + Math.random() * 0.03;
+      this.radius = 1.3 + Math.random() * 2;
+      this.hue = 18 + Math.random() * 30;
+    }
+    update() {
+      this.x += this.vx;
+      this.y += this.vy;
+      this.vx *= 0.97;
+      this.vy *= 0.97;
+      this.life -= this.decay;
+    }
+  };
+  var FireBar = class {
+    constructor(x, y, options = {}) {
+      this.pos = new Vector2(x, y);
+      this.isImmovable = true;
+      this.blockRadius = options.blockRadius ?? 25;
+      this.radius = this.blockRadius;
+      this.barLength = options.barLength ?? 250;
+      this.numFireballs = options.numFireballs ?? 10;
+      this.fireballRadius = options.fireballRadius ?? 15;
+      this.rotationSpeed = options.rotationSpeed ?? 0.05;
+      this.angle = options.startAngle ?? 0;
+      this.emberSpawnChance = options.emberSpawnChance ?? 0.15;
+      this.embers = [];
+    }
+    update() {
+      this.angle += this.rotationSpeed;
+      const fireballs = this.getFireballPositions();
+      for (const f of fireballs) {
+        if (Math.random() < this.emberSpawnChance) {
+          this.embers.push(new FireEmber(f.x, f.y));
+        }
+      }
+      for (let i = this.embers.length - 1; i >= 0; i--) {
+        this.embers[i].update();
+        if (this.embers[i].life <= 0) {
+          this.embers.splice(i, 1);
+        }
+      }
+    }
+    // World-space {x, y, radius} for every fireball along the bar right
+    // now — evenly spaced from just outside the block out to barLength,
+    // mirrored on both sides of the pivot for the classic double-sided
+    // firebar look. Used by update() (ember spawning), draw(), and the
+    // player collision check, so none of them can ever disagree about
+    // where a fireball actually is.
+    getFireballPositions() {
+      const positions = [];
+      const dirX = Math.cos(this.angle), dirY = Math.sin(this.angle);
+      for (let i = 1; i <= this.numFireballs; i++) {
+        const dist = i / this.numFireballs * this.barLength;
+        positions.push({ x: this.pos.x + dirX * dist, y: this.pos.y + dirY * dist, radius: this.fireballRadius });
+        positions.push({ x: this.pos.x - dirX * dist, y: this.pos.y - dirY * dist, radius: this.fireballRadius });
+      }
+      return positions;
+    }
+    draw() {
+      const ctx = state.ctx;
+      ctx.save();
+      const r = this.blockRadius;
+      ctx.fillStyle = "#2b2b2b";
+      ctx.fillRect(this.pos.x - r, this.pos.y - r, r * 2, r * 2);
+      ctx.strokeStyle = "#111111";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(this.pos.x - r, this.pos.y - r, r * 2, r * 2);
+      const now = Date.now();
+      const fireballs = this.getFireballPositions();
+      fireballs.forEach((f, i) => {
+        const flicker = 0.85 + Math.sin(now * 0.012 + i * 1.7) * 0.15;
+        const radius = f.radius * flicker;
+        const glow = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, radius * 2.2);
+        glow.addColorStop(0, "rgba(255,140,40,0.35)");
+        glow.addColorStop(1, "rgba(255,80,20,0)");
+        ctx.beginPath();
+        ctx.fillStyle = glow;
+        ctx.arc(f.x, f.y, radius * 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        const grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, radius);
+        grad.addColorStop(0, "#fff2c0");
+        grad.addColorStop(0.4, "#ffb02e");
+        grad.addColorStop(0.75, "#ff5522");
+        grad.addColorStop(1, "rgba(255,60,20,0)");
+        ctx.beginPath();
+        ctx.fillStyle = grad;
+        ctx.arc(f.x, f.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      for (const e of this.embers) {
+        ctx.beginPath();
+        ctx.fillStyle = `hsla(${e.hue}, 100%, 60%, ${Math.max(0, e.life)})`;
+        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  };
+
+  // js/world/SkyDomePlanetoid.js
+  var SkyDomePlanetoid = class extends RoundedRectPlanetoid {
+    constructor(x, y, options = {}) {
+      const halfWidth = options.halfWidth ?? 2e3;
+      const halfHeight = options.halfHeight ?? 30;
+      const cornerRadius = options.cornerRadius ?? 0;
+      const color = options.color ?? "#5c8a4a";
+      super(x, y, halfWidth, halfHeight, cornerRadius, color);
+      this.vel = new Vector2(0, 0);
+      this.rotationAngle = 0;
+      this.rotationSpeed = 0;
+      this.isImmovable = true;
+      this.isSkyDome = true;
+      this.domeRadiusX = options.domeRadiusX ?? halfWidth;
+      this.domeRadiusY = options.domeRadiusY ?? halfWidth;
+      this.domeFillColor = options.domeFillColor ?? "rgba(141, 195, 244, 0.9)";
+      this.domeRimColor = options.domeRimColor ?? "rgba(90, 150, 210, 0.85)";
+      this.domeOutlineColor = options.domeOutlineColor ?? "#ffffff";
+      this.domeOutlineWidth = options.domeOutlineWidth ?? 3;
+    }
+    // True if a world point falls within the rectangular "capture zone"
+    // directly above the platform's top surface — the ONLY region this
+    // planet ever pulls from or can be landed on from. No rotation
+    // transform needed since this class never rotates (see the class
+    // comment above).
+    // Suppresses the inherited dashed "gravity influence" ring. That
+    // ring implies a generic circular influence radius — accurate for
+    // every other planet type, where gravity really does reach out in
+    // a ring all around them, but actively misleading here, where
+    // gravity only ever works within the small rectangular window
+    // directly above the surface (see isWithinGravityWindow).
+    createOffscreen() {
+      super.createOffscreen();
+      this.ringCanvas = null;
+    }
+    // True for any point above the ground's own surface AND inside the
+    // dome's actual ellipse — replaced an earlier version using a fixed
+    // height band above the ground, which was sized for "landing on flat
+    // ground" and turned out far too shallow once real jump chains
+    // (platform to platform) could carry the player well above it: past
+    // that band, nothing pulled the player back down at all, even though
+    // they were still visibly inside the glass. Bounding by the dome's
+    // real shape instead means gravity reaches anywhere actually inside
+    // the dome, matching what the player can see, no matter how high a
+    // jump carries them — reuses the same ellipse-containment math as
+    // nearestDomeSurfacePoint (nx²+ny² <= 1 in the dome's own normalized
+    // space), just without needing the exact boundary point/normal.
+    isWithinGravityWindow(worldX, worldY) {
+      const topY = this.pos.y - this.halfHeight;
+      if (worldY > topY) return false;
+      const nx = (worldX - this.pos.x) / this.domeRadiusX;
+      const ny = (worldY - topY) / this.domeRadiusY;
+      return nx * nx + ny * ny <= 1;
+    }
+    // Nearest point on the DOME's curved shell to a world point, its
+    // true elliptical outward normal, and the distance to it — a
+    // completely separate surface from nearestSurfacePoint (the
+    // platform body, inherited from RoundedRectPlanetoid). Deliberately
+    // kept separate rather than folded into nearestSurfacePoint: that
+    // method is also what the PLAYER's landing check uses, and the
+    // player is always well inside the dome, close to the flat ground,
+    // never near the shell — conflating the two would have broken normal
+    // landing for anyone standing anywhere near the platform's
+    // horizontal center. This is only ever called from planetoid/
+    // asteroid collision code (see CollisionSystem.js), which checks it
+    // is present via `typeof x.nearestDomeSurfacePoint === 'function'`
+    // rather than a separate flag, so nothing needs updating elsewhere
+    // if a future planet type adds a dome the same way.
+    //
+    // Uses the standard normalized-space approximation for nearest point
+    // on an ellipse (scale into a unit circle, solve there, scale back) —
+    // exact when domeRadiusX equals domeRadiusY (the current default),
+    // and a good approximation otherwise.
+    nearestDomeSurfacePoint(worldX, worldY) {
+      const ex = this.pos.x;
+      const ey = this.pos.y - this.halfHeight;
+      const rx = this.domeRadiusX, ry = this.domeRadiusY;
+      const lx = worldX - ex, ly = worldY - ey;
+      const nx = lx / rx, ny = ly / ry;
+      const nDist = Math.sqrt(nx * nx + ny * ny);
+      let blx, bly;
+      if (nDist < 1e-6) {
+        blx = 0;
+        bly = -ry;
+      } else {
+        blx = nx / nDist * rx;
+        bly = ny / nDist * ry;
+      }
+      const boundaryX = ex + blx, boundaryY = ey + bly;
+      const normal = new Vector2(blx / (rx * rx), bly / (ry * ry)).normalize();
+      const dx = worldX - boundaryX, dy = worldY - boundaryY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      return { point: new Vector2(boundaryX, boundaryY), normal, distance };
+    }
+    drawDome() {
+      const ctx = state.ctx;
+      const cx = this.pos.x;
+      const cy = this.pos.y - this.halfHeight;
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      const highlightX = cx - this.domeRadiusX * 0.25;
+      const highlightY = cy - this.domeRadiusY * 0.55;
+      const outerRadius = Math.max(this.domeRadiusX, this.domeRadiusY) * 1.1;
+      const grad = ctx.createRadialGradient(highlightX, highlightY, 0, cx, cy, outerRadius);
+      grad.addColorStop(0, "rgba(255,255,255,0.9)");
+      grad.addColorStop(0.25, this.domeFillColor);
+      grad.addColorStop(1, this.domeRimColor);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.lineWidth = this.domeOutlineWidth;
+      ctx.strokeStyle = this.domeOutlineColor;
+      ctx.stroke();
+      ctx.restore();
+    }
+    draw() {
+      this.drawDome();
+      super.draw();
+    }
+  };
+
+  // js/world/JumpPlatform.js
+  var JumpPlatform = class extends RoundedRectPlanetoid {
+    constructor(x, y, width, height, options = {}) {
+      const halfWidth = width / 2;
+      const halfHeight = height / 2;
+      const cornerRadius = options.cornerRadius ?? 0;
+      const color = options.color ?? "#8a8a8a";
+      super(x, y, halfWidth, halfHeight, cornerRadius, color);
+      this.vel = new Vector2(0, 0);
+      this.rotationAngle = 0;
+      this.rotationSpeed = 0;
+      this.isImmovable = true;
+      this.isSkyDome = true;
+      this.isPullExempt = true;
+      this.gravityWindowHeight = options.gravityWindowHeight ?? 150;
+    }
+    // Same shape as SkyDomePlanetoid's — a rectangular capture zone
+    // directly above the platform's own surface, nothing outside it.
+    isWithinGravityWindow(worldX, worldY) {
+      const withinX = worldX >= this.pos.x - this.halfWidth && worldX <= this.pos.x + this.halfWidth;
+      const topY = this.pos.y - this.halfHeight;
+      const withinY = worldY <= topY && worldY >= topY - this.gravityWindowHeight;
+      return withinX && withinY;
+    }
+    // Suppresses the inherited dashed "gravity influence" ring — same
+    // reasoning as SkyDomePlanetoid: misleading for anything whose
+    // gravity only works in a small window above it, not a ring all
+    // around it.
+    createOffscreen() {
+      super.createOffscreen();
+      this.ringCanvas = null;
+    }
+  };
+
   // js/world/SpikeyPlanetoid.js
   var SpikeyPlanetoid = class extends Planetoid {
     constructor(x, y, radius) {
@@ -1512,10 +1776,11 @@
       this.blasterMuzzleLength = 300;
       this.blasterAngleOffset = -5 * Math.PI / 180;
       this.fireCooldown = 150;
+      this.jumpHorizontalCarry = 0.6;
       this.lastShotTime = 0;
       this.pullTarget = null;
       this.pullAccel = 0.6;
-      this.pullMaxSpeed = 9;
+      this.pullMaxSpeed = 18;
       this.mouseIdleThreshold = 2e3;
       this.mouseIdle = true;
       this.mazeBodyScale = 0.1;
@@ -1591,12 +1856,18 @@
       const wy = offsetX * sinO + offsetY * cosO;
       const shoulderX = originPos.x + wx * s;
       const shoulderY = originPos.y + wy * s;
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: shoulderX, y: shoulderY };
-      const mouseWorldX = mouse.x / zoom + cam.x;
-      const mouseWorldY = mouse.y / zoom + cam.y;
-      const targetAngle = Math.atan2(mouseWorldY - shoulderY, mouseWorldX - shoulderX);
+      let targetWorldX, targetWorldY;
+      if (this.pullTarget) {
+        targetWorldX = this.pullTarget.pos.x;
+        targetWorldY = this.pullTarget.pos.y;
+      } else {
+        const cam = state.camera || { x: 0, y: 0 };
+        const zoom = state.zoom || 1;
+        const mouse = state.mouse || { x: shoulderX, y: shoulderY };
+        targetWorldX = mouse.x / zoom + cam.x;
+        targetWorldY = mouse.y / zoom + cam.y;
+      }
+      const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
       const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
       let relative = Math.atan2(
         Math.sin(targetAngle - forwardAngle),
@@ -1680,6 +1951,7 @@
       let best = null;
       let bestDistSq = Infinity;
       for (const planet of state.planetoids) {
+        if (planet.isPullExempt) continue;
         let hit;
         if (planet.isRoundedRect) {
           hit = typeof planet.containsPoint === "function" && planet.containsPoint(worldX, worldY);
@@ -1697,7 +1969,7 @@
       }
       if (best) {
         if (this.onSurface && this.currentPlanet) {
-          const launchDir = this.pos.subtract(this.currentPlanet.pos).normalize();
+          const launchDir = this.getOutwardLaunchDirection();
           this.vel = launchDir.multiply(JUMP_STRENGTH);
         }
         this.pullTarget = best;
@@ -1976,9 +2248,24 @@
           this.facingDirection = 1;
           this.isWalking = true;
         }
-        this.surfaceArcPos += ds;
-        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
-        this.pos = worldSurface.point;
+        if (planet.isSkyDome) {
+          const coreHalfWidth = planet.halfWidth - planet.cornerRadius;
+          const minX = planet.pos.x - coreHalfWidth;
+          const maxX = planet.pos.x + coreHalfWidth;
+          const desiredX = this.pos.x + ds;
+          if (desiredX < minX || desiredX > maxX) {
+            this.onSurface = false;
+            this.currentPlanet = null;
+            this.vel = new Vector2(ds, 0);
+          } else {
+            const topY = planet.pos.y - planet.halfHeight;
+            this.pos = new Vector2(desiredX, topY - PLAYER_RADIUS);
+          }
+        } else {
+          this.surfaceArcPos += ds;
+          const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
+          this.pos = worldSurface.point;
+        }
         if (this.isWalking) {
           this.walkTime += Math.abs(ds) / this.strideLength * Math.PI * 2;
         }
@@ -2005,6 +2292,37 @@
         }
       }
     }
+    // "Straight up from wherever I'm currently standing," given the
+    // current planet — the planet's TRUE surface normal for rect-type
+    // planets, not the naive "away from the planet's center" vector.
+    // Those two are only ever the same thing on a perfect circle (or,
+    // close enough, near a corner of a roughly-square rect) — on
+    // anything long and thin, "away from center" increasingly tilts
+    // toward whichever edge you're standing nearest, worse the further
+    // you are from the horizontal middle, which is exactly the
+    // curving-jumps-near-the-edge bug this replaced. Shared by jump()
+    // and the pull-initiation launch kick, since both are fundamentally
+    // the same action: detach outward from the current standing spot.
+    getOutwardLaunchDirection() {
+      if (!this.currentPlanet) return new Vector2(0, -1);
+      if (this.currentPlanet.isRoundedRect) {
+        const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
+        let direction = surface.normal;
+        if (this.currentPlanet.isSkyDome) {
+          let horizontalInput = 0;
+          if (state.keys["ArrowLeft"]) horizontalInput = -1;
+          if (state.keys["ArrowRight"]) horizontalInput = 1;
+          if (horizontalInput !== 0) {
+            direction = new Vector2(
+              direction.x + horizontalInput * this.jumpHorizontalCarry,
+              direction.y
+            ).normalize();
+          }
+        }
+        return direction;
+      }
+      return this.pos.subtract(this.currentPlanet.pos).normalize();
+    }
     jump() {
       if (this.mode === "platform") {
         if (this.onGround) {
@@ -2015,7 +2333,7 @@
         return;
       }
       if (this.onSurface && this.currentPlanet) {
-        const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
+        const direction = this.getOutwardLaunchDirection();
         this.vel = direction.multiply(JUMP_STRENGTH);
         this.onSurface = false;
         this.currentPlanet = null;
@@ -2234,7 +2552,7 @@
         rightArmAngle = swayAngle;
       } else {
         const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
-        if (this.mouseIdle) {
+        if (this.mouseIdle && !this.pullTarget) {
           const swayAngle = this.onSurface && this.isWalking ? walkAngle * this.armSwingScale : Math.sin(Date.now() * 15e-4) * 0.15;
           leftArmAngle = swayAngle;
           rightArmAngle = swayAngle;
@@ -2900,7 +3218,11 @@
         let dist, withinRange;
         if (planet.isRoundedRect) {
           dist = planet.distanceToSurface(pos.x, pos.y);
-          withinRange = dist < INFLUENCE_PADDING;
+          if (planet.isSkyDome) {
+            withinRange = planet.isWithinGravityWindow(pos.x, pos.y);
+          } else {
+            withinRange = dist < INFLUENCE_PADDING;
+          }
         } else {
           dist = pos.subtract(planet.pos).length();
           withinRange = dist < planet.influenceRadius;
@@ -2927,11 +3249,72 @@
       }
       return pos.subtract(planet.pos).length() - planet.radius;
     }
+    // General-purpose handler for ANY entity tagged isImmovable (FireBar
+    // is the first example, not the only intended one) colliding with
+    // ordinary movable entities (planetoids, asteroids, ...). This is
+    // NOT a special-cased hack — it's the direct physical limit of a
+    // normal elastic collision as one object's mass approaches infinity:
+    // solving the standard two-body elastic collision formula with
+    // m2 -> infinity reduces to "object 1 reflects off the surface
+    // normal (like bouncing off a wall), object 2 is completely
+    // unaffected." So rather than reuse handleElasticCollisions' mass-
+    // ratio math (which assumes both masses are finite and comparable),
+    // this applies that limiting case directly: a plain velocity
+    // reflection for the movable object, zero change for the immovable
+    // one, and the movable object gets pushed the FULL overlap distance
+    // out (not split between both, since only one side is actually free
+    // to move).
+    handleImmovableCollisions(immovables, movables) {
+      for (const im of immovables) {
+        for (const mv of movables) {
+          if (mv.isImmovable) continue;
+          let normal, targetPos;
+          if (im.isRoundedRect) {
+            const topY = im.pos.y - im.halfHeight;
+            const surface = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y) : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+            if (surface.distance >= mv.radius) continue;
+            normal = surface.normal;
+            targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+          } else {
+            const offset = mv.pos.subtract(im.pos);
+            const dist = offset.length();
+            const minDist = im.radius + mv.radius;
+            if (dist >= minDist || dist <= 0) continue;
+            normal = offset.normalize();
+            targetPos = im.pos.clone().add(normal.multiply(minDist));
+          }
+          mv.pos = targetPos;
+          const dot = mv.vel.dot(normal);
+          mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+        }
+      }
+    }
+    // The fire bar's block and its rotating fireballs are both lethal to
+    // the player on contact — no bounce/physics interaction for the
+    // player, just instant death, same as touching a spikey planetoid.
+    handlePlayerFireBarCollisions(player, fireBars) {
+      for (const bar of fireBars) {
+        const blockDist = player.pos.subtract(bar.pos).length();
+        if (blockDist <= bar.blockRadius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.startDeath();
+          return;
+        }
+        for (const f of bar.getFireballPositions()) {
+          const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist <= f.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+            player.startDeath();
+            return;
+          }
+        }
+      }
+    }
     handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = "radius", radiusProp2 = "radius", massProp1 = "mass", massProp2 = "mass") {
       for (let i = 0; i < entities1.length; i++) {
         for (let j = entities1 === entities2 ? i + 1 : 0; j < entities2.length; j++) {
           const p1 = entities1[i];
           const p2 = entities2[j];
+          if (p1.isImmovable || p2.isImmovable) continue;
           const offset = p1.pos.subtract(p2.pos);
           const distSq = offset.lengthSq();
           const sumR = p1[radiusProp1] + p2[radiusProp2];
@@ -2965,50 +3348,72 @@
         }
       }
       if (player.onSurface) return;
+      if (player.pullTarget) {
+        if (!player.pullTarget.isSpikey && this.tryLandOnPlanet(player, player.pullTarget)) {
+          player.pullTarget = null;
+        }
+        return;
+      }
       for (const planet of state.planetoids.filter((p) => !p.isSpikey)) {
-        if (planet.isRoundedRect) {
-          const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
-          if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
-            player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
-            player.onSurface = true;
-            player.currentPlanet = planet;
-            player.lastInfluencePlanet = planet;
-            player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
-            const impactVel = player.vel.clone();
-            player.vel = new Vector2(0, 0);
-            if (player.isGroundPounding) {
-              player.isGroundPounding = false;
-              const pushDir = surface.normal.clone().multiply(-1);
-              planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-              createParticles(player.pos, 20);
-            }
-            return;
-          }
-          continue;
-        }
-        const offset = player.pos.subtract(planet.pos);
-        const dist = offset.length();
-        const surfaceDist = planet.radius + PLAYER_RADIUS;
-        if (dist <= surfaceDist + SURFACE_TOLERANCE) {
-          const normal = offset.normalize();
-          player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
-          player.onSurface = true;
-          player.currentPlanet = planet;
-          player.lastInfluencePlanet = planet;
-          const impactVel = player.vel.clone();
-          player.vel = new Vector2(0, 0);
-          player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
-          if (player.isGroundPounding) {
-            player.isGroundPounding = false;
-            const pushDir = normal.multiply(-1);
-            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-            createParticles(player.pos, 20);
-          }
-          return;
-        }
+        if (this.tryLandOnPlanet(player, planet)) return;
       }
       player.onSurface = false;
       player.currentPlanet = null;
+    }
+    // Attempts to land the player on a single planet (rounded-rect or
+    // circular). Returns true if landing occurred. Factored out of
+    // handlePlayerPlanetCollisions so the same logic can be applied
+    // either across the full planet list (normal flight) or to just one
+    // specific planet (the pull target, while otherwise passing through
+    // everything else — see above).
+    tryLandOnPlanet(player, planet) {
+      if (planet.isRoundedRect) {
+        if (planet.isSkyDome && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) {
+          return false;
+        }
+        if (planet.isSkyDome && player.vel.y < 0) {
+          return false;
+        }
+        const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
+        if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+          player.onSurface = true;
+          player.currentPlanet = planet;
+          player.lastInfluencePlanet = planet;
+          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+          const impactVel = player.vel.clone();
+          player.vel = new Vector2(0, 0);
+          if (player.isGroundPounding) {
+            player.isGroundPounding = false;
+            const pushDir = surface.normal.clone().multiply(-1);
+            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+            createParticles(player.pos, 20);
+          }
+          return true;
+        }
+        return false;
+      }
+      const offset = player.pos.subtract(planet.pos);
+      const dist = offset.length();
+      const surfaceDist = planet.radius + PLAYER_RADIUS;
+      if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+        const normal = offset.normalize();
+        player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
+        player.onSurface = true;
+        player.currentPlanet = planet;
+        player.lastInfluencePlanet = planet;
+        const impactVel = player.vel.clone();
+        player.vel = new Vector2(0, 0);
+        player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
+        if (player.isGroundPounding) {
+          player.isGroundPounding = false;
+          const pushDir = normal.multiply(-1);
+          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+          createParticles(player.pos, 20);
+        }
+        return true;
+      }
+      return false;
     }
     handlePlayerAsteroidCollisions(player, asteroids) {
       for (const a of asteroids) {
@@ -3046,6 +3451,16 @@
           const dist = this.distanceToPlanetSurface(a.pos, p);
           if (dist < a.radius) {
             toBreak.add(a);
+            continue;
+          }
+          if (typeof p.nearestDomeSurfacePoint === "function") {
+            const topY = p.pos.y - p.halfHeight;
+            if (a.pos.y < topY) {
+              const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
+              if (domeSurface.distance < a.radius) {
+                toBreak.add(a);
+              }
+            }
           }
         }
       }
@@ -3179,7 +3594,7 @@
   var BELT_START = { col: 0, row: 15 };
   var BELT_END = { col: 15, row: 20 };
   var BELT_THICKNESS_CELLS = 0.75;
-  var BELT_SPEED = 1.5;
+  var BELT_SPEED = 2.5;
   var BELT_RADIUS_MIN = 30;
   var BELT_RADIUS_MAX = 70;
   var BELT_COLOR = "#dcc48a";
@@ -3629,7 +4044,7 @@
   state.canvas.height = window.innerHeight;
   var CELL_SIZE = 3e3;
   var GRID_SIZE = 20;
-  var CENTER_CELL = { col: 5, row: 13 };
+  var CENTER_CELL = { col: 10, row: 10 };
   var CELL_CHECK_INTERVAL = 15;
   state.sceneWidth = CELL_SIZE * GRID_SIZE;
   state.sceneHeight = CELL_SIZE * GRID_SIZE;
@@ -3923,9 +4338,52 @@
     );
     state.rectPlanet.isPermanent = true;
     state.planetoids.push(state.rectPlanet);
+    state.skyDomePlanet = new SkyDomePlanetoid(
+      centerOriginX + CELL_SIZE * 0.5,
+      centerOriginY + CELL_SIZE * 0.15
+    );
+    state.skyDomePlanet.isPermanent = true;
+    state.planetoids.push(state.skyDomePlanet);
+    {
+      const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
+      const groundX = state.skyDomePlanet.pos.x;
+      state.jumpPlatforms = [
+        new JumpPlatform(groundX - 300, groundTopY - 90, 300, 100),
+        new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
+        new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
+        new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30)
+      ];
+      for (const platform of state.jumpPlatforms) {
+        platform.isPermanent = true;
+        state.planetoids.push(platform);
+      }
+    }
     state.mazePlanet.createOffscreen();
     state.platformPlanet.createOffscreen();
     state.rectPlanet.createOffscreen();
+    state.skyDomePlanet.createOffscreen();
+    state.jumpPlatforms.forEach((platform) => platform.createOffscreen());
+    {
+      const NUM_BELT_FIRE_BARS = 20;
+      const beltDx = BELT_END.col - BELT_START.col;
+      const beltDy = BELT_END.row - BELT_START.row;
+      const beltLen = Math.hypot(beltDx, beltDy);
+      const beltDirCol = beltDx / beltLen, beltDirRow = beltDy / beltLen;
+      const perpCol = -beltDirRow, perpRow = beltDirCol;
+      state.fireBars = [];
+      for (let i = 0; i < NUM_BELT_FIRE_BARS; i++) {
+        const t = (i + 1) / (NUM_BELT_FIRE_BARS + 1);
+        const baseCol = BELT_START.col + beltDx * t;
+        const baseRow = BELT_START.row + beltDy * t;
+        const jitter = (Math.random() * 2 - 1) * 0.6;
+        const col = baseCol + perpCol * jitter;
+        const row = baseRow + perpRow * jitter;
+        state.fireBars.push(new FireBar(col * CELL_SIZE, row * CELL_SIZE, {
+          startAngle: Math.random() * Math.PI * 2,
+          rotationSpeed: (Math.random() < 0.5 ? -1 : 1) * 0.05
+        }));
+      }
+    }
     const interior = state.platformPlanet.interior;
     const tile = interior.tileSize;
     interior.blobs = [
@@ -3976,6 +4434,11 @@
   }
   function updatePlanetoids() {
     for (const p of state.planetoids) {
+      if (p.isImmovable) {
+        p.vel.x = 0;
+        p.vel.y = 0;
+        continue;
+      }
       p.pos.add(p.vel);
       if (!p.isBeltPlanetoid) {
         if (p.pos.x - p.radius < 0) {
@@ -4064,9 +4527,16 @@
     updatePlanetoids();
     if (state.player.mode == "maze") state.player.updateMazePosition();
     updateAsteroids();
+    state.fireBars.forEach((b) => b.update());
     let toBreak = collisionSystem.handlePlanetAsteroidCollisions(state.planetoids, state.asteroids);
     collisionSystem.handleElasticCollisions(state.planetoids);
     collisionSystem.handleElasticCollisions(state.asteroids);
+    collisionSystem.handleImmovableCollisions(state.fireBars, state.planetoids);
+    collisionSystem.handleImmovableCollisions(state.fireBars, state.asteroids);
+    {
+      const immovablePlanetoids = state.planetoids.filter((p) => p.isImmovable);
+      collisionSystem.handleImmovableCollisions(immovablePlanetoids, state.planetoids);
+    }
     for (let a of toBreak) {
       breakAsteroid(a);
     }
@@ -4114,6 +4584,7 @@
     collisionSystem.handleCoinCollisions(state.player, state.coins);
     collisionSystem.handlePlayerAsteroidCollisions(state.player, state.asteroids);
     collisionSystem.handlePlayerEnemyCollisions(state.player, state.enemies);
+    collisionSystem.handlePlayerFireBarCollisions(state.player, state.fireBars);
     if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
       state.player.checkMazeDots();
     }
@@ -4174,6 +4645,7 @@
     }
     state.planetoids.forEach((p) => p.draw());
     state.asteroids.forEach((a) => a.draw());
+    state.fireBars.forEach((b) => b.draw());
     state.player.draw();
     drawPullIndicator();
     state.enemies.forEach((e) => e.draw());

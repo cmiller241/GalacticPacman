@@ -32,7 +32,7 @@ export const BELT_END = { col: 15, row: 20 };
 // Increase if gaps are ever visible; decrease for a tighter belt.
 export const BELT_THICKNESS_CELLS = 0.75;
 
-const BELT_SPEED = 1.5; // world units/frame, shared by every planetoid in the belt
+const BELT_SPEED = 2.5; // world units/frame, shared by every planetoid in the belt
 const BELT_RADIUS_MIN = 30;
 const BELT_RADIUS_MAX = 70;
 const BELT_COLOR = '#dcc48a'; // pale sandy tan, uniform across every belt planetoid (not a random pick from planetColors like regular planets) — a deliberate visual tell that "this one's part of the belt"

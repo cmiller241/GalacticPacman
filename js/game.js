@@ -13,6 +13,9 @@ import {
 import { Vector2 } from './vector2.js';
 import { Planetoid } from './world/Planetoid.js';
 import { RoundedRectPlanetoid } from './world/RoundedRectPlanetoid.js';
+import { FireBar } from './world/FireBar.js';
+import { SkyDomePlanetoid } from './world/SkyDomePlanetoid.js';
+import { JumpPlatform } from './world/JumpPlatform.js';
 import { SpikeyPlanetoid } from './world/SpikeyPlanetoid.js';
 import { BeamPlanetoid } from './world/BeamPlanetoid.js';
 import { MazeInterior } from './interiors/MazeInterior.js';
@@ -30,7 +33,7 @@ import { AISystem } from './systems/AISystem.js';
 import { AudioManager } from './AudioManager.js';
 import { angleDiff, initResizeListener, createParticles } from './utils.js';
 import { Minimap } from './ui/Minimap.js';
-import { initCellManifest, getCellManifest, generateSpecialCell, updateBeltSpawning, shouldKeepBeltPlanetoid, resetBeltState, getBeltPlanetoidCount, getCellKindLabel } from './world/CellManifest.js';
+import { initCellManifest, getCellManifest, generateSpecialCell, updateBeltSpawning, shouldKeepBeltPlanetoid, resetBeltState, getBeltPlanetoidCount, getCellKindLabel, BELT_START, BELT_END } from './world/CellManifest.js';
 import { drawPullIndicator } from './effects/PullBeam.js';
 
 // Setup canvas and ctx
@@ -52,7 +55,7 @@ state.canvas.height = window.innerHeight;
 // below.
 const CELL_SIZE = 3000; // world units per cell, both axes
 const GRID_SIZE = 20;   // 20x20 cells total
-const CENTER_CELL = { col: 5, row: 13 }; // where the permanent planets + player start live
+const CENTER_CELL = { col: 10, row: 10 }; // where the permanent planets + player start live
 const CELL_CHECK_INTERVAL = 15; // frames between generation/cull passes — doesn't need to run every frame
 
 state.sceneWidth = CELL_SIZE * GRID_SIZE;
@@ -544,10 +547,73 @@ function initGame() {
   state.rectPlanet.isPermanent = true;
   state.planetoids.push(state.rectPlanet);
 
-  // Bake all three permanent planets' textures once.
+  // === SKY DOME PLATFORM ===
+  state.skyDomePlanet = new SkyDomePlanetoid(
+    centerOriginX + CELL_SIZE * 0.5, centerOriginY + CELL_SIZE * 0.15
+  );
+  state.skyDomePlanet.isPermanent = true;
+  state.planetoids.push(state.skyDomePlanet);
+
+  // === TEST JUMP PLATFORMS above the sky dome's ground ===
+  // Heights here are a rough first guess, not a verified fit against
+  // actual jump strength/gravity/horizontal-carry — expect to nudge
+  // these Y values once you've actually seen how high a jump reaches.
+  {
+    const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
+    const groundX = state.skyDomePlanet.pos.x;
+    state.jumpPlatforms = [
+      new JumpPlatform(groundX - 300, groundTopY - 90, 300, 100),
+      new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
+      new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
+      new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30),
+    ];
+    for (const platform of state.jumpPlatforms) {
+      platform.isPermanent = true;
+      state.planetoids.push(platform);
+    }
+  }
+
+  // Bake all permanent planets' textures once.
   state.mazePlanet.createOffscreen();
   state.platformPlanet.createOffscreen();
   state.rectPlanet.createOffscreen();
+  state.skyDomePlanet.createOffscreen();
+  state.jumpPlatforms.forEach(platform => platform.createOffscreen());
+
+  // === FIRE BARS along the asteroid belt ===
+  // Fixed, permanent placements (not part of the belt's own generate/
+  // cull streaming — fire bars live in their own small array, cheap
+  // enough to just all exist for the whole session) spread along the
+  // belt's actual line, from just past BELT_START to just before
+  // BELT_END so none sit right on top of either endpoint. Each gets a
+  // random perpendicular offset (within the belt's own gameplay
+  // corridor width) so they don't sit in a perfectly straight,
+  // mechanical row, plus a random starting angle and rotation
+  // direction for visual variety — size/speed/fireball-count all come
+  // from FireBar's own tuned defaults, not overridden here.
+  {
+    const NUM_BELT_FIRE_BARS = 20;
+    const beltDx = BELT_END.col - BELT_START.col;
+    const beltDy = BELT_END.row - BELT_START.row;
+    const beltLen = Math.hypot(beltDx, beltDy);
+    const beltDirCol = beltDx / beltLen, beltDirRow = beltDy / beltLen;
+    const perpCol = -beltDirRow, perpRow = beltDirCol; // perpendicular to the belt's direction, in cell-space
+
+    state.fireBars = [];
+    for (let i = 0; i < NUM_BELT_FIRE_BARS; i++) {
+      const t = (i + 1) / (NUM_BELT_FIRE_BARS + 1); // evenly spaced, skipping the exact endpoints
+      const baseCol = BELT_START.col + beltDx * t;
+      const baseRow = BELT_START.row + beltDy * t;
+      const jitter = (Math.random() * 2 - 1) * 0.6; // cell-widths, perpendicular — stays within the belt's own gameplay corridor
+      const col = baseCol + perpCol * jitter;
+      const row = baseRow + perpRow * jitter;
+
+      state.fireBars.push(new FireBar(col * CELL_SIZE, row * CELL_SIZE, {
+        startAngle: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() < 0.5 ? -1 : 1) * 0.05
+      }));
+    }
+  }
 
   // === BLOB MONSTER on top platform ===
   const interior = state.platformPlanet.interior;
@@ -615,6 +681,19 @@ function initGame() {
 
 function updatePlanetoids() {
   for (const p of state.planetoids) {
+    if (p.isImmovable) {
+      // Absolute guarantee: nothing can ever accumulate velocity on an
+      // immovable object, regardless of what pushed it this frame —
+      // fireball impact and ground-pound knockback both add directly
+      // to planet.vel and neither one checks isImmovable (a gap that
+      // predates this class), and there could be others later. Forcing
+      // velocity to zero here, at the actual source of movement, is a
+      // hard guarantee that doesn't depend on remembering to guard
+      // every individual push site.
+      p.vel.x = 0;
+      p.vel.y = 0;
+      continue; // never moves, so skip position update and wall-bounce entirely
+    }
     p.pos.add(p.vel);
     // Belt planetoids are exempt from the world-edge bounce: their
     // trajectory is deliberately authored (see CellManifest.js), and
@@ -704,10 +783,30 @@ function gameLoop(timestamp) {
   updatePlanetoids();
   if (state.player.mode == "maze") state.player.updateMazePosition();
   updateAsteroids();
+  state.fireBars.forEach(b => b.update());
 
   let toBreak = collisionSystem.handlePlanetAsteroidCollisions(state.planetoids, state.asteroids);
   collisionSystem.handleElasticCollisions(state.planetoids);
   collisionSystem.handleElasticCollisions(state.asteroids);
+  collisionSystem.handleImmovableCollisions(state.fireBars, state.planetoids);
+  collisionSystem.handleImmovableCollisions(state.fireBars, state.asteroids);
+  // Any planetoid tagged isImmovable (SkyDomePlanetoid is the first
+  // example) gets the same surface-accurate bounce treatment FireBar's
+  // block already has, against both other planetoids and asteroids —
+  // this is what the elastic-collision skip above was for. Asteroids
+  // are deliberately NOT included here — they should always break
+  // against a planet's true surface (dome or body), same as they
+  // already do against every other planet in the game, handled by
+  // handlePlanetAsteroidCollisions/toBreak below. Bouncing them here
+  // too would be redundant with that (and could even bounce one away
+  // the same frame it's about to be destroyed anyway). FireBar's block
+  // keeps its own separate bounce behavior for asteroids — it's a
+  // different kind of object (a hard mechanical obstacle), not a
+  // planet's surface.
+  {
+    const immovablePlanetoids = state.planetoids.filter(p => p.isImmovable);
+    collisionSystem.handleImmovableCollisions(immovablePlanetoids, state.planetoids);
+  }
 
   for (let a of toBreak) {
     breakAsteroid(a);
@@ -765,6 +864,7 @@ function gameLoop(timestamp) {
   collisionSystem.handleCoinCollisions(state.player, state.coins);
   collisionSystem.handlePlayerAsteroidCollisions(state.player, state.asteroids);
   collisionSystem.handlePlayerEnemyCollisions(state.player, state.enemies);
+  collisionSystem.handlePlayerFireBarCollisions(state.player, state.fireBars);
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
     state.player.checkMazeDots();
   }
@@ -865,6 +965,7 @@ function gameLoop(timestamp) {
 
   state.planetoids.forEach(p => p.draw());
   state.asteroids.forEach(a => a.draw());
+  state.fireBars.forEach(b => b.draw());
   state.player.draw();
   drawPullIndicator();
   state.enemies.forEach(e => e.draw());
