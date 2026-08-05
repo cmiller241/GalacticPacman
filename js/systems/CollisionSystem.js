@@ -17,11 +17,101 @@ export class CollisionSystem {
     return pos.subtract(planet.pos).length() - planet.radius;
   }
 
+  // General-purpose handler for ANY entity tagged isImmovable (FireBar
+  // is the first example, not the only intended one) colliding with
+  // ordinary movable entities (planetoids, asteroids, ...). This is
+  // NOT a special-cased hack — it's the direct physical limit of a
+  // normal elastic collision as one object's mass approaches infinity:
+  // solving the standard two-body elastic collision formula with
+  // m2 -> infinity reduces to "object 1 reflects off the surface
+  // normal (like bouncing off a wall), object 2 is completely
+  // unaffected." So rather than reuse handleElasticCollisions' mass-
+  // ratio math (which assumes both masses are finite and comparable),
+  // this applies that limiting case directly: a plain velocity
+  // reflection for the movable object, zero change for the immovable
+  // one, and the movable object gets pushed the FULL overlap distance
+  // out (not split between both, since only one side is actually free
+  // to move).
+  handleImmovableCollisions(immovables, movables) {
+    for (const im of immovables) {
+      for (const mv of movables) {
+        // Immovable objects never push each other — also correctly
+        // skips a literal self-check on the rare occasions the same
+        // array gets passed for both roles (e.g. immovable planetoids
+        // checked against all planetoids, which naturally includes
+        // themselves).
+        if (mv.isImmovable) continue;
+
+        let normal, targetPos;
+        if (im.isRoundedRect) {
+          // For anything with a dome, an object above the platform's
+          // own top line is checked against the DOME shell instead of
+          // the platform body — the dome sits above and extends
+          // further out than the body alone, so that's the surface
+          // it'll actually reach first. Player landing never goes
+          // through this path at all (see nearestDomeSurfacePoint's
+          // own comment), so this can't affect that.
+          const topY = im.pos.y - im.halfHeight;
+          const surface = (typeof im.nearestDomeSurfacePoint === 'function' && mv.pos.y < topY)
+            ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y)
+            : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+          // TRUE surface distance/normal here, NOT the bounding-circle
+          // shortcut used below for circular immovables — critical for
+          // a long, thin shape (SkyDomePlanetoid is the motivating
+          // case), where the bounding circle extends far beyond the
+          // true surface in the short direction, causing a collision
+          // to be detected long before anything visually touches it.
+          if (surface.distance >= mv.radius) continue;
+          normal = surface.normal;
+          targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+        } else {
+          const offset = mv.pos.subtract(im.pos);
+          const dist = offset.length();
+          const minDist = im.radius + mv.radius;
+          if (dist >= minDist || dist <= 0) continue;
+          normal = offset.normalize();
+          targetPos = im.pos.clone().add(normal.multiply(minDist));
+        }
+
+        mv.pos = targetPos;
+        const dot = mv.vel.dot(normal);
+        mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+      }
+    }
+  }
+
+  // The fire bar's block and its rotating fireballs are both lethal to
+  // the player on contact — no bounce/physics interaction for the
+  // player, just instant death, same as touching a spikey planetoid.
+  handlePlayerFireBarCollisions(player, fireBars) {
+    for (const bar of fireBars) {
+      const blockDist = player.pos.subtract(bar.pos).length();
+      if (blockDist <= bar.blockRadius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+        player.startDeath();
+        return;
+      }
+      for (const f of bar.getFireballPositions()) {
+        const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist <= f.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.startDeath();
+          return;
+        }
+      }
+    }
+  }
+
   handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = 'radius', radiusProp2 = 'radius', massProp1 = 'mass', massProp2 = 'mass') {
     for (let i = 0; i < entities1.length; i++) {
       for (let j = (entities1 === entities2 ? i + 1 : 0); j < entities2.length; j++) {
         const p1 = entities1[i];
         const p2 = entities2[j];
+        // Immovable objects are handled exclusively by
+        // handleImmovableCollisions, which uses true surface distance
+        // for rect-type shapes instead of this method's bounding-
+        // circle-based check — critical for anything long/thin, where
+        // that circle badly overshoots the true surface.
+        if (p1.isImmovable || p2.isImmovable) continue;
         const offset = p1.pos.subtract(p2.pos);
         const distSq = offset.lengthSq();
         const sumR = p1[radiusProp1] + p2[radiusProp2];
@@ -58,52 +148,107 @@ export class CollisionSystem {
 
     if (player.onSurface) return;
 
-    for (const planet of state.planetoids.filter(p => !p.isSpikey)) {
-      if (planet.isRoundedRect) {
-        const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
-        if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
-          player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
-          player.onSurface = true;
-          player.currentPlanet = planet;
-          player.lastInfluencePlanet = planet;
-          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
-          const impactVel = player.vel.clone();
-          player.vel = new Vector2(0, 0);
-          if (player.isGroundPounding) {
-            player.isGroundPounding = false;
-            const pushDir = surface.normal.clone().multiply(-1);
-            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-            createParticles(player.pos, 20);
-          }
-          return;
-        }
-        continue;
+    // While actively pulling toward a planet (right-click grapple
+    // held), pass straight through every regular (non-spikey)
+    // planetoid EXCEPT the one being pulled toward — touching that one
+    // lands the player normally and ends the pull, same as flying into
+    // any planet normally would. Everything else stays passable so the
+    // pull remains useful for fast traversal through dense fields (the
+    // belt especially) rather than getting stopped by incidental
+    // planets along the way. The spikey check above is NOT gated on
+    // this — it stays fully lethal regardless of pulling, including
+    // for a spikey pull target (by the time execution reaches here,
+    // being close enough to a spikey pullTarget to land on it would
+    // already have killed the player above, so the isSpikey guard
+    // below is just belt-and-suspenders clarity, not load-bearing).
+    if (player.pullTarget) {
+      if (!player.pullTarget.isSpikey && this.tryLandOnPlanet(player, player.pullTarget)) {
+        player.pullTarget = null; // touching the target ends the pull
       }
+      return;
+    }
 
-      const offset = player.pos.subtract(planet.pos);
-      const dist = offset.length();
-      const surfaceDist = planet.radius + PLAYER_RADIUS;
-      if (dist <= surfaceDist + SURFACE_TOLERANCE) {
-        const normal = offset.normalize();
-        player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
-        player.onSurface = true;
-        player.currentPlanet = planet;
-        player.lastInfluencePlanet = planet;
-        const impactVel = player.vel.clone();
-        player.vel = new Vector2(0, 0);
-        player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
-        if (player.isGroundPounding) {
-          player.isGroundPounding = false;
-          const pushDir = normal.multiply(-1);
-          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-          createParticles(player.pos, 20);
-        }
-        return;
-      }
+    for (const planet of state.planetoids.filter(p => !p.isSpikey)) {
+      if (this.tryLandOnPlanet(player, planet)) return;
     }
 
     player.onSurface = false;
     player.currentPlanet = null;
+  }
+
+  // Attempts to land the player on a single planet (rounded-rect or
+  // circular). Returns true if landing occurred. Factored out of
+  // handlePlayerPlanetCollisions so the same logic can be applied
+  // either across the full planet list (normal flight) or to just one
+  // specific planet (the pull target, while otherwise passing through
+  // everything else — see above).
+  tryLandOnPlanet(player, planet) {
+    if (planet.isRoundedRect) {
+      // SkyDomePlanetoid is only landable from within its top-only
+      // gravity window — without this, momentum, a pull-star yank, or
+      // a ground-pound knockback could still land the player on the
+      // side or underside via the generic nearest-surface-point check
+      // below, even though gravity would never have pulled them there
+      // (exactly the "stuck to the underside" weirdness the top-only
+      // window was built to avoid in the first place).
+      if (planet.isSkyDome && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) {
+        return false;
+      }
+      // isSkyDome planets are deliberately pass-through from below —
+      // jumping up INTO one from underneath, with enough speed to
+      // still be closing in on the top surface while still ascending,
+      // would otherwise trigger the same instant landing snap normal
+      // falling uses (which is invisible there, since downward
+      // velocity already carries the player toward where the snap
+      // places them anyway). Mid-ascent, that snap instead freezes
+      // upward momentum and teleports the player the rest of the way
+      // in one frame — the "blip" this guard exists to prevent. Once
+      // vel.y >= 0 (falling, or right at the peak), landing proceeds
+      // normally and reads exactly like landing on anything else.
+      if (planet.isSkyDome && player.vel.y < 0) {
+        return false;
+      }
+      const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
+      if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
+        player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+        player.onSurface = true;
+        player.currentPlanet = planet;
+        player.lastInfluencePlanet = planet;
+        player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+        const impactVel = player.vel.clone();
+        player.vel = new Vector2(0, 0);
+        if (player.isGroundPounding) {
+          player.isGroundPounding = false;
+          const pushDir = surface.normal.clone().multiply(-1);
+          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+          createParticles(player.pos, 20);
+        }
+        return true;
+      }
+      return false;
+    }
+
+    const offset = player.pos.subtract(planet.pos);
+    const dist = offset.length();
+    const surfaceDist = planet.radius + PLAYER_RADIUS;
+    if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+      const normal = offset.normalize();
+      player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
+      player.onSurface = true;
+      player.currentPlanet = planet;
+      player.lastInfluencePlanet = planet;
+      const impactVel = player.vel.clone();
+      player.vel = new Vector2(0, 0);
+      player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
+      if (player.isGroundPounding) {
+        player.isGroundPounding = false;
+        const pushDir = normal.multiply(-1);
+        planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+        createParticles(player.pos, 20);
+      }
+      return true;
+    }
+    return false;
   }
 
   handlePlayerAsteroidCollisions(player, asteroids) {
@@ -146,6 +291,21 @@ export class CollisionSystem {
         const dist = this.distanceToPlanetSurface(a.pos, p);
         if (dist < a.radius) {
           toBreak.add(a);
+          continue;
+        }
+        // Dome shell — a completely separate surface from the
+        // platform body, only relevant for planets that actually have
+        // one, and only for asteroids approaching from above the
+        // platform's own top line (see nearestDomeSurfacePoint's own
+        // comment for why this stays out of distanceToPlanetSurface).
+        if (typeof p.nearestDomeSurfacePoint === 'function') {
+          const topY = p.pos.y - p.halfHeight;
+          if (a.pos.y < topY) {
+            const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
+            if (domeSurface.distance < a.radius) {
+              toBreak.add(a);
+            }
+          }
         }
       }
     }

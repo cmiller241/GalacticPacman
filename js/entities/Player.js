@@ -162,6 +162,14 @@ export class Player extends Entity {
 
     // Minimum time (ms) between shots while firing is held.
     this.fireCooldown = 150;
+
+    // How strongly current left/right input leans a jump on
+    // SkyDomePlanetoid specifically (see getOutwardLaunchDirection) —
+    // weighted against a vertical component of 1.0 before
+    // normalizing, so this is roughly "how sideways" versus "how up"
+    // the jump reads. 0 = straight up regardless of input (old
+    // behavior); higher = more of a running-jump arc.
+    this.jumpHorizontalCarry = 0.6;
     this.lastShotTime = 0;
 
     // ----------------------------
@@ -183,7 +191,7 @@ export class Player extends Entity {
     // build unbounded velocity. Both are guesses — tune once you see it
     // in motion.
     this.pullAccel = 0.6;
-    this.pullMaxSpeed = 9;
+    this.pullMaxSpeed = 18;
 
     // How long (ms) the mouse can go without moving before we consider
     // it "idle": facing stops following it (reverts to whatever
@@ -327,13 +335,25 @@ export class Player extends Entity {
     const shoulderX = originPos.x + wx * s;
     const shoulderY = originPos.y + wy * s;
 
-    const cam = state.camera || { x: 0, y: 0 };
-    const zoom = state.zoom || 1;
-    const mouse = state.mouse || { x: shoulderX, y: shoulderY };
-    const mouseWorldX = mouse.x / zoom + cam.x;
-    const mouseWorldY = mouse.y / zoom + cam.y;
+    // While actively pulling toward a planet, aim at the pull target's
+    // actual world position instead of the mouse — the beam in
+    // PullBeam.js originates from this same aimShoulderPos, so this is
+    // what keeps the blaster visually pointing along the beam rather
+    // than wherever the mouse happens to be hovering (which can easily
+    // drift away from the target once a pull is already underway).
+    let targetWorldX, targetWorldY;
+    if (this.pullTarget) {
+      targetWorldX = this.pullTarget.pos.x;
+      targetWorldY = this.pullTarget.pos.y;
+    } else {
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: shoulderX, y: shoulderY };
+      targetWorldX = mouse.x / zoom + cam.x;
+      targetWorldY = mouse.y / zoom + cam.y;
+    }
 
-    const targetAngle = Math.atan2(mouseWorldY - shoulderY, mouseWorldX - shoulderX);
+    const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
 
     // "Forward" flips to the opposite world angle when mirrored, since
     // the whole rig reflects about the vertical (radial, up/down) axis.
@@ -437,6 +457,7 @@ export class Player extends Entity {
     let best = null;
     let bestDistSq = Infinity;
     for (const planet of state.planetoids) {
+      if (planet.isPullExempt) continue; // e.g. JumpPlatform - jump-only, never a valid pull target
       let hit;
       if (planet.isRoundedRect) {
         hit = typeof planet.containsPoint === 'function' && planet.containsPoint(worldX, worldY);
@@ -466,7 +487,7 @@ export class Player extends Entity {
       // frame; applyPullForce() then bends that trajectory toward the
       // target over subsequent frames.
       if (this.onSurface && this.currentPlanet) {
-        const launchDir = this.pos.subtract(this.currentPlanet.pos).normalize();
+        const launchDir = this.getOutwardLaunchDirection();
         this.vel = launchDir.multiply(JUMP_STRENGTH);
       }
       this.pullTarget = best;
@@ -820,13 +841,46 @@ export class Player extends Entity {
       if (keys['ArrowLeft']) { ds = -PLAYER_LINEAR_SPEED; this.facingDirection = -1; this.isWalking = true; }
       if (keys['ArrowRight']) { ds = PLAYER_LINEAR_SPEED; this.facingDirection = 1; this.isWalking = true; }
 
-      // Recomputed every frame (not just when ds !== 0) so the player
-      // stays glued to the surface as the planet rotates, the same way
-      // circular-planet walking already recomputes pos from the
-      // planet's current pos every frame regardless of input.
-      this.surfaceArcPos += ds;
-      const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
-      this.pos = worldSurface.point;
+      // isSkyDome planets (SkyDomePlanetoid, JumpPlatform) are always
+      // axis-aligned and never rotate, so walking on them is handled
+      // directly in world-X rather than through the general arc-length/
+      // segment system every other rect-type planet uses. Two reasons:
+      // right at a sharp (cornerRadius=0) corner, the flat top and the
+      // side edge meet at literally the same point, and an earlier
+      // version that clamped the ARC POSITION there turned out
+      // unreliable — the player could still end up walking onto the
+      // (very short) side edges despite the clamp. And more
+      // importantly: reaching the edge should DETACH the player and
+      // let them fall, not just halt them there — plain world-X bounds
+      // checking makes both of those straightforward, with no
+      // equivalent segment-boundary ambiguity.
+      if (planet.isSkyDome) {
+        const coreHalfWidth = planet.halfWidth - planet.cornerRadius;
+        const minX = planet.pos.x - coreHalfWidth;
+        const maxX = planet.pos.x + coreHalfWidth;
+        const desiredX = this.pos.x + ds;
+
+        if (desiredX < minX || desiredX > maxX) {
+          // Walked past the edge of the flat top — detach and fall,
+          // carrying current walking speed into vel.x so stepping off
+          // a ledge reads as a natural fall with a bit of forward
+          // momentum, not an abrupt stop or a slide onto the side.
+          this.onSurface = false;
+          this.currentPlanet = null;
+          this.vel = new Vector2(ds, 0);
+        } else {
+          const topY = planet.pos.y - planet.halfHeight;
+          this.pos = new Vector2(desiredX, topY - PLAYER_RADIUS);
+        }
+      } else {
+        // Recomputed every frame (not just when ds !== 0) so the
+        // player stays glued to the surface as the planet rotates, the
+        // same way circular-planet walking already recomputes pos from
+        // the planet's current pos every frame regardless of input.
+        this.surfaceArcPos += ds;
+        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
+        this.pos = worldSurface.point;
+      }
 
       if (this.isWalking) {
         this.walkTime += (Math.abs(ds) / this.strideLength) * Math.PI * 2;
@@ -862,6 +916,48 @@ export class Player extends Entity {
     }
   }
 
+  // "Straight up from wherever I'm currently standing," given the
+  // current planet — the planet's TRUE surface normal for rect-type
+  // planets, not the naive "away from the planet's center" vector.
+  // Those two are only ever the same thing on a perfect circle (or,
+  // close enough, near a corner of a roughly-square rect) — on
+  // anything long and thin, "away from center" increasingly tilts
+  // toward whichever edge you're standing nearest, worse the further
+  // you are from the horizontal middle, which is exactly the
+  // curving-jumps-near-the-edge bug this replaced. Shared by jump()
+  // and the pull-initiation launch kick, since both are fundamentally
+  // the same action: detach outward from the current standing spot.
+  getOutwardLaunchDirection() {
+    if (!this.currentPlanet) return new Vector2(0, -1);
+    if (this.currentPlanet.isRoundedRect) {
+      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
+      let direction = surface.normal;
+
+      // SkyDomePlanetoid specifically: blend in current horizontal
+      // input. The ground here never curves, so "straight up relative
+      // to the local surface" is ALWAYS exactly world-up no matter how
+      // the player is moving — unlike every other planet (including
+      // the original, full-perimeter rect one), where walking around a
+      // curve naturally imparts a sense of "forward" into the jump via
+      // the surface normal itself. Without this, jumps here read as
+      // unnaturally floaty compared to everywhere else in the game.
+      if (this.currentPlanet.isSkyDome) {
+        let horizontalInput = 0;
+        if (state.keys['ArrowLeft']) horizontalInput = -1;
+        if (state.keys['ArrowRight']) horizontalInput = 1;
+        if (horizontalInput !== 0) {
+          direction = new Vector2(
+            direction.x + horizontalInput * this.jumpHorizontalCarry,
+            direction.y
+          ).normalize();
+        }
+      }
+
+      return direction;
+    }
+    return this.pos.subtract(this.currentPlanet.pos).normalize();
+  }
+
   jump() {
     if (this.mode === "platform") {
       if (this.onGround) {
@@ -873,7 +969,7 @@ export class Player extends Entity {
     }
 
     if (this.onSurface && this.currentPlanet) {
-      const direction = this.pos.subtract(this.currentPlanet.pos).normalize();
+      const direction = this.getOutwardLaunchDirection();
       this.vel = direction.multiply(JUMP_STRENGTH);
       this.onSurface = false;
       this.currentPlanet = null;
@@ -1131,13 +1227,16 @@ export class Player extends Entity {
       rightArmAngle = swayAngle;
     } else {
       // Always compute the aim angle (even while idle) so aimShoulderPos/
-      // aimWorldAngle stay accurate to the mouse's current world position
-      // for shootFireball() — but only actually use it for the arm's
-      // visual angle when the mouse isn't idle. While idle, both arms
+      // aimWorldAngle stay accurate to the current aim target for
+      // shootFireball() — but only actually use it for the arm's visual
+      // angle when the mouse isn't idle, OR the player is actively
+      // pulling (in which case the arm must stay visually locked to the
+      // pull target regardless of idle mouse state — see
+      // computeLeftArmAimAngle above). Otherwise, while idle, both arms
       // sway together instead: in sync with the walk cycle if walking, or
       // a slow gentle idle sway if just standing still.
       const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
-      if (this.mouseIdle) {
+      if (this.mouseIdle && !this.pullTarget) {
         const swayAngle = (this.onSurface && this.isWalking)
           ? walkAngle * this.armSwingScale
           : Math.sin(Date.now() * 0.0015) * 0.15;
