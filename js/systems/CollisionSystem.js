@@ -43,6 +43,7 @@ export class CollisionSystem {
         if (mv.isImmovable) continue;
 
         let normal, targetPos;
+        let domeContact = null; // set only when the dome shell (not the platform body) is what was actually hit
         if (im.isRoundedRect) {
           // For anything with a dome, an object above the platform's
           // own top line is checked against the DOME shell instead of
@@ -52,7 +53,8 @@ export class CollisionSystem {
           // through this path at all (see nearestDomeSurfacePoint's
           // own comment), so this can't affect that.
           const topY = im.pos.y - im.halfHeight;
-          const surface = (typeof im.nearestDomeSurfacePoint === 'function' && mv.pos.y < topY)
+          const usingDome = typeof im.nearestDomeSurfacePoint === 'function' && mv.pos.y < topY;
+          const surface = usingDome
             ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y)
             : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
           // TRUE surface distance/normal here, NOT the bounding-circle
@@ -64,6 +66,7 @@ export class CollisionSystem {
           if (surface.distance >= mv.radius) continue;
           normal = surface.normal;
           targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+          if (usingDome) domeContact = surface.point;
         } else {
           const offset = mv.pos.subtract(im.pos);
           const dist = offset.length();
@@ -76,6 +79,14 @@ export class CollisionSystem {
         mv.pos = targetPos;
         const dot = mv.vel.dot(normal);
         mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+
+        // Forcefield reaction — only for an actual dome-shell contact,
+        // not the plain platform body (a glass shield reacting makes
+        // sense; ordinary ground reacting doesn't).
+        if (domeContact && typeof im.triggerShieldImpact === 'function') {
+          const intensity = Math.min(1, mv.radius / 60);
+          im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
+        }
       }
     }
   }
@@ -304,6 +315,10 @@ export class CollisionSystem {
             const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
             if (domeSurface.distance < a.radius) {
               toBreak.add(a);
+              if (typeof p.triggerShieldImpact === 'function') {
+                const intensity = Math.min(1, a.radius / 45);
+                p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+              }
             }
           }
         }
