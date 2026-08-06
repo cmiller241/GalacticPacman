@@ -695,10 +695,49 @@
       this.isSkyDome = true;
       this.domeRadiusX = options.domeRadiusX ?? halfWidth;
       this.domeRadiusY = options.domeRadiusY ?? halfWidth;
-      this.domeFillColor = options.domeFillColor ?? "rgba(141, 195, 244, 0.9)";
-      this.domeRimColor = options.domeRimColor ?? "rgba(90, 150, 210, 0.85)";
+      this.domeFillColor = options.domeFillColor ?? "rgba(130, 196, 255, 0.9)";
+      this.domeRimColor = options.domeRimColor ?? "rgba(75, 150, 225, 0.85)";
       this.domeOutlineColor = options.domeOutlineColor ?? "#ffffff";
       this.domeOutlineWidth = options.domeOutlineWidth ?? 3;
+      this.domeBottomFade = options.domeBottomFade ?? 0.45;
+      this.domeGlowColor = options.domeGlowColor ?? "255,255,255";
+      this.domeGlowReach = options.domeGlowReach ?? 30;
+      this.domeGlowIntensity = options.domeGlowIntensity ?? 1;
+      this.domeInnerGlowReach = options.domeInnerGlowReach ?? 40;
+      this.domeHexSize = options.domeHexSize ?? 60;
+      this.domeHexColor = options.domeHexColor ?? "255,255,255";
+      this.domeHexOpacity = options.domeHexOpacity ?? 0.12;
+      this.domeForegroundHexSize = options.domeForegroundHexSize ?? this.domeHexSize * 1.8;
+      this.domeForegroundHexOpacity = options.domeForegroundHexOpacity ?? Math.min(1, this.domeHexOpacity * 2.5);
+      this.domeForegroundTintOpacity = options.domeForegroundTintOpacity ?? 0.6;
+      this.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity ?? 0.6;
+      this.domeForegroundZoomReference = options.domeForegroundZoomReference ?? 1;
+      this.domeForegroundZoomFloor = options.domeForegroundZoomFloor ?? 0;
+      this.hexGridCanvas = null;
+      this.hexGridForegroundCanvas = null;
+      this.lastImpactTime = 0;
+      this.shieldRipples = [];
+      this.shieldSparks = [];
+    }
+    // Called from CollisionSystem.js. intensity is a rough 0-1 scale
+    // (typically impactor radius / some reasonable max) — bigger objects
+    // produce a slightly bigger ripple and more sparks, not a
+    // fundamentally different effect.
+    triggerShieldImpact(worldX, worldY, intensity = 1) {
+      this.lastImpactTime = Date.now();
+      this.shieldRipples.push({ x: worldX, y: worldY, spawnTime: this.lastImpactTime, intensity });
+      const sparkCount = Math.round(4 + intensity * 6);
+      for (let i = 0; i < sparkCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.06 + Math.random() * 0.12;
+        this.shieldSparks.push({
+          x: worldX,
+          y: worldY,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          spawnTime: this.lastImpactTime
+        });
+      }
     }
     // True if a world point falls within the rectangular "capture zone"
     // directly above the platform's top surface — the ONLY region this
@@ -714,6 +753,61 @@
     createOffscreen() {
       super.createOffscreen();
       this.ringCanvas = null;
+      this.hexGridCanvas = this.bakeHexGridOverlay(this.domeHexSize, this.domeHexOpacity);
+      this.hexGridForegroundCanvas = this.bakeHexGridOverlay(this.domeForegroundHexSize, this.domeForegroundHexOpacity);
+    }
+    // Draws one hexagon outline (stroke only, not filled — reads as a
+    // grid/panel line, not a solid tile) centered at (cx, cy).
+    strokeHexagon(ctx, cx, cy, size) {
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = Math.PI / 3 * i - Math.PI / 6;
+        const x = cx + size * Math.cos(angle);
+        const y = cy + size * Math.sin(angle);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+    // Bakes a full hex grid, clipped to the dome's own silhouette, into
+    // a small offscreen canvas sized to just the dome's upper-half
+    // bounding box (domeRadiusX*2 wide, domeRadiusY tall — no need to
+    // bake the lower half of the ellipse, since the dome shape only ever
+    // uses the upper half). Blitted directly at (boxX, boxY) — a single
+    // cheap image copy instead of re-stroking ~800+ hexagons 60 times a
+    // second. Parameterized by hexSize/opacity (rather than always
+    // reading this.domeHexSize) and returns the canvas rather than
+    // storing it directly, so this one method can bake BOTH the
+    // background grid and the foreground grid's larger hexagons, called
+    // twice from createOffscreen, instead of duplicating this logic.
+    bakeHexGridOverlay(hexSize, opacity) {
+      const w = this.domeRadiusX * 2;
+      const h = this.domeRadiusY;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const bctx = canvas.getContext("2d");
+      const localCx = w / 2, localCy = h;
+      bctx.beginPath();
+      bctx.ellipse(localCx, localCy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      bctx.closePath();
+      bctx.clip();
+      bctx.strokeStyle = `rgba(${this.domeHexColor}, ${opacity})`;
+      bctx.lineWidth = 1;
+      const hexWidth = Math.sqrt(3) * hexSize;
+      const hexHeightStep = hexSize * 1.5;
+      const endRow = Math.ceil(h / hexHeightStep) + 1;
+      const endCol = Math.ceil(w / hexWidth) + 1;
+      for (let row = -1; row <= endRow; row++) {
+        const y = row * hexHeightStep;
+        const rowOffset = row % 2 !== 0 ? hexWidth / 2 : 0;
+        for (let col = -1; col <= endCol; col++) {
+          const x = col * hexWidth + rowOffset;
+          this.strokeHexagon(bctx, x, y, hexSize);
+        }
+      }
+      return canvas;
     }
     // True for any point above the ground's own surface AND inside the
     // dome's actual ellipse — replaced an earlier version using a fixed
@@ -782,23 +876,178 @@
       ctx.beginPath();
       ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
       ctx.closePath();
+      ctx.clip();
+      const boxX = cx - this.domeRadiusX, boxY = cy - this.domeRadiusY;
+      const boxW = this.domeRadiusX * 2, boxH = this.domeRadiusY * 2;
       const highlightX = cx - this.domeRadiusX * 0.25;
       const highlightY = cy - this.domeRadiusY * 0.55;
       const outerRadius = Math.max(this.domeRadiusX, this.domeRadiusY) * 1.1;
-      const grad = ctx.createRadialGradient(highlightX, highlightY, 0, cx, cy, outerRadius);
-      grad.addColorStop(0, "rgba(255,255,255,0.9)");
-      grad.addColorStop(0.25, this.domeFillColor);
-      grad.addColorStop(1, this.domeRimColor);
-      ctx.fillStyle = grad;
-      ctx.fill();
+      const glassGrad = ctx.createRadialGradient(highlightX, highlightY, 0, cx, cy, outerRadius);
+      glassGrad.addColorStop(0, "rgba(255,255,255,0.9)");
+      glassGrad.addColorStop(0.25, this.domeFillColor);
+      glassGrad.addColorStop(1, this.domeRimColor);
+      ctx.fillStyle = glassGrad;
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.globalCompositeOperation = "destination-out";
+      const fadeGrad = ctx.createLinearGradient(cx, boxY, cx, cy);
+      fadeGrad.addColorStop(0, "rgba(0,0,0,0)");
+      fadeGrad.addColorStop(1, `rgba(0,0,0,${this.domeBottomFade})`);
+      ctx.fillStyle = fadeGrad;
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      const innerLayers = [
+        { inset: 0, alpha: 0.1 },
+        { inset: this.domeInnerGlowReach * 0.5, alpha: 0.07 },
+        { inset: this.domeInnerGlowReach, alpha: 0.04 }
+      ];
+      for (const layer of innerLayers) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, this.domeRadiusX - layer.inset, this.domeRadiusY - layer.inset, 0, Math.PI, Math.PI * 2);
+        ctx.lineWidth = this.domeInnerGlowReach;
+        ctx.strokeStyle = `rgba(${this.domeGlowColor}, ${layer.alpha * this.domeGlowIntensity})`;
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (this.hexGridCanvas) {
+        ctx.drawImage(this.hexGridCanvas, boxX, boxY);
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      const reach = this.domeGlowReach;
+      const glowLayers = [
+        { width: this.domeOutlineWidth + reach, alpha: 0.06 },
+        { width: this.domeOutlineWidth + reach * 0.6, alpha: 0.1 },
+        { width: this.domeOutlineWidth + reach * 0.3, alpha: 0.16 }
+      ];
+      for (const layer of glowLayers) {
+        ctx.lineWidth = layer.width;
+        ctx.strokeStyle = `rgba(${this.domeGlowColor}, ${layer.alpha * this.domeGlowIntensity})`;
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
       ctx.lineWidth = this.domeOutlineWidth;
       ctx.strokeStyle = this.domeOutlineColor;
       ctx.stroke();
       ctx.restore();
+      this.drawShieldImpactEffects(ctx, cx, cy, boxX, boxY, boxW, boxH);
+    }
+    // Forcefield impact reaction: a brief whole-dome brightness pulse,
+    // plus a flat expanding ring and a few drifting sparks at each
+    // recent contact point. Deliberately a flat 2D ring rather than a
+    // ripple that actually travels along the dome's curved surface —
+    // that would need to walk the ellipse's own boundary the way the
+    // belt's perimeter-walk does, a meaningfully bigger build for
+    // something that happens fast enough it likely wouldn't read
+    // differently in practice. Everything here is computed straight from
+    // elapsed real time, so no per-frame update() call is needed.
+    drawShieldImpactEffects(ctx, cx, cy, boxX, boxY, boxW, boxH) {
+      const now = Date.now();
+      const PULSE_DURATION_MS = 350;
+      const pulseElapsed = now - this.lastImpactTime;
+      if (pulseElapsed < PULSE_DURATION_MS) {
+        const t = 1 - pulseElapsed / PULSE_DURATION_MS;
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.globalAlpha = t * 0.5;
+        ctx.fillStyle = "rgba(255,255,255,1)";
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.restore();
+      }
+      const RIPPLE_DURATION_MS = 400;
+      for (let i = this.shieldRipples.length - 1; i >= 0; i--) {
+        const r = this.shieldRipples[i];
+        const age = now - r.spawnTime;
+        if (age > RIPPLE_DURATION_MS) {
+          this.shieldRipples.splice(i, 1);
+          continue;
+        }
+        const t = age / RIPPLE_DURATION_MS;
+        const radius = (10 + r.intensity * 15) * (0.3 + t * 0.7);
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(210, 240, 255, ${(1 - t) * 0.8})`;
+        ctx.lineWidth = 2.5;
+        ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      const SPARK_DURATION_MS = 500;
+      for (let i = this.shieldSparks.length - 1; i >= 0; i--) {
+        const s = this.shieldSparks[i];
+        const age = now - s.spawnTime;
+        if (age > SPARK_DURATION_MS) {
+          this.shieldSparks.splice(i, 1);
+          continue;
+        }
+        const x = s.x + s.vx * age;
+        const y = s.y + s.vy * age;
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(220, 240, 255, ${1 - age / SPARK_DURATION_MS})`;
+        ctx.arc(x, y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     draw() {
       this.drawDome();
       super.draw();
+    }
+    // A deliberately SUBTLE second pass — NOT called from draw() above,
+    // called separately from game.js, AFTER the player and everything
+    // else that might be standing inside the dome. Without this, the
+    // dome only ever renders as a backdrop fully BEHIND the player,
+    // which reads wrong once you think about it: if you're actually
+    // standing inside a glass dome, the near surface of that glass sits
+    // between you and the camera, not fully behind you like a painted
+    // background. A faint tint plus a soft outline, reusing the dome's
+    // own colors at low opacity, is enough to suggest "you're looking
+    // through glass at this" without meaningfully obscuring anything
+    // underneath — this isn't a second full dome render, just enough
+    // translucency to sell the barrier.
+    drawForegroundGlass() {
+      const ctx = state.ctx;
+      const cx = this.pos.x;
+      const cy = this.pos.y - this.halfHeight;
+      const zoom = state.zoom || 1;
+      const zoomMin = state.zoomMin ?? 0.5;
+      const zoomRef = this.domeForegroundZoomReference;
+      const zoomT = zoomRef > zoomMin ? (zoom - zoomMin) / (zoomRef - zoomMin) : 0;
+      const clampedT = Math.max(0, Math.min(1, zoomT));
+      const zoomFactor = this.domeForegroundZoomFloor + (1 - this.domeForegroundZoomFloor) * (1 - clampedT);
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.globalAlpha = this.domeForegroundTintOpacity * zoomFactor;
+      ctx.fillStyle = this.domeFillColor;
+      ctx.fillRect(cx - this.domeRadiusX, cy - this.domeRadiusY, this.domeRadiusX * 2, this.domeRadiusY * 2);
+      ctx.restore();
+      if (this.hexGridForegroundCanvas) {
+        ctx.save();
+        ctx.globalAlpha = zoomFactor;
+        ctx.drawImage(this.hexGridForegroundCanvas, cx - this.domeRadiusX, cy - this.domeRadiusY);
+        ctx.restore();
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.globalAlpha = this.domeForegroundOutlineOpacity * zoomFactor;
+      ctx.lineWidth = this.domeOutlineWidth;
+      ctx.strokeStyle = this.domeOutlineColor;
+      ctx.stroke();
+      ctx.restore();
     }
   };
 
@@ -3269,12 +3518,15 @@
         for (const mv of movables) {
           if (mv.isImmovable) continue;
           let normal, targetPos;
+          let domeContact = null;
           if (im.isRoundedRect) {
             const topY = im.pos.y - im.halfHeight;
-            const surface = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y) : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+            const usingDome = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY;
+            const surface = usingDome ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y) : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
             if (surface.distance >= mv.radius) continue;
             normal = surface.normal;
             targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+            if (usingDome) domeContact = surface.point;
           } else {
             const offset = mv.pos.subtract(im.pos);
             const dist = offset.length();
@@ -3286,6 +3538,10 @@
           mv.pos = targetPos;
           const dot = mv.vel.dot(normal);
           mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+          if (domeContact && typeof im.triggerShieldImpact === "function") {
+            const intensity = Math.min(1, mv.radius / 60);
+            im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
+          }
         }
       }
     }
@@ -3459,6 +3715,10 @@
               const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
               if (domeSurface.distance < a.radius) {
                 toBreak.add(a);
+                if (typeof p.triggerShieldImpact === "function") {
+                  const intensity = Math.min(1, a.radius / 45);
+                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+                }
               }
             }
           }
@@ -4115,7 +4375,15 @@
   var ZOOM_MIN = 0.5;
   var ZOOM_MAX = 2.5;
   state.zoomMax = ZOOM_MAX;
+  state.zoomMin = ZOOM_MIN;
   var ZOOM_STEP_PER_FRAME = 0.02;
+  var ZOOM_WHEEL_STEP = 0.08;
+  state.canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
+    state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom + delta));
+    state.zoomTarget = null;
+  }, { passive: false });
   state.zoomTarget = null;
   state.preMazeZoom = state.zoom;
   var previousPlayerMode = null;
@@ -4255,6 +4523,16 @@
     generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
     return regularPlanetoids;
   }
+  function isInsideSkyDome(worldX, worldY) {
+    if (!state.skyDomePlanet) return false;
+    const dome = state.skyDomePlanet;
+    const topY = dome.pos.y - dome.halfHeight;
+    if (worldY > topY) return false;
+    const insetFactor = 0.9;
+    const nx = (worldX - dome.pos.x) / (dome.domeRadiusX * insetFactor);
+    const ny = (worldY - topY) / (dome.domeRadiusY * insetFactor);
+    return nx * nx + ny * ny < 1;
+  }
   function cullDistantObjects(activeCellKeys) {
     for (let i = state.planetoids.length - 1; i >= 0; i--) {
       const p = state.planetoids[i];
@@ -4265,6 +4543,10 @@
         }
         continue;
       }
+      if (isInsideSkyDome(p.pos.x, p.pos.y)) {
+        state.planetoids.splice(i, 1);
+        continue;
+      }
       const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
       if (!activeCellKeys.has(cellKey(col, row))) {
         state.planetoids.splice(i, 1);
@@ -4272,6 +4554,7 @@
     }
     const survivingPlanetoids = new Set(state.planetoids);
     state.asteroids = state.asteroids.filter((a) => {
+      if (isInsideSkyDome(a.pos.x, a.pos.y)) return false;
       const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
       return activeCellKeys.has(cellKey(col, row));
     });
@@ -4283,9 +4566,11 @@
     state.enemies = state.enemies.filter((e) => {
       if (e.onSurface && e.planet) {
         if (!survivingPlanetoids.has(e.planet)) return false;
+        if (isInsideSkyDome(e.planet.pos.x, e.planet.pos.y)) return false;
         const { col: col2, row: row2 } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
         return activeCellKeys.has(cellKey(col2, row2));
       }
+      if (isInsideSkyDome(e.pos.x, e.pos.y)) return false;
       const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
       return activeCellKeys.has(cellKey(col, row));
     });
@@ -4348,7 +4633,7 @@
       const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
       const groundX = state.skyDomePlanet.pos.x;
       state.jumpPlatforms = [
-        new JumpPlatform(groundX - 300, groundTopY - 90, 300, 100),
+        new JumpPlatform(groundX - 300, groundTopY - 90, 300, 30),
         new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
         new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
         new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30)
@@ -4653,6 +4938,7 @@
     state.fireballs.forEach((f) => f.draw());
     state.particles.forEach((p) => p.draw());
     state.explosions.forEach((e) => e.draw());
+    if (state.skyDomePlanet) state.skyDomePlanet.drawForegroundGlass();
     state.ctx.restore();
     state.ctx.fillStyle = "white";
     state.ctx.font = "24px Arial";

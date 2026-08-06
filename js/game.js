@@ -182,7 +182,28 @@ const ZOOM_MAX = 2.5;
 // resolution to stay crisp at the maximum zoom level, without ever
 // needing to rebuild while zooming.
 state.zoomMax = ZOOM_MAX;
+// Exposed alongside zoomMax so anything wanting to scale a visual
+// effect by "how zoomed in are we" (currently: SkyDomePlanetoid's
+// foreground glass pass) can read the real range directly, rather
+// than hardcoding a guess at it in a different file.
+state.zoomMin = ZOOM_MIN;
 const ZOOM_STEP_PER_FRAME = 0.02;
+const ZOOM_WHEEL_STEP = 0.08; // per scroll "click" — a fixed step rather than scaling off e.deltaY's raw magnitude, since that varies wildly between mice and trackpads
+
+// Scroll wheel zoom: up zooms in, down zooms out (standard convention —
+// same direction as Google Maps and most other apps). { passive: false }
+// is required for preventDefault() to actually stop the page itself
+// from scrolling — modern browsers default wheel listeners to passive
+// for scroll performance, which silently makes preventDefault a no-op
+// unless explicitly opted out here. Clears zoomTarget too, same as the
+// held +/- keys already do, so scrolling mid-auto-zoom (e.g. during a
+// maze transition) correctly cancels it rather than fighting it.
+state.canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
+  state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom + delta));
+  state.zoomTarget = null;
+}, { passive: false });
 
 // ----------------------------
 // AUTO-ZOOM ON MAZE ENTRY/EXIT
@@ -409,6 +430,46 @@ function generateCell(col, row) {
 // captured once at construction — stays valid; reassigning
 // state.planetoids here would silently break gravity for anything
 // generated or culled after the first pass.
+// True if a world point falls within a generous exclusion zone around
+// the SkyDomePlanetoid ground — used to keep hazards (regular/spikey
+// planetoids, asteroids, enemies) from EVER existing inside what's
+// meant to read as a safe, enclosed pocket, regardless of how they got
+// there (procedural generation near the dome's cell, an enemy jumping
+// planet to planet, ordinary drift). Rather than teaching every
+// different generation code path about the dome individually — there
+// are several, some of which don't cleanly support per-position
+// rejection — this is enforced as a periodic sweep (see
+// cullDistantObjects below), the same way distance-based culling
+// already works, which guarantees "never" regardless of the source. A
+// single generous circular zone, sized to comfortably cover both the
+// platform body and the dome shell with margin, rather than precisely
+// carving out the two shapes separately — simpler, and errs toward
+// excluding slightly more area rather than risking a gap.
+// True only when a world point is MEANINGFULLY inside the dome's true
+// ellipse boundary — not "near" it. An earlier version used a radius
+// PADDED beyond the dome's actual size, which was the bug this fixes:
+// that padding made the cull zone bigger than the dome's real
+// collision surface, so an approaching planetoid got deleted before it
+// ever got close enough to trigger the actual bounce physics — the two
+// systems were fighting, and the cull always won first. Using the true
+// radius (with a modest 10% INSET as a safety margin, not padding
+// outward) means normal bouncing — which re-corrects position every
+// single frame — will always keep a properly-colliding object outside
+// this zone by the time the cull sweep samples it (only every 15
+// frames): this only ever catches something ALREADY inside some other
+// way (generation, a teleport, a rare fast-object tunneling edge
+// case), never something merely on its way toward a normal bounce.
+function isInsideSkyDome(worldX, worldY) {
+  if (!state.skyDomePlanet) return false;
+  const dome = state.skyDomePlanet;
+  const topY = dome.pos.y - dome.halfHeight;
+  if (worldY > topY) return false; // at/below the platform's own top line isn't "inside the dome" — the dome shape only exists above that line
+  const insetFactor = 0.9;
+  const nx = (worldX - dome.pos.x) / (dome.domeRadiusX * insetFactor);
+  const ny = (worldY - topY) / (dome.domeRadiusY * insetFactor);
+  return (nx * nx + ny * ny) < 1;
+}
+
 function cullDistantObjects(activeCellKeys) {
   for (let i = state.planetoids.length - 1; i >= 0; i--) {
     const p = state.planetoids[i];
@@ -425,6 +486,11 @@ function cullDistantObjects(activeCellKeys) {
       if (!shouldKeepBeltPlanetoid(p, state.player.pos.x, state.player.pos.y)) {
         state.planetoids.splice(i, 1);
       }
+      continue;
+    }
+
+    if (isInsideSkyDome(p.pos.x, p.pos.y)) {
+      state.planetoids.splice(i, 1);
       continue;
     }
 
@@ -445,6 +511,7 @@ function cullDistantObjects(activeCellKeys) {
   const survivingPlanetoids = new Set(state.planetoids);
 
   state.asteroids = state.asteroids.filter(a => {
+    if (isInsideSkyDome(a.pos.x, a.pos.y)) return false;
     const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
     return activeCellKeys.has(cellKey(col, row));
   });
@@ -473,9 +540,11 @@ function cullDistantObjects(activeCellKeys) {
   state.enemies = state.enemies.filter(e => {
     if (e.onSurface && e.planet) {
       if (!survivingPlanetoids.has(e.planet)) return false;
+      if (isInsideSkyDome(e.planet.pos.x, e.planet.pos.y)) return false;
       const { col, row } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
       return activeCellKeys.has(cellKey(col, row));
     }
+    if (isInsideSkyDome(e.pos.x, e.pos.y)) return false;
     const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
     return activeCellKeys.has(cellKey(col, row));
   });
@@ -562,7 +631,7 @@ function initGame() {
     const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
     const groundX = state.skyDomePlanet.pos.x;
     state.jumpPlatforms = [
-      new JumpPlatform(groundX - 300, groundTopY - 90, 300, 100),
+      new JumpPlatform(groundX - 300, groundTopY - 90, 300, 30),
       new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
       new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
       new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30),
@@ -973,6 +1042,11 @@ function gameLoop(timestamp) {
   state.fireballs.forEach(f => f.draw());
   state.particles.forEach(p => p.draw());
   state.explosions.forEach(e => e.draw());
+  // Drawn last, after the player and everything else — see
+  // drawForegroundGlass's own comment for why this needs to be a
+  // separate, later pass rather than part of the normal planetoid
+  // draw loop above.
+  if (state.skyDomePlanet) state.skyDomePlanet.drawForegroundGlass();
   state.ctx.restore();
   // HUD
   state.ctx.fillStyle = 'white';
