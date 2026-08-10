@@ -254,13 +254,16 @@ export class RoundedRectPlanetoid {
   // arc. Reuses Planetoid's static shadow constants + shared sun-
   // overlay sprite for visual consistency without extending that
   // (circle-specific) class.
-  createOffscreen() {
-    const w = this.halfWidth * 2, h = this.halfHeight * 2;
-    const bodyCanvas = document.createElement('canvas');
-    bodyCanvas.width = w;
-    bodyCanvas.height = h;
-    const bodyCtx = bodyCanvas.getContext('2d');
-
+  // Draws this planet's body texture onto bodyCtx (a plain w x h
+  // canvas, not yet padded/shadowed — that happens in createOffscreen
+  // below regardless of what this method does). Default implementation
+  // is the shared rocky planetTexture tinted by this planet's own
+  // color, same as circular Planetoid. Subclasses (SkyDomePlanetoid is
+  // the first example) can override just this one method to use a
+  // completely different body texture, while still getting the
+  // shadow-baking/offscreen-sizing/ring logic in createOffscreen()
+  // below for free, unchanged.
+  drawBodyTexture(bodyCtx, w, h) {
     bodyCtx.save();
     bodyCtx.beginPath();
     bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
@@ -278,6 +281,16 @@ export class RoundedRectPlanetoid {
     bodyCtx.fill();
     bodyCtx.globalCompositeOperation = 'source-over';
     bodyCtx.restore();
+  }
+
+  createOffscreen() {
+    const w = this.halfWidth * 2, h = this.halfHeight * 2;
+    const bodyCanvas = document.createElement('canvas');
+    bodyCanvas.width = w;
+    bodyCanvas.height = h;
+    const bodyCtx = bodyCanvas.getContext('2d');
+
+    this.drawBodyTexture(bodyCtx, w, h);
 
     const padding = Planetoid.SHADOW_PADDING;
     this.offscreenPadding = padding;
@@ -341,46 +354,57 @@ export class RoundedRectPlanetoid {
     // from both the planet's spin and its slowly-shifting angle to the
     // sun as it drifts — cheap for the handful of these planets that
     // exist.
-    const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
-    const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
-    const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
-    const worldAngleToSun = Math.atan2(toSunY, toSunX);
-    // Convert the WORLD angle-to-sun into a direction usable here,
-    // since we're already inside the translate+rotate(rotationAngle)
-    // frame from above — subtracting rotationAngle is what keeps the
-    // gradient pointed at the true sun regardless of current spin.
-    const localAngle = worldAngleToSun - this.rotationAngle;
-    const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
+    //
+    // Gated behind noSunShading (SkyDomePlanetoid/JumpPlatform set this
+    // true) — this whole effect simulates directional lighting on a
+    // rocky, roughly spherical-reading surface, which doesn't make
+    // sense on a flat grass tile, and applying it would only ever hit
+    // part of a two-piece structure anyway: this live pass runs on a
+    // planet's own body but never touches JumpPlatform's separately-
+    // baked pillar underneath it, so the two would visibly mismatch in
+    // brightness — exactly the "vestigial darkening" this fixes.
+    if (!this.noSunShading) {
+      const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
+      const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
+      const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+      const worldAngleToSun = Math.atan2(toSunY, toSunX);
+      // Convert the WORLD angle-to-sun into a direction usable here,
+      // since we're already inside the translate+rotate(rotationAngle)
+      // frame from above — subtracting rotationAngle is what keeps the
+      // gradient pointed at the true sun regardless of current spin.
+      const localAngle = worldAngleToSun - this.rotationAngle;
+      const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
 
-    const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
-    const distT = Math.min(distToSun / maxDist, 1);
-    const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
+      const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
+      const distT = Math.min(distToSun / maxDist, 1);
+      const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
 
-    const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-    ctx.clip();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = overlayAlpha;
-    // Dark at the point opposite the sun, light at the point toward it.
-    const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
-    grad.addColorStop(0, 'black');
-    grad.addColorStop(1, 'white');
-    ctx.fillStyle = grad;
-    ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
-    ctx.restore();
-
-    const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
-    if (overallDarkness > 0) {
+      const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
       ctx.save();
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.globalAlpha = overallDarkness;
-      ctx.fillStyle = '#000000';
       ctx.beginPath();
       ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-      ctx.fill();
+      ctx.clip();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = overlayAlpha;
+      // Dark at the point opposite the sun, light at the point toward it.
+      const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
+      grad.addColorStop(0, 'black');
+      grad.addColorStop(1, 'white');
+      ctx.fillStyle = grad;
+      ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
       ctx.restore();
+
+      const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
+      if (overallDarkness > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = overallDarkness;
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
     ctx.restore();

@@ -13,9 +13,11 @@ export class AudioManager {
     this.bangLarge = new Audio('sounds/bangLarge.wav');
     this.bangMedium = new Audio('sounds/bangMedium.wav');
     this.bangSmall = new Audio('sounds/bangSmall.wav');
+    this.goombaStompAudio = new Audio('sounds/mario-goomba-stomp.mp3');
+    this.fireballAudio = new Audio('sounds/mario-fireball.mp3');
 
     // Set volumes and preload
-    [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall].forEach(audio => {
+    [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall, this.goombaStompAudio, this.fireballAudio].forEach(audio => {
       audio.volume = 0.5;
       audio.preload = 'auto';
       audio.load();
@@ -41,6 +43,16 @@ export class AudioManager {
 
   playJumpSmall() {
     const audio = this.jumpSmallAudio.cloneNode(true);
+    audio.play().catch(e => console.log('Audio play failed:', e));
+  }
+
+  playGoombaStomp() {
+    const audio = this.goombaStompAudio.cloneNode(true);
+    audio.play().catch(e => console.log('Audio play failed:', e));
+  }
+
+  playFireball() {
+    const audio = this.fireballAudio.cloneNode(true);
     audio.play().catch(e => console.log('Audio play failed:', e));
   }
 

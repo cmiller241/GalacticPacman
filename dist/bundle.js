@@ -472,12 +472,16 @@
     // arc. Reuses Planetoid's static shadow constants + shared sun-
     // overlay sprite for visual consistency without extending that
     // (circle-specific) class.
-    createOffscreen() {
-      const w = this.halfWidth * 2, h = this.halfHeight * 2;
-      const bodyCanvas = document.createElement("canvas");
-      bodyCanvas.width = w;
-      bodyCanvas.height = h;
-      const bodyCtx = bodyCanvas.getContext("2d");
+    // Draws this planet's body texture onto bodyCtx (a plain w x h
+    // canvas, not yet padded/shadowed — that happens in createOffscreen
+    // below regardless of what this method does). Default implementation
+    // is the shared rocky planetTexture tinted by this planet's own
+    // color, same as circular Planetoid. Subclasses (SkyDomePlanetoid is
+    // the first example) can override just this one method to use a
+    // completely different body texture, while still getting the
+    // shadow-baking/offscreen-sizing/ring logic in createOffscreen()
+    // below for free, unchanged.
+    drawBodyTexture(bodyCtx, w, h) {
       bodyCtx.save();
       bodyCtx.beginPath();
       bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
@@ -494,6 +498,14 @@
       bodyCtx.fill();
       bodyCtx.globalCompositeOperation = "source-over";
       bodyCtx.restore();
+    }
+    createOffscreen() {
+      const w = this.halfWidth * 2, h = this.halfHeight * 2;
+      const bodyCanvas = document.createElement("canvas");
+      bodyCanvas.width = w;
+      bodyCanvas.height = h;
+      const bodyCtx = bodyCanvas.getContext("2d");
+      this.drawBodyTexture(bodyCtx, w, h);
       const padding = Planetoid.SHADOW_PADDING;
       this.offscreenPadding = padding;
       this.offscreen = document.createElement("canvas");
@@ -535,38 +547,40 @@
       if (this.offscreen) {
         ctx.drawImage(this.offscreen, -this.offscreen.width / 2, -this.offscreen.height / 2);
       }
-      const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
-      const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
-      const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
-      const worldAngleToSun = Math.atan2(toSunY, toSunX);
-      const localAngle = worldAngleToSun - this.rotationAngle;
-      const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
-      const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
-      const distT = Math.min(distToSun / maxDist, 1);
-      const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
-      const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-      ctx.clip();
-      ctx.globalCompositeOperation = "multiply";
-      ctx.globalAlpha = overlayAlpha;
-      const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
-      grad.addColorStop(0, "black");
-      grad.addColorStop(1, "white");
-      ctx.fillStyle = grad;
-      ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
-      ctx.restore();
-      const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
-      if (overallDarkness > 0) {
+      if (!this.noSunShading) {
+        const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
+        const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
+        const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+        const worldAngleToSun = Math.atan2(toSunY, toSunX);
+        const localAngle = worldAngleToSun - this.rotationAngle;
+        const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
+        const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
+        const distT = Math.min(distToSun / maxDist, 1);
+        const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
+        const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
         ctx.save();
-        ctx.globalCompositeOperation = "multiply";
-        ctx.globalAlpha = overallDarkness;
-        ctx.fillStyle = "#000000";
         ctx.beginPath();
         ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-        ctx.fill();
+        ctx.clip();
+        ctx.globalCompositeOperation = "multiply";
+        ctx.globalAlpha = overlayAlpha;
+        const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
+        grad.addColorStop(0, "black");
+        grad.addColorStop(1, "white");
+        ctx.fillStyle = grad;
+        ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
         ctx.restore();
+        const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
+        if (overallDarkness > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "multiply";
+          ctx.globalAlpha = overallDarkness;
+          ctx.fillStyle = "#000000";
+          ctx.beginPath();
+          ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
+          ctx.fill();
+          ctx.restore();
+        }
       }
       ctx.restore();
     }
@@ -684,17 +698,27 @@
   var SkyDomePlanetoid = class extends RoundedRectPlanetoid {
     constructor(x, y, options = {}) {
       const halfWidth = options.halfWidth ?? 2e3;
-      const halfHeight = options.halfHeight ?? 30;
+      const halfHeight = options.halfHeight ?? 32;
       const cornerRadius = options.cornerRadius ?? 0;
       const color = options.color ?? "#5c8a4a";
       super(x, y, halfWidth, halfHeight, cornerRadius, color);
+      this.grassHeight = options.grassHeight ?? 32;
+      this.halfHeight += this.grassHeight;
       this.vel = new Vector2(0, 0);
       this.rotationAngle = 0;
       this.rotationSpeed = 0;
       this.isImmovable = true;
       this.isSkyDome = true;
+      this.noSunShading = true;
       this.domeRadiusX = options.domeRadiusX ?? halfWidth;
       this.domeRadiusY = options.domeRadiusY ?? halfWidth;
+      this.baseRadiusY = options.baseRadiusY ?? this.domeRadiusY / 6;
+      this.baseGlowColor = options.baseGlowColor ?? "180, 210, 255";
+      this.baseLineColor = options.baseLineColor ?? "10, 10, 12";
+      this.baseHorizontalLineCount = options.baseHorizontalLineCount ?? 3;
+      this.baseSeamCount = options.baseSeamCount ?? 6;
+      this.baseHighlightColor = options.baseHighlightColor ?? "210, 220, 235";
+      this.baseSeamConvergence = options.baseSeamConvergence ?? 0.35;
       this.domeFillColor = options.domeFillColor ?? "rgba(130, 196, 255, 0.9)";
       this.domeRimColor = options.domeRimColor ?? "rgba(75, 150, 225, 0.85)";
       this.domeOutlineColor = options.domeOutlineColor ?? "#ffffff";
@@ -707,10 +731,14 @@
       this.domeHexSize = options.domeHexSize ?? 60;
       this.domeHexColor = options.domeHexColor ?? "255,255,255";
       this.domeHexOpacity = options.domeHexOpacity ?? 0.12;
+      this.domeHexScrollSpeed = options.domeHexScrollSpeed ?? 6e-3;
+      this.domeHexLineWidth = options.domeHexLineWidth ?? 1;
       this.domeForegroundHexSize = options.domeForegroundHexSize ?? this.domeHexSize * 1.8;
       this.domeForegroundHexOpacity = options.domeForegroundHexOpacity ?? Math.min(1, this.domeHexOpacity * 2.5);
-      this.domeForegroundTintOpacity = options.domeForegroundTintOpacity ?? 0.6;
-      this.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity ?? 0.6;
+      this.domeForegroundHexScrollSpeed = options.domeForegroundHexScrollSpeed ?? -0.01;
+      this.domeForegroundHexLineWidth = options.domeForegroundHexLineWidth ?? 1.5;
+      this.domeForegroundTintOpacity = options.domeForegroundTintOpacity ?? 0.8;
+      this.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity ?? 0.2;
       this.domeForegroundZoomReference = options.domeForegroundZoomReference ?? 1;
       this.domeForegroundZoomFloor = options.domeForegroundZoomFloor ?? 0;
       this.hexGridCanvas = null;
@@ -739,6 +767,32 @@
         });
       }
     }
+    // The TRUE walking/gravity/landing surface — the top of the grass.
+    // This is what this.halfHeight already measures out to (see the
+    // constructor's own comment on why it was grown by grassHeight), so
+    // this getter exists purely so every call site can read intent
+    // directly ("the true surface") instead of re-deriving
+    // `this.pos.y - this.halfHeight` from memory each time, which used
+    // to be spread across half a dozen methods with no way to tell at a
+    // glance whether a given one had (correctly, or incorrectly)
+    // remembered to add grassHeight back on top.
+    get trueSurfaceY() {
+      return this.pos.y - this.halfHeight;
+    }
+    // The dome/metal-base's shared ORIGINAL anchor position — where the
+    // dome's own shell and the metal base's own top edge both live,
+    // unmoved from before the grass layer was introduced. Everything
+    // that needs to stay anchored at the pre-grass position (the dome's
+    // visible shape and collision shell, the metal base's visible shape
+    // and collision shell) reads this getter; everything that needs the
+    // NEW, grass-adjusted surface (gravity gate, walking, the grass cap
+    // itself) reads trueSurfaceY above instead. Having both as named
+    // getters is what makes that distinction legible at each call site,
+    // rather than a bare `+ this.grassHeight` whose presence or absence
+    // was easy to get wrong when duplicated by hand across methods.
+    get domeAnchorY() {
+      return this.trueSurfaceY + this.grassHeight;
+    }
     // True if a world point falls within the rectangular "capture zone"
     // directly above the platform's top surface — the ONLY region this
     // planet ever pulls from or can be landed on from. No rotation
@@ -750,11 +804,170 @@
     // a ring all around them, but actively misleading here, where
     // gravity only ever works within the small rectangular window
     // directly above the surface (see isWithinGravityWindow).
+    // Overrides the inherited rocky-texture-plus-tint body with the
+    // ground.png tile (32x32) instead, repeated pixel-perfectly across
+    // the platform's width only — no vertical tiling, since the tile's
+    // own 32px height is scaled to match the platform's FULL height
+    // exactly (which is why the constructor defaults halfHeight to a
+    // clean multiple of 32 — that's what keeps this scale factor a whole
+    // number). imageSmoothingEnabled = false is what actually makes this
+    // "pixel perfect": with a non-integer scale, the browser would
+    // interpolate/blur the source pixels when stretching; with a whole-
+    // number scale and smoothing off, each source pixel becomes a clean
+    // NxN block with no blur at all.
+    // Intentionally empty. This used to tile the grass ground.png tile
+    // across the platform's rectangle; that's now replaced entirely by
+    // the metal half-ellipse base (see drawMetalBase below). The
+    // underlying halfWidth/halfHeight rectangle still exists and is
+    // still exactly what all collision/gravity/landing/walking physics
+    // uses — it's simply no longer drawn, the same relationship the
+    // dome's own gravity-window rectangle already has with the visible
+    // glass ellipse above it (a real collision concept with no matching
+    // visible rectangle of its own).
+    drawBodyTexture(bodyCtx, w, h) {
+    }
+    // Bottom half-ellipse "base" — dark gray metal, replacing the old
+    // rectangular grass-tiled ground body. Mirrors the dome's own shape
+    // (a matching ellipse, curved DOWNWARD instead of upward), its flat
+    // top sitting at the same reference line the dome's own flat base
+    // sits at, sized via baseRadiusY (a sixth of the dome's own height).
+    // Now has REAL matching collision too — see nearestBaseSurfacePoint
+    // below, used by CollisionSystem the same way nearestDomeSurfacePoint
+    // is for the dome's own shell.
+    drawMetalBase() {
+      const ctx = state.ctx;
+      const cx = this.pos.x;
+      const cy = this.domeAnchorY;
+      const baseRadiusX = this.halfWidth;
+      const baseRadiusY = this.baseRadiusY;
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(cx, cy, cx, cy + baseRadiusY);
+      grad.addColorStop(0, "#8a8a92");
+      grad.addColorStop(0.5, "#333338");
+      grad.addColorStop(1, "#050506");
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+      ctx.closePath();
+      ctx.clip();
+      const glowLayers = [
+        { inset: 0, alpha: 0.12 },
+        { inset: baseRadiusY * 0.15, alpha: 0.08 },
+        { inset: baseRadiusY * 0.3, alpha: 0.04 }
+      ];
+      for (const layer of glowLayers) {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, baseRadiusX - layer.inset, baseRadiusY - layer.inset, 0, 0, Math.PI);
+        ctx.lineWidth = baseRadiusY * 0.2;
+        ctx.strokeStyle = `rgba(${this.baseGlowColor}, ${layer.alpha})`;
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+      ctx.closePath();
+      ctx.clip();
+      const highlightOffset = 2;
+      ctx.lineWidth = 2;
+      for (let i = 1; i <= this.baseHorizontalLineCount; i++) {
+        const t = i / (this.baseHorizontalLineCount + 1);
+        const lineY = cy + baseRadiusY * t;
+        ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.15)`;
+        ctx.beginPath();
+        ctx.moveTo(cx - baseRadiusX, lineY - highlightOffset);
+        ctx.lineTo(cx + baseRadiusX, lineY - highlightOffset);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.5)`;
+        ctx.beginPath();
+        ctx.moveTo(cx - baseRadiusX, lineY);
+        ctx.lineTo(cx + baseRadiusX, lineY);
+        ctx.stroke();
+      }
+      const bottomY = cy + baseRadiusY;
+      for (let i = 1; i < this.baseSeamCount; i++) {
+        const t = i / this.baseSeamCount;
+        const startX = cx - baseRadiusX + t * (baseRadiusX * 2);
+        const endX = cx + (startX - cx) * (1 - this.baseSeamConvergence);
+        const controlY = cy + baseRadiusY * 0.6;
+        ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.12)`;
+        ctx.beginPath();
+        ctx.moveTo(startX + highlightOffset, cy);
+        ctx.quadraticCurveTo(startX + highlightOffset, controlY, endX + highlightOffset, bottomY);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.4)`;
+        ctx.beginPath();
+        ctx.moveTo(startX, cy);
+        ctx.quadraticCurveTo(startX, controlY, endX, bottomY);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#1e1e20";
+      ctx.stroke();
+      ctx.restore();
+    }
+    // A single row of grass.png (32x16, scaled 2x = 64x32 world units
+    // per tile — a fixed 2x, matching the ground tile's own scale,
+    // rather than the "derive scale from height" approach used
+    // elsewhere, since this is a thin cap layer, not something meant to
+    // exactly fill a specific height), tiled horizontally across the
+    // platform's full width, extending UPWARD from the flat top line
+    // into the dome's own open interior — where the player actually
+    // stands — rather than downward into the metal base's own territory.
+    // Deliberately NOT clipped to the metal base's ellipse (an earlier
+    // version was, which was the actual bug: it made the grass read as
+    // sitting on top of / part of the metal structure, instead of being
+    // its own distinct ground layer within the dome). A plain
+    // rectangular clip is enough here — at this shallow a depth the dome
+    // is already at its full width, so there's no curve to worry about
+    // clipping against.
+    //
+    // JumpPlatform's own pillar terminates at this exact same flat line
+    // (its groundY option) — the pillar's bottom lands right where this
+    // grass layer's own BOTTOM edge is, so the two should still connect
+    // correctly with no changes needed there.
+    drawGrassCap() {
+      const ctx = state.ctx;
+      const grassImg = state.grassTexture;
+      if (!grassImg || !grassImg.complete) return;
+      const grassTopY = this.trueSurfaceY;
+      const scale = 2;
+      const tileW = 32 * scale;
+      const fullWidth = this.halfWidth * 2;
+      const startX = this.pos.x - this.halfWidth;
+      const seamOverlap = 2;
+      const drawHeight = this.grassHeight + seamOverlap;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(startX, grassTopY, fullWidth, drawHeight);
+      ctx.clip();
+      ctx.imageSmoothingEnabled = false;
+      for (let x = 0; x < fullWidth; x += tileW) {
+        ctx.drawImage(grassImg, startX + x, grassTopY, tileW, drawHeight);
+      }
+      ctx.restore();
+    }
     createOffscreen() {
       super.createOffscreen();
       this.ringCanvas = null;
-      this.hexGridCanvas = this.bakeHexGridOverlay(this.domeHexSize, this.domeHexOpacity);
-      this.hexGridForegroundCanvas = this.bakeHexGridOverlay(this.domeForegroundHexSize, this.domeForegroundHexOpacity);
+      const bgTile = this.bakeHexGridTile(this.domeHexSize, this.domeHexOpacity, this.domeHexLineWidth);
+      this.hexGridCanvas = bgTile.canvas;
+      this.hexGridTileW = bgTile.tileW;
+      this.hexGridTileH = bgTile.tileH;
+      const fgTile = this.bakeHexGridTile(this.domeForegroundHexSize, this.domeForegroundHexOpacity, this.domeForegroundHexLineWidth);
+      this.hexGridForegroundCanvas = fgTile.canvas;
+      this.hexGridForegroundTileW = fgTile.tileW;
+      this.hexGridForegroundTileH = fgTile.tileH;
     }
     // Draws one hexagon outline (stroke only, not filled — reads as a
     // grid/panel line, not a solid tile) centered at (cx, cy).
@@ -770,44 +983,65 @@
       ctx.closePath();
       ctx.stroke();
     }
-    // Bakes a full hex grid, clipped to the dome's own silhouette, into
-    // a small offscreen canvas sized to just the dome's upper-half
-    // bounding box (domeRadiusX*2 wide, domeRadiusY tall — no need to
-    // bake the lower half of the ellipse, since the dome shape only ever
-    // uses the upper half). Blitted directly at (boxX, boxY) — a single
-    // cheap image copy instead of re-stroking ~800+ hexagons 60 times a
-    // second. Parameterized by hexSize/opacity (rather than always
-    // reading this.domeHexSize) and returns the canvas rather than
-    // storing it directly, so this one method can bake BOTH the
-    // background grid and the foreground grid's larger hexagons, called
-    // twice from createOffscreen, instead of duplicating this logic.
-    bakeHexGridOverlay(hexSize, opacity) {
-      const w = this.domeRadiusX * 2;
-      const h = this.domeRadiusY;
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const bctx = canvas.getContext("2d");
-      const localCx = w / 2, localCy = h;
-      bctx.beginPath();
-      bctx.ellipse(localCx, localCy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-      bctx.closePath();
-      bctx.clip();
-      bctx.strokeStyle = `rgba(${this.domeHexColor}, ${opacity})`;
-      bctx.lineWidth = 1;
+    // Bakes a SMALL, seamlessly-repeating hex tile — NOT clipped to the
+    // dome shape (clipping happens separately at draw time, see
+    // drawScrollingHexTile), since this tile needs to tile/repeat across
+    // the dome's area with a scrolling offset for the animation. The hex
+    // grid pattern has a true period of exactly `hexWidth` horizontally
+    // and `2 * hexHeightStep` vertically (two rows, since alternating
+    // row offsets need two rows to complete one full cycle) — baking a
+    // canvas of EXACTLY that size, with hexagons drawn out to a small
+    // margin beyond its edges (so anything crossing a boundary still
+    // gets drawn), produces a tile that lines up perfectly with itself
+    // when repeated, with no visible seam. Parameterized by hexSize/
+    // opacity so this one method bakes both the background grid and the
+    // foreground grid's larger hexagons, called twice from
+    // createOffscreen, instead of duplicating this logic.
+    bakeHexGridTile(hexSize, opacity, lineWidth = 1) {
       const hexWidth = Math.sqrt(3) * hexSize;
       const hexHeightStep = hexSize * 1.5;
-      const endRow = Math.ceil(h / hexHeightStep) + 1;
-      const endCol = Math.ceil(w / hexWidth) + 1;
-      for (let row = -1; row <= endRow; row++) {
+      const tileW = hexWidth;
+      const tileH = hexHeightStep * 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = tileW;
+      canvas.height = tileH;
+      const bctx = canvas.getContext("2d");
+      bctx.strokeStyle = `rgba(${this.domeHexColor}, ${opacity})`;
+      bctx.lineWidth = lineWidth;
+      for (let row = -1; row <= 2; row++) {
         const y = row * hexHeightStep;
         const rowOffset = row % 2 !== 0 ? hexWidth / 2 : 0;
-        for (let col = -1; col <= endCol; col++) {
+        for (let col = -1; col <= 2; col++) {
           const x = col * hexWidth + rowOffset;
           this.strokeHexagon(bctx, x, y, hexSize);
         }
       }
-      return canvas;
+      return { canvas, tileW, tileH };
+    }
+    // Draws a pre-baked, seamlessly-repeating hex tile across the dome's
+    // area with a horizontal scroll offset based on elapsed real time —
+    // shared by both the background (drawDome) and foreground
+    // (drawForegroundGlass) hex layers, just with different tile
+    // canvases/speeds. Still just a handful of cheap image blits per
+    // frame regardless of the animation, same as the static version this
+    // replaced. Positive scrollSpeed drifts content leftward, negative
+    // drifts it rightward (see the two call sites for why each uses the
+    // sign it does).
+    drawScrollingHexTile(ctx, cx, cy, boxX, boxY, boxW, tileCanvas, tileW, tileH, scrollSpeed) {
+      if (!tileCanvas) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      const scrollOffset = (Date.now() * scrollSpeed % tileW + tileW) % tileW;
+      const startX = boxX - scrollOffset - tileW;
+      for (let y = boxY - tileH; y < cy; y += tileH) {
+        for (let x = startX; x < boxX + boxW + tileW; x += tileW) {
+          ctx.drawImage(tileCanvas, x, y);
+        }
+      }
+      ctx.restore();
     }
     // True for any point above the ground's own surface AND inside the
     // dome's actual ellipse — replaced an earlier version using a fixed
@@ -822,14 +1056,44 @@
     // nearestDomeSurfacePoint (nx²+ny² <= 1 in the dome's own normalized
     // space), just without needing the exact boundary point/normal.
     isWithinGravityWindow(worldX, worldY) {
-      const topY = this.pos.y - this.halfHeight;
-      if (worldY > topY) return false;
+      if (worldY > this.trueSurfaceY) return false;
       const nx = (worldX - this.pos.x) / this.domeRadiusX;
-      const ny = (worldY - topY) / this.domeRadiusY;
+      const ny = (worldY - this.domeAnchorY) / this.domeRadiusY;
       return nx * nx + ny * ny <= 1;
     }
-    // Nearest point on the DOME's curved shell to a world point, its
-    // true elliptical outward normal, and the distance to it — a
+    // Nearest point on an ellipse to a world point, its true elliptical
+    // outward normal, and the distance to it — the shared math behind
+    // both nearestDomeSurfacePoint and nearestBaseSurfacePoint below,
+    // which used to each carry their own ~25-line copy of this,
+    // differing only in which radii they used and which direction their
+    // degenerate (dead-center) fallback pushed. Parameterized by center/
+    // radii/fallback so both are now just a few lines expressing what's
+    // actually different between them, with the math itself living in
+    // exactly one place.
+    //
+    // Uses the standard normalized-space approximation for nearest point
+    // on an ellipse (scale into a unit circle, solve there, scale back) —
+    // exact when radiusX equals radiusY, and a good approximation
+    // otherwise.
+    nearestEllipseSurfacePoint(centerX, centerY, radiusX, radiusY, worldX, worldY, fallbackDirY) {
+      const lx = worldX - centerX, ly = worldY - centerY;
+      const nx = lx / radiusX, ny = ly / radiusY;
+      const nDist = Math.sqrt(nx * nx + ny * ny);
+      let blx, bly;
+      if (nDist < 1e-6) {
+        blx = 0;
+        bly = fallbackDirY * radiusY;
+      } else {
+        blx = nx / nDist * radiusX;
+        bly = ny / nDist * radiusY;
+      }
+      const boundaryX = centerX + blx, boundaryY = centerY + bly;
+      const normal = new Vector2(blx / (radiusX * radiusX), bly / (radiusY * radiusY)).normalize();
+      const dx = worldX - boundaryX, dy = worldY - boundaryY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      return { point: new Vector2(boundaryX, boundaryY), normal, distance };
+    }
+    // Nearest point on the DOME's curved shell to a world point — a
     // completely separate surface from nearestSurfacePoint (the
     // platform body, inherited from RoundedRectPlanetoid). Deliberately
     // kept separate rather than folded into nearestSurfacePoint: that
@@ -842,36 +1106,24 @@
     // is present via `typeof x.nearestDomeSurfacePoint === 'function'`
     // rather than a separate flag, so nothing needs updating elsewhere
     // if a future planet type adds a dome the same way.
-    //
-    // Uses the standard normalized-space approximation for nearest point
-    // on an ellipse (scale into a unit circle, solve there, scale back) —
-    // exact when domeRadiusX equals domeRadiusY (the current default),
-    // and a good approximation otherwise.
     nearestDomeSurfacePoint(worldX, worldY) {
-      const ex = this.pos.x;
-      const ey = this.pos.y - this.halfHeight;
-      const rx = this.domeRadiusX, ry = this.domeRadiusY;
-      const lx = worldX - ex, ly = worldY - ey;
-      const nx = lx / rx, ny = ly / ry;
-      const nDist = Math.sqrt(nx * nx + ny * ny);
-      let blx, bly;
-      if (nDist < 1e-6) {
-        blx = 0;
-        bly = -ry;
-      } else {
-        blx = nx / nDist * rx;
-        bly = ny / nDist * ry;
-      }
-      const boundaryX = ex + blx, boundaryY = ey + bly;
-      const normal = new Vector2(blx / (rx * rx), bly / (ry * ry)).normalize();
-      const dx = worldX - boundaryX, dy = worldY - boundaryY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      return { point: new Vector2(boundaryX, boundaryY), normal, distance };
+      return this.nearestEllipseSurfacePoint(this.pos.x, this.domeAnchorY, this.domeRadiusX, this.domeRadiusY, worldX, worldY, -1);
+    }
+    // Same underlying math as nearestDomeSurfacePoint above, mirrored
+    // for the metal base's LOWER ellipse instead of the dome's upper
+    // one. Used by CollisionSystem.js's handleImmovableCollisions/
+    // handlePlanetAsteroidCollisions for anything approaching from
+    // BELOW the platform's flat line (mv.pos.y > topY), the same way the
+    // dome version is used for anything approaching from above — giving
+    // planetoids/asteroids real curved collision against the base's true
+    // visible shape instead of the old flat rectangle underneath it.
+    nearestBaseSurfacePoint(worldX, worldY) {
+      return this.nearestEllipseSurfacePoint(this.pos.x, this.domeAnchorY, this.halfWidth, this.baseRadiusY, worldX, worldY, 1);
     }
     drawDome() {
       const ctx = state.ctx;
       const cx = this.pos.x;
-      const cy = this.pos.y - this.halfHeight;
+      const cy = this.domeAnchorY;
       ctx.save();
       ctx.beginPath();
       ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
@@ -913,9 +1165,7 @@
         ctx.stroke();
       }
       ctx.restore();
-      if (this.hexGridCanvas) {
-        ctx.drawImage(this.hexGridCanvas, boxX, boxY);
-      }
+      this.drawScrollingHexTile(ctx, cx, cy, boxX, boxY, boxW, this.hexGridCanvas, this.hexGridTileW, this.hexGridTileH, this.domeHexScrollSpeed);
       ctx.save();
       ctx.beginPath();
       ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
@@ -934,7 +1184,6 @@
       ctx.save();
       ctx.beginPath();
       ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-      ctx.closePath();
       ctx.lineWidth = this.domeOutlineWidth;
       ctx.strokeStyle = this.domeOutlineColor;
       ctx.stroke();
@@ -1000,6 +1249,8 @@
     }
     draw() {
       this.drawDome();
+      this.drawMetalBase();
+      this.drawGrassCap();
       super.draw();
     }
     // A deliberately SUBTLE second pass — NOT called from draw() above,
@@ -1017,7 +1268,7 @@
     drawForegroundGlass() {
       const ctx = state.ctx;
       const cx = this.pos.x;
-      const cy = this.pos.y - this.halfHeight;
+      const cy = this.domeAnchorY;
       const zoom = state.zoom || 1;
       const zoomMin = state.zoomMin ?? 0.5;
       const zoomRef = this.domeForegroundZoomReference;
@@ -1033,16 +1284,12 @@
       ctx.fillStyle = this.domeFillColor;
       ctx.fillRect(cx - this.domeRadiusX, cy - this.domeRadiusY, this.domeRadiusX * 2, this.domeRadiusY * 2);
       ctx.restore();
-      if (this.hexGridForegroundCanvas) {
-        ctx.save();
-        ctx.globalAlpha = zoomFactor;
-        ctx.drawImage(this.hexGridForegroundCanvas, cx - this.domeRadiusX, cy - this.domeRadiusY);
-        ctx.restore();
-      }
+      ctx.globalAlpha = zoomFactor;
+      this.drawScrollingHexTile(ctx, cx, cy, cx - this.domeRadiusX, cy - this.domeRadiusY, this.domeRadiusX * 2, this.hexGridForegroundCanvas, this.hexGridForegroundTileW, this.hexGridForegroundTileH, this.domeForegroundHexScrollSpeed);
+      ctx.globalAlpha = 1;
       ctx.save();
       ctx.beginPath();
       ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-      ctx.closePath();
       ctx.globalAlpha = this.domeForegroundOutlineOpacity * zoomFactor;
       ctx.lineWidth = this.domeOutlineWidth;
       ctx.strokeStyle = this.domeOutlineColor;
@@ -1065,7 +1312,10 @@
       this.isImmovable = true;
       this.isSkyDome = true;
       this.isPullExempt = true;
+      this.noSunShading = true;
       this.gravityWindowHeight = options.gravityWindowHeight ?? 150;
+      this.bottomDarkenAlpha = options.bottomDarkenAlpha ?? 0.5;
+      this.bottomDarkenReach = options.bottomDarkenReach ?? 0.4;
     }
     // Same shape as SkyDomePlanetoid's — a rectangular capture zone
     // directly above the platform's own surface, nothing outside it.
@@ -1074,6 +1324,60 @@
       const topY = this.pos.y - this.halfHeight;
       const withinY = worldY <= topY && worldY >= topY - this.gravityWindowHeight;
       return withinX && withinY;
+    }
+    // Renders the platform's ENTIRE body using platform.png's 6-tile,
+    // 96x64 tileset (three 32x32 tiles per row: left edge / center /
+    // right edge, one row for the grass top, one row reused for every
+    // row below it), scaled 2x (64 world units per tile) — a standard
+    // "9-slice"-style tileset, so this platform's width/height should
+    // both be multiples of 64 for clean, whole tiles with no cropping.
+    // Replaces both the old single-tile grass top AND the separate
+    // ground.png dirt "pillar" that used to extend down to the ground
+    // separately — this tileset's own bottom-row tiles cover that same
+    // role now, just by making the platform as many rows tall as needed
+    // (a taller height, not a separate mechanism).
+    drawBodyTexture(bodyCtx, w, h) {
+      const platformImg = state.platformTexture;
+      if (!platformImg || !platformImg.complete) {
+        bodyCtx.beginPath();
+        bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
+        bodyCtx.fillStyle = this.color;
+        bodyCtx.fill();
+        return;
+      }
+      const scale = 2;
+      const tile = 32 * scale;
+      const cols = Math.max(1, Math.round(w / tile));
+      const rows = Math.max(1, Math.round(h / tile));
+      bodyCtx.imageSmoothingEnabled = false;
+      bodyCtx.save();
+      bodyCtx.beginPath();
+      bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
+      bodyCtx.clip();
+      for (let r = 0; r < rows; r++) {
+        const srcY = r === 0 ? 0 : 32;
+        for (let c = 0; c < cols; c++) {
+          let srcX;
+          if (cols === 1) {
+            srcX = 32;
+          } else if (c === 0) {
+            srcX = 0;
+          } else if (c === cols - 1) {
+            srcX = 64;
+          } else {
+            srcX = 32;
+          }
+          bodyCtx.drawImage(platformImg, srcX, srcY, 32, 32, c * tile, r * tile, tile, tile);
+        }
+      }
+      const fadeStart = h * (1 - this.bottomDarkenReach);
+      const gradient = bodyCtx.createLinearGradient(0, fadeStart, 0, h);
+      gradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+      gradient.addColorStop(1, `rgba(0, 0, 0, ${this.bottomDarkenAlpha})`);
+      bodyCtx.fillStyle = gradient;
+      bodyCtx.globalCompositeOperation = "source-atop";
+      bodyCtx.fillRect(0, 0, w, h);
+      bodyCtx.restore();
     }
     // Suppresses the inherited dashed "gravity influence" ring — same
     // reasoning as SkyDomePlanetoid: misleading for anything whose
@@ -1810,18 +2114,27 @@
       this.pos = pos.clone();
       this.vel = vel;
       this.life = life;
+      this.maxLife = life;
+      this.color = "rgb(255, 255, 0)";
+      this.radius = 2;
+      this.drag = 1;
+      this.growRate = 0;
     }
     update() {
       this.pos.add(this.vel);
+      this.vel = this.vel.multiply(this.drag);
+      this.radius += this.growRate;
       this.life--;
     }
     draw() {
       const ctx = state.ctx;
       if (this.life <= 0) return;
+      ctx.globalAlpha = this.life / this.maxLife;
       ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 255, 0, ${this.life / 40})`;
+      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+      ctx.fillStyle = this.color;
       ctx.fill();
+      ctx.globalAlpha = 1;
     }
   };
 
@@ -2014,6 +2327,8 @@
       this.walkTime = 0;
       this.isWalking = false;
       this.strideLength = 90;
+      this.walkBobStrength = 3;
+      this.lastWalkBobT = 0;
       this.armSwingScale = 0.5;
       this.groundOffset = 250;
       this.maxAimFromForward = (90 + 5) * Math.PI / 180;
@@ -2032,6 +2347,7 @@
       this.pullMaxSpeed = 18;
       this.mouseIdleThreshold = 2e3;
       this.mouseIdle = true;
+      this.mouseWheelSuppressDuration = 200;
       this.mazeBodyScale = 0.1;
       this.mazeMoveIdleThreshold = 300;
       this.invincibleDuration = 2e3;
@@ -2175,9 +2491,7 @@
       const tipX = this.aimShoulderPos.x + Math.cos(angle) * muzzleDist;
       const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
       state.fireballs.push(new Fireball(tipX, tipY, angle));
-      if (state.audioManager && typeof state.audioManager.playShoot === "function") {
-        state.audioManager.playShoot();
-      }
+      state.audioManager.playFireball();
     }
     // ----------------------------
     // PULL TARGET (right-click "pull star")
@@ -2385,6 +2699,43 @@
       this.onGround = belowTile === "#" || belowTile === "H";
       this.updatePlatformPosition();
     }
+    // Spawns an occasional dust puff at the player's feet while actively
+    // walking on a surface — reuses the same Particle class already used
+    // for explosions/impacts elsewhere (see utils.js's createParticles),
+    // just with a dusty tan/beige color instead of that pattern's fiery
+    // oranges, and a gentle scatter-and-drift-up rather than an
+    // energetic burst. Called from all three on-surface walking branches
+    // in move() below (isSkyDome flat walking, generic rect-perimeter
+    // walking, and circular-planet walking), since dust should kick up
+    // regardless of which underlying walking system currently applies.
+    spawnWalkDust() {
+      if (!this.currentPlanet) return;
+      const bobT = Math.sin(this.walkTime) ** 2;
+      const justPlanted = bobT > 0.85 && this.lastWalkBobT <= 0.85;
+      this.lastWalkBobT = bobT;
+      if (!justPlanted) return;
+      let downDir;
+      if (this.currentPlanet.isRoundedRect) {
+        const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
+        downDir = surface.normal.clone().multiply(-1);
+      } else {
+        downDir = this.currentPlanet.pos.subtract(this.pos).normalize();
+      }
+      const feetPos = this.pos.clone().add(downDir.multiply(this.radius * 0.9));
+      const sideDir = new Vector2(-downDir.y, downDir.x);
+      const puffCount = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < puffCount; i++) {
+        const sideSpread = (Math.random() - 0.5) * 2.5;
+        const upSpeed = 0.2 + Math.random() * 0.4;
+        const vel = sideDir.multiply(sideSpread).add(downDir.multiply(-upSpeed));
+        const particle = new Particle(feetPos, vel, 22 + Math.random() * 14);
+        particle.color = `hsl(${35 + Math.random() * 15}, ${30 + Math.random() * 15}%, ${55 + Math.random() * 15}%)`;
+        particle.radius = 2 + Math.random() * 1.5;
+        particle.drag = 0.9;
+        particle.growRate = 0.06;
+        state.particles.push(particle);
+      }
+    }
     move(keys) {
       if (this.mode == "maze") {
         const now = Date.now();
@@ -2517,6 +2868,7 @@
         }
         if (this.isWalking) {
           this.walkTime += Math.abs(ds) / this.strideLength * Math.PI * 2;
+          this.spawnWalkDust();
         }
       } else if (this.onSurface && this.currentPlanet) {
         const surfaceDist = this.currentPlanet.radius + this.radius;
@@ -2538,6 +2890,7 @@
         if (this.isWalking) {
           const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
           this.walkTime += distanceMoved / this.strideLength * Math.PI * 2;
+          this.spawnWalkDust();
         }
       }
     }
@@ -2708,7 +3061,9 @@
     updateOrientationAndFacing() {
       if (this.mode !== "space") return;
       const lastMove = state.lastMouseMoveTime || 0;
-      this.mouseIdle = Date.now() - lastMove > this.mouseIdleThreshold;
+      const lastWheel = state.lastWheelTime || 0;
+      const recentlyScrolled = Date.now() - lastWheel < this.mouseWheelSuppressDuration;
+      this.mouseIdle = recentlyScrolled || Date.now() - lastMove > this.mouseIdleThreshold;
       if (this.mouseIdle) return;
       let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
       let downDir = new Vector2(0, 1);
@@ -2766,7 +3121,7 @@
     // canvas is baked at a higher resolution than that (see
     // initScaledAssets) so zooming in stays crisp.
     // ----------------------------
-    drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO) {
+    drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal = false) {
       const sprite = this.scaledParts[partKey];
       if (!sprite) return;
       const s = this.bodyScale;
@@ -2775,6 +3130,7 @@
       const wy = offsetX * sinO + offsetY * cosO;
       ctx.translate(originPos.x + wx * s, originPos.y + wy * s);
       ctx.rotate(orientation + angle);
+      if (flipHorizontal) ctx.scale(-1, 1);
       ctx.drawImage(sprite.canvas, -jointX * s, -jointY * s, sprite.displayWidth, sprite.displayHeight);
       ctx.restore();
     }
@@ -2791,10 +3147,17 @@
       const inMaze = this.mode === "maze";
       const mazeRecentlyMoved = inMaze && Date.now() - this.lastMoveTime < this.mazeMoveIdleThreshold;
       const walkAngle = mazeRecentlyMoved || this.onSurface && this.isWalking ? Math.sin(this.walkTime) * 0.6 : 0;
+      const walkBobT = mazeRecentlyMoved || this.onSurface && this.isWalking ? Math.sin(this.walkTime) ** 2 : 0;
+      const walkBobAmount = walkBobT * this.walkBobStrength;
+      originPos = new Vector2(
+        originPos.x + -sinO * walkBobAmount,
+        originPos.y + cosO * walkBobAmount
+      );
       const dirSign = this.facingDirection < 0 ? -1 : 1;
       let leftBootAngle = walkAngle;
       let rightBootAngle = -walkAngle;
       let leftArmAngle, rightArmAngle;
+      let rightArmFlipped = false;
       if (inMaze) {
         const swayAngle = walkAngle * this.armSwingScale;
         leftArmAngle = swayAngle;
@@ -2813,6 +3176,9 @@
       if (!inMaze && !this.onSurface) {
         leftBootAngle = -0.7;
         rightBootAngle = 0.7;
+        const raisedWorldAngle = -Math.PI / 2 - Math.PI * 0.75 * dirSign;
+        rightArmAngle = this.worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign);
+        rightArmFlipped = true;
       }
       this.drawLimb(ctx, "leftboot", cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
       this.drawLimb(ctx, "leftarm", cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO);
@@ -2831,7 +3197,7 @@
         ctx.restore();
       }
       this.drawLimb(ctx, "rightboot", cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
-      this.drawLimb(ctx, "rightarm", cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO);
+      this.drawLimb(ctx, "rightarm", cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO, rightArmFlipped);
       const headSprite = this.scaledParts.head;
       if (headSprite) {
         ctx.save();
@@ -3103,6 +3469,49 @@
       ctx.beginPath();
       ctx.arc(rightEyeX + pupilOffsetX, eyeY + pupilOffsetY, pupilRadius, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+    }
+  };
+
+  // js/entities/world/Goomba.js
+  var Goomba = class {
+    constructor(homePlanet, startX, options = {}) {
+      this.homePlanet = homePlanet;
+      this.radius = options.radius ?? 32;
+      this.speed = options.speed ?? 1.4;
+      this.direction = options.direction ?? -1;
+      const topY = homePlanet.pos.y - homePlanet.halfHeight;
+      this.pos = new Vector2(startX, topY - this.radius);
+      this.walkCyclePhase = 0;
+      this.walkCycleSpeed = 0.12;
+    }
+    update() {
+      const planet = this.homePlanet;
+      const coreHalfWidth = planet.halfWidth - planet.cornerRadius;
+      const minX = planet.pos.x - coreHalfWidth + this.radius;
+      const maxX = planet.pos.x + coreHalfWidth - this.radius;
+      const desiredX = this.pos.x + this.direction * this.speed;
+      if (desiredX < minX || desiredX > maxX) {
+        this.direction *= -1;
+      } else {
+        this.pos.x = desiredX;
+      }
+      const topY = planet.pos.y - planet.halfHeight;
+      this.pos.y = topY - this.radius;
+      this.walkCyclePhase += this.walkCycleSpeed;
+    }
+    draw() {
+      const img = state.goombaTexture;
+      if (!img || !img.complete) return;
+      const ctx = state.ctx;
+      const frame = Math.floor(this.walkCyclePhase) % 2;
+      const srcX = frame * 32;
+      const drawSize = this.radius * 2;
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      if (this.direction > 0) ctx.scale(-1, 1);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, srcX, 0, 32, 32, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
       ctx.restore();
     }
   };
@@ -3522,7 +3931,11 @@
           if (im.isRoundedRect) {
             const topY = im.pos.y - im.halfHeight;
             const usingDome = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY;
-            const surface = usingDome ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y) : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+            const usingBase = !usingDome && typeof im.nearestBaseSurfacePoint === "function" && mv.pos.y > topY;
+            let surface;
+            if (usingDome) surface = im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y);
+            else if (usingBase) surface = im.nearestBaseSurfacePoint(mv.pos.x, mv.pos.y);
+            else surface = im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
             if (surface.distance >= mv.radius) continue;
             normal = surface.normal;
             targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
@@ -3689,6 +4102,51 @@
         }
       }
     }
+    // Distinguishes a stomp (jump on its head — kills it) from a
+    // damaging side/underneath touch (kills the player), the classic
+    // Mario-style rule: the player's center needs to be meaningfully
+    // above the goomba's own center, AND moving downward (or at least
+    // not actively still rising from a jump) — landing squarely on top,
+    // not just brushing past. Returns the list of goombas that got
+    // stomped (game.js removes them and gives the player a bounce); any
+    // non-stomp touch calls player.startDeath() directly here, same as
+    // handlePlayerEnemyCollisions above (which already safely no-ops
+    // during invincibility, so no extra guard needed here either).
+    handlePlayerGoombaCollisions(player, goombas) {
+      const stomped = [];
+      for (const g of goombas) {
+        const dist = player.pos.subtract(g.pos).length();
+        if (dist > PLAYER_RADIUS + g.radius) continue;
+        const isStomp = g.pos.y - player.pos.y > g.radius * 0.3 && player.vel.y >= 0;
+        if (isStomp) {
+          stomped.push(g);
+        } else {
+          player.startDeath();
+        }
+      }
+      return stomped;
+    }
+    // Same shape as handleFireballCollisions below, for goombas
+    // specifically — a separate method rather than folding into that
+    // one, since goombas aren't planetoids/asteroids and have their own
+    // simple circle-only collision (no surface-distance concept to
+    // reuse from distanceToPlanetSurface).
+    handleFireballGoombaCollisions(fireballs, goombas) {
+      const hitFireballs = /* @__PURE__ */ new Set();
+      const killedGoombas = /* @__PURE__ */ new Set();
+      for (const f of fireballs) {
+        for (const g of goombas) {
+          if (killedGoombas.has(g)) continue;
+          const dist = f.pos.subtract(g.pos).length();
+          if (dist < f.radius + g.radius) {
+            hitFireballs.add(f);
+            killedGoombas.add(g);
+            break;
+          }
+        }
+      }
+      return { hitFireballs, killedGoombas };
+    }
     handleCoinCollisions(player, coins) {
       for (let i = coins.length - 1; i >= 0; i--) {
         const c = coins[i];
@@ -3719,6 +4177,16 @@
                   const intensity = Math.min(1, a.radius / 45);
                   p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
                 }
+                continue;
+              }
+            }
+          }
+          if (typeof p.nearestBaseSurfacePoint === "function") {
+            const topY = p.pos.y - p.halfHeight;
+            if (a.pos.y > topY) {
+              const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
+              if (baseSurface.distance < a.radius) {
+                toBreak.add(a);
               }
             }
           }
@@ -3757,6 +4225,22 @@
         }
         if (hit) continue;
         for (const p of planetoids) {
+          if (p.isSkyDome) {
+            const topY = p.pos.y - p.halfHeight;
+            if (f.pos.y >= topY) continue;
+            if (typeof p.nearestDomeSurfacePoint === "function") {
+              const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
+              if (domeSurface.distance < f.radius) {
+                hitFireballs.add(f);
+                planetHits.push({ fireball: f, planet: p });
+                if (typeof p.triggerShieldImpact === "function") {
+                  const intensity = Math.min(1, f.radius / 45);
+                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+                }
+              }
+              continue;
+            }
+          }
           const dist = this.distanceToPlanetSurface(f.pos, p);
           if (dist < f.radius) {
             hitFireballs.add(f);
@@ -3807,7 +4291,9 @@
       this.bangLarge = new Audio("sounds/bangLarge.wav");
       this.bangMedium = new Audio("sounds/bangMedium.wav");
       this.bangSmall = new Audio("sounds/bangSmall.wav");
-      [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall].forEach((audio) => {
+      this.goombaStompAudio = new Audio("sounds/mario-goomba-stomp.mp3");
+      this.fireballAudio = new Audio("sounds/mario-fireball.mp3");
+      [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall, this.goombaStompAudio, this.fireballAudio].forEach((audio) => {
         audio.volume = 0.5;
         audio.preload = "auto";
         audio.load();
@@ -3829,6 +4315,14 @@
     }
     playJumpSmall() {
       const audio = this.jumpSmallAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playGoombaStomp() {
+      const audio = this.goombaStompAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playFireball() {
+      const audio = this.fireballAudio.cloneNode(true);
       audio.play().catch((e) => console.log("Audio play failed:", e));
     }
     playBang(size, position) {
@@ -4324,7 +4818,7 @@
   };
   state.characterImages = {};
   var assetsLoaded = 0;
-  var ASSETS_TO_LOAD = 1 + Object.keys(CHARACTER_IMAGE_SOURCES).length;
+  var ASSETS_TO_LOAD = 4 + Object.keys(CHARACTER_IMAGE_SOURCES).length;
   function onAssetLoaded() {
     assetsLoaded++;
     if (assetsLoaded === ASSETS_TO_LOAD) {
@@ -4335,6 +4829,15 @@
   state.planetTexture = new Image();
   state.planetTexture.src = "img/planet_texture_2.jpg";
   state.planetTexture.onload = onAssetLoaded;
+  state.platformTexture = new Image();
+  state.platformTexture.src = "img/platform.png";
+  state.platformTexture.onload = onAssetLoaded;
+  state.goombaTexture = new Image();
+  state.goombaTexture.src = "img/goomba.png";
+  state.goombaTexture.onload = onAssetLoaded;
+  state.grassTexture = new Image();
+  state.grassTexture.src = "img/grass.png";
+  state.grassTexture.onload = onAssetLoaded;
   Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
     const img = new Image();
     img.src = src;
@@ -4355,6 +4858,7 @@
   state.mouseDown = false;
   state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   state.canvas.addEventListener("mousedown", (e) => {
+    if (tryRestartOrAdvance()) return;
     if (e.button === 0) {
       state.mouseDown = true;
       if (state.player) state.player.shootFireball();
@@ -4383,6 +4887,7 @@
     const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
     state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom + delta));
     state.zoomTarget = null;
+    state.lastWheelTime = Date.now();
   }, { passive: false });
   state.zoomTarget = null;
   state.preMazeZoom = state.zoom;
@@ -4427,20 +4932,26 @@
       }
     }
     if (e.key === "Enter") {
-      if (state.gameOver) {
-        state.score = 0;
-        state.level = 1;
-        initGame();
-      } else if (state.levelComplete) {
-        state.level++;
-        initGame();
-        state.levelComplete = false;
-      }
+      tryRestartOrAdvance();
     }
   });
   window.addEventListener("keyup", (e) => {
     state.keys[e.key] = false;
   });
+  function tryRestartOrAdvance() {
+    if (state.gameOver) {
+      state.score = 0;
+      state.level = 1;
+      initGame();
+      return true;
+    } else if (state.levelComplete) {
+      state.level++;
+      initGame();
+      state.levelComplete = false;
+      return true;
+    }
+    return false;
+  }
   function cellCoordFor(worldX, worldY) {
     return {
       col: Math.floor(worldX / CELL_SIZE),
@@ -4601,6 +5112,7 @@
     state.asteroids = [];
     state.coins = [];
     state.enemies = [];
+    state.goombas = [];
     state.activeCells = /* @__PURE__ */ new Set();
     resetBeltState();
     const centerOriginX = CENTER_CELL.col * CELL_SIZE;
@@ -4630,17 +5142,27 @@
     state.skyDomePlanet.isPermanent = true;
     state.planetoids.push(state.skyDomePlanet);
     {
+      let createGroundedPlatform = function(centerX, topSurfaceY, width) {
+        const rawHeight = groundTopY - topSurfaceY;
+        const height = Math.max(64, Math.round(rawHeight / 64) * 64);
+        const centerY = groundTopY - height / 2;
+        return new JumpPlatform(centerX, centerY, width, height);
+      };
       const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
       const groundX = state.skyDomePlanet.pos.x;
-      state.jumpPlatforms = [
-        new JumpPlatform(groundX - 300, groundTopY - 90, 300, 30),
-        new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
-        new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
-        new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30)
-      ];
+      const platformD = createGroundedPlatform(groundX - 700, groundTopY - 90, 256);
+      const platformA = createGroundedPlatform(groundX - 300, groundTopY - 150, 320);
+      const platformB = createGroundedPlatform(groundX + 100, groundTopY - 210, 256);
+      const platformNew1 = createGroundedPlatform(groundX - 84, groundTopY - 300, 320);
+      const platformNew2 = createGroundedPlatform(groundX - 516, groundTopY - 360, 256);
+      const platformNew3 = createGroundedPlatform(groundX - 900, groundTopY - 420, 256);
+      state.jumpPlatforms = [platformNew1, platformNew2, platformNew3, platformD, platformA, platformB];
       for (const platform of state.jumpPlatforms) {
         platform.isPermanent = true;
         state.planetoids.push(platform);
+      }
+      for (const platform of [platformD, platformA, platformB]) {
+        state.goombas.push(new Goomba(platform, platform.pos.x));
       }
     }
     state.mazePlanet.createOffscreen();
@@ -4841,6 +5363,7 @@
       state.player.update();
     }
     aiSystem.updateEnemies(state.enemies, state.planetoids);
+    state.goombas.forEach((g) => g.update());
     if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
       aiSystem.updateInteriorGhosts(state.player.currentPlanet.interior);
       collisionSystem.handlePlayerMazeGhostCollisions(state.player, state.player.currentPlanet.interior.ghosts);
@@ -4854,14 +5377,23 @@
     for (const a of fireballResults.toBreakAsteroids) {
       breakAsteroid(a);
       state.explosions.push(new Explosion(a.pos.x, a.pos.y));
+      state.audioManager.playFireball();
     }
     for (const hit of fireballResults.planetHits) {
       const speed = hit.fireball.vel.length();
       const pushDir = hit.fireball.vel.clone().normalize();
       hit.planet.vel.add(pushDir.multiply(speed * FIREBALL_PLANET_PUSH_STRENGTH));
       state.explosions.push(new Explosion(hit.fireball.pos.x, hit.fireball.pos.y));
+      state.audioManager.playFireball();
     }
-    state.fireballs = state.fireballs.filter((f) => !f.isDead && !fireballResults.hitFireballs.has(f));
+    const goombaFireballResults = collisionSystem.handleFireballGoombaCollisions(state.fireballs, state.goombas);
+    for (const g of goombaFireballResults.killedGoombas) {
+      state.explosions.push(new Explosion(g.pos.x, g.pos.y));
+      state.audioManager.playGoombaStomp();
+      state.audioManager.playFireball();
+    }
+    state.goombas = state.goombas.filter((g) => !goombaFireballResults.killedGoombas.has(g));
+    state.fireballs = state.fireballs.filter((f) => !f.isDead && !fireballResults.hitFireballs.has(f) && !goombaFireballResults.hitFireballs.has(f));
     state.explosions.forEach((e) => e.update());
     state.explosions = state.explosions.filter((e) => !e.isDead);
     state.particles.forEach((p) => p.update());
@@ -4869,6 +5401,17 @@
     collisionSystem.handleCoinCollisions(state.player, state.coins);
     collisionSystem.handlePlayerAsteroidCollisions(state.player, state.asteroids);
     collisionSystem.handlePlayerEnemyCollisions(state.player, state.enemies);
+    {
+      const stomped = collisionSystem.handlePlayerGoombaCollisions(state.player, state.goombas);
+      if (stomped.length > 0) {
+        for (const g of stomped) {
+          state.explosions.push(new Explosion(g.pos.x, g.pos.y));
+          state.audioManager.playGoombaStomp();
+        }
+        state.goombas = state.goombas.filter((g) => !stomped.includes(g));
+        state.player.vel.y = -JUMP_STRENGTH * 0.6;
+      }
+    }
     collisionSystem.handlePlayerFireBarCollisions(state.player, state.fireBars);
     if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
       state.player.checkMazeDots();
@@ -4931,9 +5474,10 @@
     state.planetoids.forEach((p) => p.draw());
     state.asteroids.forEach((a) => a.draw());
     state.fireBars.forEach((b) => b.draw());
+    state.enemies.forEach((e) => e.draw());
+    state.goombas.forEach((g) => g.draw());
     state.player.draw();
     drawPullIndicator();
-    state.enemies.forEach((e) => e.draw());
     state.coins.forEach((c) => c.draw());
     state.fireballs.forEach((f) => f.draw());
     state.particles.forEach((p) => p.draw());

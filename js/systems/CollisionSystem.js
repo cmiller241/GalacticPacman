@@ -52,11 +52,18 @@ export class CollisionSystem {
           // it'll actually reach first. Player landing never goes
           // through this path at all (see nearestDomeSurfacePoint's
           // own comment), so this can't affect that.
+          //
+          // Symmetric case below the line: if this immovable has a
+          // metal base ellipse (nearestBaseSurfacePoint), an object
+          // BELOW the top line is checked against THAT curved shape
+          // instead of the plain rectangle — same reasoning, mirrored.
           const topY = im.pos.y - im.halfHeight;
           const usingDome = typeof im.nearestDomeSurfacePoint === 'function' && mv.pos.y < topY;
-          const surface = usingDome
-            ? im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y)
-            : im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+          const usingBase = !usingDome && typeof im.nearestBaseSurfacePoint === 'function' && mv.pos.y > topY;
+          let surface;
+          if (usingDome) surface = im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y);
+          else if (usingBase) surface = im.nearestBaseSurfacePoint(mv.pos.x, mv.pos.y);
+          else surface = im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
           // TRUE surface distance/normal here, NOT the bounding-circle
           // shortcut used below for circular immovables — critical for
           // a long, thin shape (SkyDomePlanetoid is the motivating
@@ -282,6 +289,56 @@ export class CollisionSystem {
     }
   }
 
+  // Distinguishes a stomp (jump on its head — kills it) from a
+  // damaging side/underneath touch (kills the player), the classic
+  // Mario-style rule: the player's center needs to be meaningfully
+  // above the goomba's own center, AND moving downward (or at least
+  // not actively still rising from a jump) — landing squarely on top,
+  // not just brushing past. Returns the list of goombas that got
+  // stomped (game.js removes them and gives the player a bounce); any
+  // non-stomp touch calls player.startDeath() directly here, same as
+  // handlePlayerEnemyCollisions above (which already safely no-ops
+  // during invincibility, so no extra guard needed here either).
+  handlePlayerGoombaCollisions(player, goombas) {
+    const stomped = [];
+    for (const g of goombas) {
+      const dist = player.pos.subtract(g.pos).length();
+      if (dist > PLAYER_RADIUS + g.radius) continue;
+
+      const isStomp = (g.pos.y - player.pos.y) > g.radius * 0.3 && player.vel.y >= 0;
+      if (isStomp) {
+        stomped.push(g);
+      } else {
+        player.startDeath();
+      }
+    }
+    return stomped;
+  }
+
+  // Same shape as handleFireballCollisions below, for goombas
+  // specifically — a separate method rather than folding into that
+  // one, since goombas aren't planetoids/asteroids and have their own
+  // simple circle-only collision (no surface-distance concept to
+  // reuse from distanceToPlanetSurface).
+  handleFireballGoombaCollisions(fireballs, goombas) {
+    const hitFireballs = new Set();
+    const killedGoombas = new Set();
+
+    for (const f of fireballs) {
+      for (const g of goombas) {
+        if (killedGoombas.has(g)) continue; // already killed by an earlier fireball this same frame
+        const dist = f.pos.subtract(g.pos).length();
+        if (dist < f.radius + g.radius) {
+          hitFireballs.add(f);
+          killedGoombas.add(g);
+          break;
+        }
+      }
+    }
+
+    return { hitFireballs, killedGoombas };
+  }
+
   handleCoinCollisions(player, coins) {
     for (let i = coins.length - 1; i >= 0; i--) {
       const c = coins[i];
@@ -319,6 +376,20 @@ export class CollisionSystem {
                 const intensity = Math.min(1, a.radius / 45);
                 p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
               }
+              continue;
+            }
+          }
+        }
+        // Metal base ellipse — symmetric case below the platform's own
+        // top line. No shield-impact trigger here: that effect is
+        // specifically a glass/energy-shield reaction, and doesn't fit
+        // a solid metal surface the same way.
+        if (typeof p.nearestBaseSurfacePoint === 'function') {
+          const topY = p.pos.y - p.halfHeight;
+          if (a.pos.y > topY) {
+            const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
+            if (baseSurface.distance < a.radius) {
+              toBreak.add(a);
             }
           }
         }
@@ -361,6 +432,43 @@ export class CollisionSystem {
       if (hit) continue;
 
       for (const p of planetoids) {
+        if (p.isSkyDome) {
+          // Semi-solid from below/the side, like a classic Mario-style
+          // platform — fireballs only ever collide with the TOP
+          // surface, same top-only concept already used for player
+          // gravity/landing and the dome/base's own curved collision.
+          // Without this, a "grounded" platform's own collision
+          // rectangle (which now extends all the way down to the
+          // ground via its pillar) would register an immediate hit
+          // for a fireball fired anywhere near or underneath it —
+          // reading as "shooting immediately explodes" even though
+          // nothing was genuinely hit from above.
+          const topY = p.pos.y - p.halfHeight;
+          if (f.pos.y >= topY) continue;
+
+          // Above the line — check the DOME's curved shell (if this
+          // planet has one) instead of the generic flat rect surface.
+          // Same reasoning as handleImmovableCollisions: the dome
+          // sits above and extends further out than the rect body
+          // alone, so that's the surface a fireball fired upward from
+          // inside will actually reach — without this, fireballs pass
+          // straight through the dome, since the generic rect check
+          // only ever measures distance to the flat line the player
+          // walks on, which a fireball moving away from is unlikely to
+          // ever get close to again.
+          if (typeof p.nearestDomeSurfacePoint === 'function') {
+            const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
+            if (domeSurface.distance < f.radius) {
+              hitFireballs.add(f);
+              planetHits.push({ fireball: f, planet: p });
+              if (typeof p.triggerShieldImpact === 'function') {
+                const intensity = Math.min(1, f.radius / 45); // same intensity formula as asteroid impacts — a fireball is roughly that scale
+                p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+              }
+            }
+            continue;
+          }
+        }
         const dist = this.distanceToPlanetSurface(f.pos, p);
         if (dist < f.radius) {
           hitFireballs.add(f);

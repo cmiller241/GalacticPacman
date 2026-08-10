@@ -7,6 +7,7 @@ import {
   COIN_RADIUS,
   ENEMY_RADIUS,
   STAR_COUNT,
+  JUMP_STRENGTH,
   planetColors,
   enemyColors
 } from './constants.js';
@@ -23,6 +24,7 @@ import { PlatformInterior } from './interiors/PlatformInterior.js';
 import { Asteroid } from './entities/world/Asteroid.js';
 import { Player } from './entities/Player.js';
 import { SpaceGhost } from './entities/world/SpaceGhost.js';
+import { Goomba } from './entities/world/Goomba.js';
 import { Coin } from './entities/world/Coin.js';
 import { Explosion } from './entities/world/Explosion.js';
 import { BlobMonster } from './entities/interior/BlobMonster.js';
@@ -96,7 +98,7 @@ const CHARACTER_IMAGE_SOURCES = {
 state.characterImages = {};
 
 let assetsLoaded = 0;
-const ASSETS_TO_LOAD = 1 + Object.keys(CHARACTER_IMAGE_SOURCES).length; // planet texture + 6 body parts
+const ASSETS_TO_LOAD = 4 + Object.keys(CHARACTER_IMAGE_SOURCES).length; // planet texture + platform texture + grass texture + goomba texture + 6 body parts
 function onAssetLoaded() {
   assetsLoaded++;
   if (assetsLoaded === ASSETS_TO_LOAD) {
@@ -108,6 +110,28 @@ function onAssetLoaded() {
 state.planetTexture = new Image();
 state.planetTexture.src = "img/planet_texture_2.jpg";
 state.planetTexture.onload = onAssetLoaded;
+
+// SkyDomePlanetoid's ground tile — 32x32, tiled pixel-perfectly across
+// its body instead of the default rocky planetTexture (see
+// SkyDomePlanetoid.drawBodyTexture).
+// JumpPlatform's tileset — replaces the old ground.png (now unused
+// entirely, since JumpPlatform's pillar mechanism was removed in favor
+// of this tileset's own bottom-row tiles covering that role).
+state.platformTexture = new Image();
+state.platformTexture.src = "img/platform.png";
+state.platformTexture.onload = onAssetLoaded;
+
+// Goomba enemy — 64x32, two 32x32 tiles (standing, walking).
+state.goombaTexture = new Image();
+state.goombaTexture.src = "img/goomba.png";
+state.goombaTexture.onload = onAssetLoaded;
+
+// SkyDomePlanetoid's grass cap — a single 32x16 tile, drawn as a thin
+// strip right at the flat top line, on top of the metal base (see
+// SkyDomePlanetoid.drawGrassCap).
+state.grassTexture = new Image();
+state.grassTexture.src = "img/grass.png";
+state.grassTexture.onload = onAssetLoaded;
 
 Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
   const img = new Image();
@@ -155,6 +179,7 @@ state.canvas.addEventListener('mousemove', (e) => {
 state.mouseDown = false;
 state.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 state.canvas.addEventListener('mousedown', (e) => {
+  if (tryRestartOrAdvance()) return; // clicking the game-over/level-complete screen restarts/advances instead of firing
   if (e.button === 0) {
     state.mouseDown = true;
     if (state.player) state.player.shootFireball();
@@ -203,6 +228,13 @@ state.canvas.addEventListener('wheel', (e) => {
   const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
   state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom + delta));
   state.zoomTarget = null;
+  // Read by Player.js's mouseIdle computation — scrolling rapidly
+  // changes zoom without the cursor's screen position actually moving,
+  // which makes the computed mouse WORLD position (screen/zoom + cam)
+  // jump around, making the aim-tracked arm/head jitter. Suppressing
+  // aim-tracking briefly after a scroll avoids that without touching
+  // the actual aim math.
+  state.lastWheelTime = Date.now();
 }, { passive: false });
 
 // ----------------------------
@@ -277,18 +309,30 @@ window.addEventListener('keydown', (e) => {
     }
   }
   if (e.key === 'Enter') {
-    if (state.gameOver) {
-      state.score = 0;
-      state.level = 1;
-      initGame();
-    } else if (state.levelComplete) {
-      state.level++;
-      initGame();
-      state.levelComplete = false;
-    }
+    tryRestartOrAdvance();
   }
 });
 window.addEventListener('keyup', (e) => { state.keys[e.key] = false; });
+
+// Shared by the Enter key handler above and the mousedown handler
+// below — restarts on the game-over screen, advances to the next
+// level on the level-complete screen. Returns true if it actually did
+// something, so the mousedown handler can skip firing/pulling on the
+// same click that triggered a restart.
+function tryRestartOrAdvance() {
+  if (state.gameOver) {
+    state.score = 0;
+    state.level = 1;
+    initGame();
+    return true;
+  } else if (state.levelComplete) {
+    state.level++;
+    initGame();
+    state.levelComplete = false;
+    return true;
+  }
+  return false;
+}
 
 // ----------------------------
 // CELL HELPERS
@@ -589,6 +633,7 @@ function initGame() {
   state.asteroids = [];
   state.coins = [];
   state.enemies = [];
+  state.goombas = [];
   state.activeCells = new Set();
   resetBeltState(); // module-level in CellManifest.js, doesn't reset itself on restart otherwise
 
@@ -630,15 +675,65 @@ function initGame() {
   {
     const groundTopY = state.skyDomePlanet.pos.y - state.skyDomePlanet.halfHeight;
     const groundX = state.skyDomePlanet.pos.x;
-    state.jumpPlatforms = [
-      new JumpPlatform(groundX - 300, groundTopY - 90, 300, 30),
-      new JumpPlatform(groundX + 100, groundTopY - 150, 250, 30),
-      new JumpPlatform(groundX + 500, groundTopY - 100, 220, 30),
-      new JumpPlatform(groundX - 700, groundTopY - 110, 260, 30),
-    ];
+
+    // Builds a JumpPlatform whose top surface sits at topSurfaceY (the
+    // jump-height target, same numbers as before) but whose BODY
+    // extends all the way down to the ground — height is rounded UP to
+    // the nearest multiple of 64 (never down), so it always reaches at
+    // least to the ground rather than stopping just short and leaving
+    // a visible gap. platform.png's tileset (see JumpPlatform.js)
+    // handles rendering however many rows that ends up being.
+    // Builds a JumpPlatform whose BOTTOM edge sits exactly at
+    // groundTopY (the top of the grass layer) — anchoring the bottom
+    // rather than the top is what guarantees this: the grass layer is
+    // only 32 units thick, and rounding height to a clean multiple of
+    // 64 can shift things by up to 64 units either way, which is
+    // enough to overshoot straight through the grass into the metal
+    // base if the TOP were the fixed point instead. Anchoring the
+    // bottom means the top (the actual jump-height target) shifts
+    // slightly from these numbers instead — a much smaller, far less
+    // visible tradeoff than the platform's own body appearing to merge
+    // into the metal base beneath it.
+    function createGroundedPlatform(centerX, topSurfaceY, width) {
+      const rawHeight = groundTopY - topSurfaceY;
+      const height = Math.max(64, Math.round(rawHeight / 64) * 64);
+      const centerY = groundTopY - height / 2;
+      return new JumpPlatform(centerX, centerY, width, height);
+    }
+
+    // Named for clarity — D/A/B are the original 3 platforms
+    // (leftmost/center/rightmost), reshaped to shortest/medium/
+    // tallest; NEW1-3 are new stepping stones filling the gaps
+    // between them, each wide enough to overlap its neighbors so
+    // there's no awkward full-width jump between any two. The whole
+    // sequence (left to right): NEW3, D, NEW2, A, NEW1, B — a gently
+    // rising zigzag, room to extend further up toward the dome later.
+    const platformD = createGroundedPlatform(groundX - 700, groundTopY - 90, 256);  // leftmost, shortest
+    const platformA = createGroundedPlatform(groundX - 300, groundTopY - 150, 320); // center, medium
+    const platformB = createGroundedPlatform(groundX + 100, groundTopY - 210, 256); // rightmost, tallest
+
+    // Between A and B, jumpable from B specifically — sits a bit
+    // closer to B's height than A's, and wide enough (320, 5 tiles)
+    // that its edges genuinely overlap both A's right edge and B's
+    // left edge, rather than just touching them.
+    const platformNew1 = createGroundedPlatform(groundX - 84, groundTopY - 300, 320);
+    // Between D and A.
+    const platformNew2 = createGroundedPlatform(groundX - 516, groundTopY - 360, 256);
+    // Just left of D — the start of the path.
+    const platformNew3 = createGroundedPlatform(groundX - 900, groundTopY - 420, 256);
+
+    // New platforms pushed first so they render BEHIND the original 3
+    // at the overlap regions.
+    state.jumpPlatforms = [platformNew1, platformNew2, platformNew3, platformD, platformA, platformB];
     for (const platform of state.jumpPlatforms) {
       platform.isPermanent = true;
       state.planetoids.push(platform);
+    }
+
+    // One goomba on each of the original 3 platforms only — the new
+    // stepping stones stay goomba-free for now.
+    for (const platform of [platformD, platformA, platformB]) {
+      state.goombas.push(new Goomba(platform, platform.pos.x));
     }
   }
 
@@ -902,6 +997,10 @@ function gameLoop(timestamp) {
   }
 
   aiSystem.updateEnemies(state.enemies, state.planetoids);
+  // Goomba's own simple edge-patrol logic is entirely self-contained
+  // (see Goomba.update) — no orbit/gravity/jump concepts to route
+  // through AISystem, which is built specifically for that model.
+  state.goombas.forEach(g => g.update());
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
     aiSystem.updateInteriorGhosts(state.player.currentPlanet.interior);
     collisionSystem.handlePlayerMazeGhostCollisions(state.player, state.player.currentPlanet.interior.ghosts);
@@ -916,14 +1015,23 @@ function gameLoop(timestamp) {
   for (const a of fireballResults.toBreakAsteroids) {
     breakAsteroid(a);
     state.explosions.push(new Explosion(a.pos.x, a.pos.y));
+    state.audioManager.playFireball();
   }
   for (const hit of fireballResults.planetHits) {
     const speed = hit.fireball.vel.length();
     const pushDir = hit.fireball.vel.clone().normalize(); // planet gets knocked further along the fireball's own path, away from the shooter
     hit.planet.vel.add(pushDir.multiply(speed * FIREBALL_PLANET_PUSH_STRENGTH));
     state.explosions.push(new Explosion(hit.fireball.pos.x, hit.fireball.pos.y));
+    state.audioManager.playFireball();
   }
-  state.fireballs = state.fireballs.filter(f => !f.isDead && !fireballResults.hitFireballs.has(f));
+  const goombaFireballResults = collisionSystem.handleFireballGoombaCollisions(state.fireballs, state.goombas);
+  for (const g of goombaFireballResults.killedGoombas) {
+    state.explosions.push(new Explosion(g.pos.x, g.pos.y));
+    state.audioManager.playGoombaStomp();
+    state.audioManager.playFireball();
+  }
+  state.goombas = state.goombas.filter(g => !goombaFireballResults.killedGoombas.has(g));
+  state.fireballs = state.fireballs.filter(f => !f.isDead && !fireballResults.hitFireballs.has(f) && !goombaFireballResults.hitFireballs.has(f));
 
   state.explosions.forEach(e => e.update());
   state.explosions = state.explosions.filter(e => !e.isDead);
@@ -933,6 +1041,21 @@ function gameLoop(timestamp) {
   collisionSystem.handleCoinCollisions(state.player, state.coins);
   collisionSystem.handlePlayerAsteroidCollisions(state.player, state.asteroids);
   collisionSystem.handlePlayerEnemyCollisions(state.player, state.enemies);
+  {
+    // Stomping a goomba kills it and gives the player a small upward
+    // bounce (classic Mario-style feedback); any other touch already
+    // called player.startDeath() inside handlePlayerGoombaCollisions
+    // itself.
+    const stomped = collisionSystem.handlePlayerGoombaCollisions(state.player, state.goombas);
+    if (stomped.length > 0) {
+      for (const g of stomped) {
+        state.explosions.push(new Explosion(g.pos.x, g.pos.y));
+        state.audioManager.playGoombaStomp();
+      }
+      state.goombas = state.goombas.filter(g => !stomped.includes(g));
+      state.player.vel.y = -JUMP_STRENGTH * 0.6; // smaller than a full jump — a bounce, not a launch
+    }
+  }
   collisionSystem.handlePlayerFireBarCollisions(state.player, state.fireBars);
   if (state.player.mode === "maze" && state.player.currentPlanet?.interior) {
     state.player.checkMazeDots();
@@ -1035,9 +1158,10 @@ function gameLoop(timestamp) {
   state.planetoids.forEach(p => p.draw());
   state.asteroids.forEach(a => a.draw());
   state.fireBars.forEach(b => b.draw());
+  state.enemies.forEach(e => e.draw());
+  state.goombas.forEach(g => g.draw());
   state.player.draw();
   drawPullIndicator();
-  state.enemies.forEach(e => e.draw());
   state.coins.forEach(c => c.draw());
   state.fireballs.forEach(f => f.draw());
   state.particles.forEach(p => p.draw());
