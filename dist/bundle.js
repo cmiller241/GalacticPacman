@@ -84,6 +84,632 @@
     }
   };
 
+  // js/entities/Entity.js
+  var Entity = class {
+    constructor() {
+      this.pos = new Vector2(0, 0);
+      this.vel = new Vector2(0, 0);
+      this.radius = 0;
+      this.mass = 0;
+    }
+    update() {
+    }
+    draw() {
+    }
+  };
+
+  // js/entities/world/Asteroid.js
+  var Asteroid = class extends Entity {
+    constructor(x, y, radius) {
+      super();
+      this.pos = new Vector2(x, y);
+      this.radius = radius;
+      this.mass = radius * radius;
+      let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+      this.vel = direction.multiply(PLANET_SPEED);
+      this.angularSpeed = (Math.random() * 2 - 1) * 0.05;
+      this.angle = Math.random() * Math.PI * 2;
+      this.color = "#A85417";
+      this.points = this.generatePoints();
+      this.interiorPoints = [];
+      const numInterior = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < numInterior; i++) {
+        this.interiorPoints.push(new Vector2(
+          (Math.random() - 0.5) * this.radius * 1.2,
+          (Math.random() - 0.5) * this.radius * 1.2
+        ));
+      }
+    }
+    generatePoints() {
+      const numSides = 6 + Math.floor(Math.random() * 6);
+      const points = [];
+      const angleStep = 2 * Math.PI / numSides;
+      for (let i = 0; i < numSides; i++) {
+        const a = i * angleStep + (Math.random() - 0.5) * angleStep * 0.5;
+        const r = this.radius * (0.7 + Math.random() * 0.6);
+        points.push(new Vector2(Math.cos(a) * r, Math.sin(a) * r));
+      }
+      return points;
+    }
+    update() {
+      this.vel = this.vel.multiply(DRAG);
+      this.pos.add(this.vel);
+      this.angle += this.angularSpeed;
+      if (this.pos.x - this.radius < 0) {
+        this.pos.x = this.radius;
+        this.vel.x = -this.vel.x;
+      }
+      if (this.pos.x + this.radius > state.sceneWidth) {
+        this.pos.x = state.sceneWidth - this.radius;
+        this.vel.x = -this.vel.x;
+      }
+      if (this.pos.y - this.radius < 0) {
+        this.pos.y = this.radius;
+        this.vel.y = -this.vel.y;
+      }
+      if (this.pos.y + this.radius > state.sceneHeight) {
+        this.pos.y = state.sceneHeight - this.radius;
+        this.vel.y = -this.vel.y;
+      }
+    }
+    draw() {
+      const ctx = state.ctx;
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(this.angle);
+      const lightDir = new Vector2(-0.7, -0.7).normalize();
+      const baseR = parseInt(this.color.substr(1, 2), 16);
+      const baseG = parseInt(this.color.substr(3, 2), 16);
+      const baseB = parseInt(this.color.substr(5, 2), 16);
+      for (let i = 0; i < this.points.length; i++) {
+        const j = (i + 1) % this.points.length;
+        const p1 = this.points[i].clone();
+        const p2 = this.points[j].clone();
+        this.interiorPoints.forEach((ip) => {
+          this.fillTriangle(ctx, p1, p2, ip, baseR, baseG, baseB, lightDir);
+        });
+        const mid = p1.clone().add(p2).multiply(0.5);
+        this.fillTriangle(ctx, p1, mid, p2, baseR, baseG, baseB, lightDir);
+      }
+      ctx.beginPath();
+      ctx.moveTo(this.points[0].x, this.points[0].y);
+      for (let i = 1; i < this.points.length; i++) {
+        ctx.lineTo(this.points[i].x, this.points[i].y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = "#3A1C08";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const shadowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius);
+      shadowGrad.addColorStop(0, "rgba(0,0,0,0)");
+      shadowGrad.addColorStop(0.7, "rgba(0,0,0,0.15)");
+      shadowGrad.addColorStop(1, "rgba(0,0,0,0.3)");
+      ctx.fillStyle = shadowGrad;
+      ctx.beginPath();
+      ctx.moveTo(this.points[0].x, this.points[0].y);
+      for (let i = 1; i < this.points.length; i++) {
+        ctx.lineTo(this.points[i].x, this.points[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    // --- Helper to fill a triangle with shading ---
+    fillTriangle(ctx, v0, v1, v2, baseR, baseG, baseB, lightDir) {
+      const edge = v2.subtract(v1);
+      const perp = new Vector2(edge.y, -edge.x);
+      const normal = perp.lengthSq() > 0 ? perp.normalize() : new Vector2(0, 1);
+      const dot = lightDir.dot(normal);
+      const edgeDistance = (v1.length() + v2.length()) / (2 * this.radius);
+      let brightness = 0.3 + Math.max(0, dot) * 0.7;
+      brightness = brightness * (1 - 0.4 * edgeDistance) + 0.2;
+      const cr = Math.min(255, Math.max(0, Math.floor(baseR * brightness)));
+      const cg = Math.min(255, Math.max(0, Math.floor(baseG * brightness)));
+      const cb = Math.min(255, Math.max(0, Math.floor(baseB * brightness)));
+      ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+      ctx.beginPath();
+      ctx.moveTo(v0.x, v0.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.closePath();
+      ctx.fill();
+    }
+  };
+
+  // js/entities/Particle.js
+  var Particle = class {
+    constructor(pos, vel, life = 40) {
+      this.pos = pos.clone();
+      this.vel = vel;
+      this.life = life;
+      this.maxLife = life;
+      this.color = "rgb(255, 255, 0)";
+      this.radius = 2;
+      this.drag = 1;
+      this.growRate = 0;
+    }
+    update() {
+      this.pos.add(this.vel);
+      this.vel = this.vel.multiply(this.drag);
+      this.radius += this.growRate;
+      this.life--;
+    }
+    draw() {
+      const ctx = state.ctx;
+      if (this.life <= 0) return;
+      ctx.globalAlpha = this.life / this.maxLife;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+      ctx.fillStyle = this.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  };
+
+  // js/utils.js
+  function createParticles(atPos, count) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 4 + 2;
+      const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+      state.particles.push(new Particle(atPos, vel));
+    }
+  }
+  function createDeathParticles(atPos, count = 30) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 6 + 3;
+      const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+      const particle = new Particle(atPos, vel);
+      particle.color = `hsl(${Math.random() * 60 + 20}, 100%, 50%)`;
+      state.particles.push(particle);
+    }
+  }
+  function initResizeListener() {
+    window.addEventListener("resize", () => {
+      state.canvas.width = window.innerWidth;
+      state.canvas.height = window.innerHeight;
+    });
+  }
+  function angleDiff(a, b) {
+    let diff = (a - b + Math.PI) % (2 * Math.PI);
+    if (diff < 0) diff += 2 * Math.PI;
+    return Math.abs(diff - Math.PI);
+  }
+
+  // js/entities/world/Explosion.js
+  var EXPLOSION_DURATION = 400;
+  var RING_MAX_RADIUS = 70;
+  var FLASH_RADIUS = 30;
+  var FLASH_FRACTION = 0.3;
+  var PARTICLE_COUNT = 420;
+  var Explosion = class extends Entity {
+    constructor(x, y) {
+      super();
+      this.pos = new Vector2(x, y);
+      this.startTime = Date.now();
+      this.duration = EXPLOSION_DURATION;
+      createDeathParticles(this.pos.clone(), PARTICLE_COUNT);
+    }
+    get isDead() {
+      return Date.now() - this.startTime >= this.duration;
+    }
+    update() {
+    }
+    draw() {
+      const ctx = state.ctx;
+      const t = Math.min((Date.now() - this.startTime) / this.duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      ctx.save();
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = "#ffcc66";
+      ctx.lineWidth = 4 * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, eased * RING_MAX_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      const flashT = Math.min(t / FLASH_FRACTION, 1);
+      if (flashT < 1) {
+        ctx.save();
+        ctx.globalAlpha = 1 - flashT;
+        const grad = ctx.createRadialGradient(this.pos.x, this.pos.y, 0, this.pos.x, this.pos.y, FLASH_RADIUS);
+        grad.addColorStop(0, "rgba(255,255,220,1)");
+        grad.addColorStop(0.4, "rgba(255,180,60,0.8)");
+        grad.addColorStop(1, "rgba(255,100,20,0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, FLASH_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  };
+
+  // js/systems/CollisionSystem.js
+  var CollisionSystem = class {
+    // Shared helper: distance from a circle (pos, radius) to a planet's
+    // true surface — nearestSurfacePoint for rect planets, plain
+    // center-distance-minus-radius for circular ones. Used everywhere a
+    // planet might be either shape, so each collision method doesn't need
+    // its own copy of this branch.
+    distanceToPlanetSurface(pos, planet) {
+      if (planet.isRoundedRect) {
+        return planet.distanceToSurface(pos.x, pos.y);
+      }
+      return pos.subtract(planet.pos).length() - planet.radius;
+    }
+    // General-purpose handler for ANY entity tagged isImmovable (FireBar
+    // is the first example, not the only intended one) colliding with
+    // ordinary movable entities (planetoids, asteroids, ...). This is
+    // NOT a special-cased hack — it's the direct physical limit of a
+    // normal elastic collision as one object's mass approaches infinity:
+    // solving the standard two-body elastic collision formula with
+    // m2 -> infinity reduces to "object 1 reflects off the surface
+    // normal (like bouncing off a wall), object 2 is completely
+    // unaffected." So rather than reuse handleElasticCollisions' mass-
+    // ratio math (which assumes both masses are finite and comparable),
+    // this applies that limiting case directly: a plain velocity
+    // reflection for the movable object, zero change for the immovable
+    // one, and the movable object gets pushed the FULL overlap distance
+    // out (not split between both, since only one side is actually free
+    // to move).
+    handleImmovableCollisions(immovables, movables) {
+      for (const im of immovables) {
+        for (const mv of movables) {
+          if (mv.isImmovable) continue;
+          let normal, targetPos;
+          let domeContact = null;
+          if (im.isRoundedRect) {
+            const topY = im.pos.y - im.halfHeight;
+            const usingDome = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY;
+            const usingBase = !usingDome && typeof im.nearestBaseSurfacePoint === "function" && mv.pos.y > topY;
+            let surface;
+            if (usingDome) surface = im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y);
+            else if (usingBase) surface = im.nearestBaseSurfacePoint(mv.pos.x, mv.pos.y);
+            else surface = im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
+            if (surface.distance >= mv.radius) continue;
+            normal = surface.normal;
+            targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+            if (usingDome) domeContact = surface.point;
+          } else {
+            const offset = mv.pos.subtract(im.pos);
+            const dist = offset.length();
+            const minDist = im.radius + mv.radius;
+            if (dist >= minDist || dist <= 0) continue;
+            normal = offset.normalize();
+            targetPos = im.pos.clone().add(normal.multiply(minDist));
+          }
+          mv.pos = targetPos;
+          const dot = mv.vel.dot(normal);
+          mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+          if (domeContact && typeof im.triggerShieldImpact === "function") {
+            const intensity = Math.min(1, mv.radius / 60);
+            im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
+          }
+        }
+      }
+    }
+    // The fire bar's block and its rotating fireballs are both lethal to
+    // the player on contact — no bounce/physics interaction for the
+    // player, just instant death, same as touching a spikey planetoid.
+    handlePlayerFireBarCollisions(player, fireBars) {
+      for (const bar of fireBars) {
+        const blockDist = player.pos.subtract(bar.pos).length();
+        if (blockDist <= bar.blockRadius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.startDeath();
+          return;
+        }
+        for (const f of bar.getFireballPositions()) {
+          const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist <= f.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+            player.startDeath();
+            return;
+          }
+        }
+      }
+    }
+    handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = "radius", radiusProp2 = "radius", massProp1 = "mass", massProp2 = "mass") {
+      for (let i = 0; i < entities1.length; i++) {
+        for (let j = entities1 === entities2 ? i + 1 : 0; j < entities2.length; j++) {
+          const p1 = entities1[i];
+          const p2 = entities2[j];
+          if (p1.isImmovable || p2.isImmovable) continue;
+          const offset = p1.pos.subtract(p2.pos);
+          const distSq = offset.lengthSq();
+          const sumR = p1[radiusProp1] + p2[radiusProp2];
+          const sumRSq = sumR * sumR;
+          if (distSq < sumRSq) {
+            const dist = Math.sqrt(distSq);
+            const overlap = sumR - dist;
+            const normal = offset.normalize();
+            const tangent = new Vector2(-normal.y, normal.x);
+            const m1 = p1[massProp1], m2 = p2[massProp2], totalMass = m1 + m2;
+            const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+            p1.pos.add(normal.multiply(sep1));
+            p2.pos.add(normal.multiply(-sep2));
+            const v1 = p1.vel.clone(), v2 = p2.vel.clone();
+            const v1n = normal.dot(v1), v2n = normal.dot(v2);
+            const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+            const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+            const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+            p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+            p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+          }
+        }
+      }
+    }
+    handlePlayerPlanetCollisions(player) {
+      for (const planet of state.planetoids.filter((p) => p.isSpikey)) {
+        const dist = player.pos.subtract(planet.pos).length();
+        if (dist <= planet.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.startDeath();
+          return;
+        }
+      }
+      if (player.onSurface) return;
+      if (player.pullTarget) {
+        if (!player.pullTarget.isSpikey && this.tryLandOnPlanet(player, player.pullTarget)) {
+          player.pullTarget = null;
+        }
+        return;
+      }
+      for (const planet of state.planetoids.filter((p) => !p.isSpikey)) {
+        if (this.tryLandOnPlanet(player, planet)) return;
+      }
+      player.onSurface = false;
+      player.currentPlanet = null;
+    }
+    // Attempts to land the player on a single planet (rounded-rect or
+    // circular). Returns true if landing occurred. Factored out of
+    // handlePlayerPlanetCollisions so the same logic can be applied
+    // either across the full planet list (normal flight) or to just one
+    // specific planet (the pull target, while otherwise passing through
+    // everything else — see above).
+    tryLandOnPlanet(player, planet) {
+      if (planet.isRoundedRect) {
+        if (planet.isSkyDome && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) {
+          return false;
+        }
+        if (planet.isSkyDome && player.vel.y < 0) {
+          return false;
+        }
+        const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
+        if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
+          player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+          player.onSurface = true;
+          player.currentPlanet = planet;
+          player.lastInfluencePlanet = planet;
+          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+          const impactVel = player.vel.clone();
+          player.vel = new Vector2(0, 0);
+          if (player.isGroundPounding) {
+            player.isGroundPounding = false;
+            const pushDir = surface.normal.clone().multiply(-1);
+            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+            createParticles(player.pos, 20);
+          }
+          return true;
+        }
+        return false;
+      }
+      const offset = player.pos.subtract(planet.pos);
+      const dist = offset.length();
+      const surfaceDist = planet.radius + PLAYER_RADIUS;
+      if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+        const normal = offset.normalize();
+        player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
+        player.onSurface = true;
+        player.currentPlanet = planet;
+        player.lastInfluencePlanet = planet;
+        const impactVel = player.vel.clone();
+        player.vel = new Vector2(0, 0);
+        player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
+        if (player.isGroundPounding) {
+          player.isGroundPounding = false;
+          const pushDir = normal.multiply(-1);
+          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
+          createParticles(player.pos, 20);
+        }
+        return true;
+      }
+      return false;
+    }
+    handlePlayerAsteroidCollisions(player, asteroids) {
+      for (const a of asteroids) {
+        const dist = player.pos.subtract(a.pos).length();
+        if (dist <= PLAYER_RADIUS + a.radius) {
+          player.startDeath();
+          return;
+        }
+      }
+    }
+    handlePlayerEnemyCollisions(player, enemies) {
+      for (const e of enemies) {
+        const dist = player.pos.subtract(e.pos).length();
+        if (dist <= PLAYER_RADIUS + ENEMY_RADIUS) {
+          player.startDeath();
+          return;
+        }
+      }
+    }
+    // Distinguishes a stomp (jump on its head — kills it) from a
+    // damaging side/underneath touch (kills the player), the classic
+    // Mario-style rule: the player's center needs to be meaningfully
+    // above the goomba's own center, AND moving downward (or at least
+    // not actively still rising from a jump) — landing squarely on top,
+    // not just brushing past. Returns the list of goombas that got
+    // stomped (game.js removes them and gives the player a bounce); any
+    // non-stomp touch calls player.startDeath() directly here, same as
+    // handlePlayerEnemyCollisions above (which already safely no-ops
+    // during invincibility, so no extra guard needed here either).
+    handlePlayerGoombaCollisions(player, goombas) {
+      const stomped = [];
+      for (const g of goombas) {
+        const dist = player.pos.subtract(g.pos).length();
+        if (dist > PLAYER_RADIUS + g.radius) continue;
+        const isStomp = g.pos.y - player.pos.y > g.radius * 0.3 && player.vel.y >= 0;
+        if (isStomp) {
+          stomped.push(g);
+        } else {
+          player.startDeath();
+        }
+      }
+      return stomped;
+    }
+    // Same shape as handleFireballCollisions below, for goombas
+    // specifically — a separate method rather than folding into that
+    // one, since goombas aren't planetoids/asteroids and have their own
+    // simple circle-only collision (no surface-distance concept to
+    // reuse from distanceToPlanetSurface).
+    handleFireballGoombaCollisions(fireballs, goombas) {
+      const hitFireballs = /* @__PURE__ */ new Set();
+      const killedGoombas = /* @__PURE__ */ new Set();
+      for (const f of fireballs) {
+        for (const g of goombas) {
+          if (killedGoombas.has(g)) continue;
+          const dist = f.pos.subtract(g.pos).length();
+          if (dist < f.radius + g.radius) {
+            hitFireballs.add(f);
+            killedGoombas.add(g);
+            break;
+          }
+        }
+      }
+      return { hitFireballs, killedGoombas };
+    }
+    handleCoinCollisions(player, coins) {
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const c = coins[i];
+        const dist = player.pos.subtract(c.pos).length();
+        if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
+          state.audioManager.playEatDot();
+          coins.splice(i, 1);
+          state.score++;
+        }
+      }
+    }
+    handlePlanetAsteroidCollisions(planetoids, asteroids) {
+      const toBreak = /* @__PURE__ */ new Set();
+      for (let p of planetoids) {
+        for (let a of asteroids) {
+          const dist = this.distanceToPlanetSurface(a.pos, p);
+          if (dist < a.radius) {
+            toBreak.add(a);
+            continue;
+          }
+          if (typeof p.nearestDomeSurfacePoint === "function") {
+            const topY = p.pos.y - p.halfHeight;
+            if (a.pos.y < topY) {
+              const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
+              if (domeSurface.distance < a.radius) {
+                toBreak.add(a);
+                if (typeof p.triggerShieldImpact === "function") {
+                  const intensity = Math.min(1, a.radius / 45);
+                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+                }
+                continue;
+              }
+            }
+          }
+          if (typeof p.nearestBaseSurfacePoint === "function") {
+            const topY = p.pos.y - p.halfHeight;
+            if (a.pos.y > topY) {
+              const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
+              if (baseSurface.distance < a.radius) {
+                toBreak.add(a);
+              }
+            }
+          }
+        }
+      }
+      return toBreak;
+    }
+    // Checks every fireball against every asteroid, then every planetoid.
+    // Each fireball can only register a single hit per frame (whichever
+    // it's found to overlap first) — once it's hit something, it's spent
+    // and doesn't get checked against further targets.
+    //
+    // Returns:
+    //   hitFireballs     — Set of fireballs that hit something this frame
+    //                       (caller should remove these from state.fireballs)
+    //   toBreakAsteroids — Set of asteroids to break (pass to the
+    //                       existing breakAsteroid() in game.js, same as
+    //                       planet-asteroid collisions already do)
+    //   planetHits       — array of { fireball, planet } pairs, for the
+    //                       caller to apply a push impulse + spawn an
+    //                       explosion at each impact
+    handleFireballCollisions(fireballs, planetoids, asteroids) {
+      const hitFireballs = /* @__PURE__ */ new Set();
+      const toBreakAsteroids = /* @__PURE__ */ new Set();
+      const planetHits = [];
+      for (const f of fireballs) {
+        let hit = false;
+        for (const a of asteroids) {
+          const dist = f.pos.subtract(a.pos).length();
+          if (dist < f.radius + a.radius) {
+            hitFireballs.add(f);
+            toBreakAsteroids.add(a);
+            hit = true;
+            break;
+          }
+        }
+        if (hit) continue;
+        for (const p of planetoids) {
+          if (p.isSkyDome) {
+            const topY = p.pos.y - p.halfHeight;
+            if (f.pos.y >= topY) continue;
+            if (typeof p.nearestDomeSurfacePoint === "function") {
+              const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
+              if (domeSurface.distance < f.radius) {
+                hitFireballs.add(f);
+                planetHits.push({ fireball: f, planet: p });
+                if (typeof p.triggerShieldImpact === "function") {
+                  const intensity = Math.min(1, f.radius / 45);
+                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+                }
+              }
+              continue;
+            }
+          }
+          const dist = this.distanceToPlanetSurface(f.pos, p);
+          if (dist < f.radius) {
+            hitFireballs.add(f);
+            planetHits.push({ fireball: f, planet: p });
+            break;
+          }
+        }
+      }
+      return { hitFireballs, toBreakAsteroids, planetHits };
+    }
+    // Maze ghosts track grid coordinates (mazeCol/mazeRow), same as the
+    // player does while in the maze — so this is a tile match, not a
+    // distance check. Any death this triggers goes through
+    // player.startDeath(), which already handles the invincibility
+    // window on its own, so no special-casing is needed here.
+    handlePlayerMazeGhostCollisions(player, ghosts) {
+      if (!ghosts) return;
+      for (const g of ghosts) {
+        if (player.mazeCol === g.mazeCol && player.mazeRow === g.mazeRow) {
+          player.startDeath();
+          return;
+        }
+      }
+    }
+  };
+
+  // js/systems/AISystem.js
+  var AISystem = class {
+    updateEnemies(enemies, planetoids) {
+      enemies.forEach((e) => e.update(planetoids));
+    }
+    updateInteriorGhosts(interior) {
+      if (interior && interior.ghosts) {
+        interior.ghosts.forEach((g) => g.update());
+      }
+    }
+  };
+
   // js/world/Planetoid.js
   var Planetoid = class _Planetoid {
     // How far the glow extends past the planet's edge, and how strong it
@@ -274,6 +900,1125 @@
         ctx.fill();
         ctx.restore();
       }
+    }
+  };
+
+  // js/world/CellManifest.js
+  var BELT_START = { col: 0, row: 15 };
+  var BELT_END = { col: 15, row: 20 };
+  var BELT_THICKNESS_CELLS = 0.75;
+  var BELT_SPEED = 2.5;
+  var BELT_RADIUS_MIN = 30;
+  var BELT_RADIUS_MAX = 70;
+  var BELT_COLOR = "#dcc48a";
+  var BELT_SPAWN_INTERVAL_MS = 100;
+  var BELT_MAX_TOTAL_PLANETOIDS = 500;
+  var BELT_HIDE_MARGIN = 350;
+  var BELT_HIDE_STEP = 150;
+  var BELT_HIDE_MAX_STEPS = 35;
+  var BELT_EXTRA_STAGGER_CELLS = 0.4;
+  var BELT_CULL_RADIUS_CELLS = 3;
+  var cellSizeRef = 1;
+  var beltDirWorld = null;
+  var beltStartWorld = null;
+  function initCellManifest(cellSize) {
+    cellSizeRef = cellSize;
+    beltStartWorld = { x: BELT_START.col * cellSize, y: BELT_START.row * cellSize };
+    const endWorld = { x: BELT_END.col * cellSize, y: BELT_END.row * cellSize };
+    beltDirWorld = new Vector2(endWorld.x - beltStartWorld.x, endWorld.y - beltStartWorld.y).normalize();
+  }
+  function distancePointToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lengthSq = dx * dx + dy * dy;
+    if (lengthSq === 0) return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  }
+  function isBeltCell(col, row) {
+    return distancePointToSegment(col, row, BELT_START.col, BELT_START.row, BELT_END.col, BELT_END.row) <= BELT_THICKNESS_CELLS;
+  }
+  function isEmptyBufferCell(col, row) {
+    if (isBeltCell(col, row)) return false;
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        if (dRow === 0 && dCol === 0) continue;
+        if (isBeltCell(col + dCol, row + dRow)) return true;
+      }
+    }
+    return false;
+  }
+  function getCellManifest(col, row) {
+    if (isBeltCell(col, row)) return { type: "belt" };
+    if (isEmptyBufferCell(col, row)) return { type: "empty" };
+    return null;
+  }
+  function isPositionHiddenFromCamera(x, y) {
+    const cam = state.camera;
+    const zoom = state.zoom;
+    const canvas = state.canvas;
+    if (!cam || !zoom || !canvas) return true;
+    const visibleWidth = canvas.width / zoom;
+    const visibleHeight = canvas.height / zoom;
+    return x < cam.x - BELT_HIDE_MARGIN || x > cam.x + visibleWidth + BELT_HIDE_MARGIN || y < cam.y - BELT_HIDE_MARGIN || y > cam.y + visibleHeight + BELT_HIDE_MARGIN;
+  }
+  function beltProgress(worldX, worldY) {
+    const dx = worldX - beltStartWorld.x, dy = worldY - beltStartWorld.y;
+    return dx * beltDirWorld.x + dy * beltDirWorld.y;
+  }
+  function shouldKeepBeltPlanetoid(planetoid, playerWorldX, playerWorldY) {
+    const dx = planetoid.pos.x - playerWorldX;
+    const dy = planetoid.pos.y - playerWorldY;
+    const maxDist = cellSizeRef * BELT_CULL_RADIUS_CELLS;
+    return dx * dx + dy * dy <= maxDist * maxDist;
+  }
+  function projectOntoBeltLine(x, y) {
+    const dx = x - beltStartWorld.x, dy = y - beltStartWorld.y;
+    const t = dx * beltDirWorld.x + dy * beltDirWorld.y;
+    return {
+      x: beltStartWorld.x + beltDirWorld.x * t,
+      y: beltStartWorld.y + beltDirWorld.y * t
+    };
+  }
+  function spawnBeltPlanetoidNear(refX, refY) {
+    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
+    const perpX = -beltDirWorld.y, perpY = beltDirWorld.x;
+    const jitter = (Math.random() * 2 - 1) * cellSizeRef * BELT_THICKNESS_CELLS;
+    let x = refX + perpX * jitter;
+    let y = refY + perpY * jitter;
+    let steps = 0;
+    while (!isPositionHiddenFromCamera(x, y) && steps < BELT_HIDE_MAX_STEPS) {
+      x -= beltDirWorld.x * BELT_HIDE_STEP;
+      y -= beltDirWorld.y * BELT_HIDE_STEP;
+      steps++;
+    }
+    const extraStagger = Math.random() * cellSizeRef * BELT_EXTRA_STAGGER_CELLS;
+    x -= beltDirWorld.x * extraStagger;
+    y -= beltDirWorld.y * extraStagger;
+    const p = new Planetoid(x, y, radius, BELT_COLOR);
+    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
+    p.isBeltPlanetoid = true;
+    p.createOffscreen();
+    state.planetoids.push(p);
+    return p;
+  }
+  function generateSpecialCell(col, row, manifest) {
+    if (manifest.type === "belt") {
+      establishBeltCell(col, row);
+    }
+  }
+  var lastBeltSpawnTime = 0;
+  var lastPlayerBeltProgress = null;
+  var BELT_ESTABLISH_COUNT = 40;
+  var BELT_SPAWN_SPACING = 300;
+  function isPlayerNearBeltCell(playerWorldX, playerWorldY) {
+    const playerCol = Math.floor(playerWorldX / cellSizeRef);
+    const playerRow = Math.floor(playerWorldY / cellSizeRef);
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        if (getCellManifest(playerCol + dCol, playerRow + dRow)) return true;
+      }
+    }
+    return false;
+  }
+  function establishBeltCell(col, row) {
+    let totalBeltCount = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) totalBeltCount++;
+    }
+    const originX = col * cellSizeRef;
+    const originY = row * cellSizeRef;
+    for (let i = 0; i < BELT_ESTABLISH_COUNT; i++) {
+      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
+      spawnBeltPlanetoidInCell(originX, originY);
+      totalBeltCount++;
+    }
+  }
+  function spawnBeltPlanetoidInCell(originX, originY) {
+    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
+    const x = originX + radius + Math.random() * (cellSizeRef - 2 * radius);
+    const y = originY + radius + Math.random() * (cellSizeRef - 2 * radius);
+    const p = new Planetoid(x, y, radius, BELT_COLOR);
+    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
+    p.isBeltPlanetoid = true;
+    p.createOffscreen();
+    state.planetoids.push(p);
+    return p;
+  }
+  function updateBeltSpawning(playerWorldX, playerWorldY) {
+    if (!beltDirWorld || !beltStartWorld) return;
+    const nearNow = isPlayerNearBeltCell(playerWorldX, playerWorldY);
+    if (!nearNow) {
+      lastPlayerBeltProgress = null;
+      return;
+    }
+    const now = Date.now();
+    if (now - lastBeltSpawnTime < BELT_SPAWN_INTERVAL_MS) return;
+    lastBeltSpawnTime = now;
+    const currentProgress = beltProgress(playerWorldX, playerWorldY);
+    let spawnsNeeded = 1;
+    if (lastPlayerBeltProgress !== null) {
+      const distanceTraveled = Math.abs(currentProgress - lastPlayerBeltProgress);
+      spawnsNeeded = Math.max(1, Math.ceil(distanceTraveled / BELT_SPAWN_SPACING));
+    }
+    lastPlayerBeltProgress = currentProgress;
+    let totalBeltCount = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) totalBeltCount++;
+    }
+    const projected = projectOntoBeltLine(playerWorldX, playerWorldY);
+    for (let i = 0; i < spawnsNeeded; i++) {
+      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
+      spawnBeltPlanetoidNear(projected.x, projected.y);
+      totalBeltCount++;
+    }
+  }
+  function resetBeltState() {
+    lastBeltSpawnTime = 0;
+    lastPlayerBeltProgress = null;
+  }
+  function getBeltPlanetoidCount() {
+    let count = 0;
+    for (const p of state.planetoids) {
+      if (p.isBeltPlanetoid) count++;
+    }
+    return count;
+  }
+  function getCellKindLabel(col, row) {
+    const manifest = getCellManifest(col, row);
+    if (!manifest) return "normal";
+    return manifest.type;
+  }
+
+  // js/ui/Minimap.js
+  var Minimap = class {
+    constructor() {
+      this.size = 240;
+      this.margin = 20;
+      this.backgroundColor = "rgba(6, 14, 24, 0.72)";
+      this.gridColor = "rgba(80, 200, 255, 0.18)";
+      this.borderColor = "rgba(100, 220, 255, 0.85)";
+      this.cornerColor = "rgba(140, 230, 255, 1)";
+      this.labelColor = "rgba(150, 230, 255, 0.85)";
+      this.playerColor = "#ffffff";
+      this.playerGlowColor = "rgba(255,255,255,0.35)";
+      this.playerRadius = 5;
+      this.specialColor = "#ffd23f";
+      this.specialGlowColor = "rgba(255,210,63,0.5)";
+      this.specialRadius = 3;
+      this.beltDotColor = "#ff4d4d";
+      this.beltDotCount = 130;
+      this.beltJitterCells = BELT_THICKNESS_CELLS * 1.8;
+      this._beltDots = null;
+    }
+    // Which planetoids get plotted as the yellow "special" dots. Reads
+    // directly from state each call (rather than being passed in) to
+    // match how every other system in this codebase already works.
+    // Add state.rectPlanet here too if you want the rounded-rect planet
+    // included on the map as well.
+    getSpecialPlanets() {
+      return [state.mazePlanet, state.platformPlanet].filter(Boolean);
+    }
+    worldToMapPoint(worldX, worldY, x0, y0) {
+      return {
+        x: x0 + worldX / state.sceneWidth * this.size,
+        y: y0 + worldY / state.sceneHeight * this.size
+      };
+    }
+    // Same idea as worldToMapPoint, but for a point already expressed in
+    // CELL-space (fractional col/row) rather than world pixel coordinates
+    // — used for the belt scatter, since BELT_START/END are cell-space.
+    cellToMapPoint(col, row, x0, y0) {
+      const gridSize = state.gridSize || 20;
+      return {
+        x: x0 + col / gridSize * this.size,
+        y: y0 + row / gridSize * this.size
+      };
+    }
+    // Builds and caches the belt's scatter-dot pattern in CELL-space
+    // (not map-pixel-space), so it stays correct if this.size ever
+    // changes — each cached point is converted to map pixels fresh at
+    // draw time via cellToMapPoint.
+    buildBeltDots() {
+      const dx = BELT_END.col - BELT_START.col;
+      const dy = BELT_END.row - BELT_START.row;
+      const len = Math.hypot(dx, dy);
+      const dirX = len > 0 ? dx / len : 1;
+      const dirY = len > 0 ? dy / len : 0;
+      const perpX = -dirY, perpY = dirX;
+      const dots = [];
+      for (let i = 0; i < this.beltDotCount; i++) {
+        const t = Math.random();
+        const baseCol = BELT_START.col + dx * t;
+        const baseRow = BELT_START.row + dy * t;
+        const jitter = (Math.random() * 2 - 1) * this.beltJitterCells;
+        dots.push({
+          col: baseCol + perpX * jitter,
+          row: baseRow + perpY * jitter,
+          alpha: 0.5 + Math.random() * 0.5
+          // slight per-dot variation for visual texture
+        });
+      }
+      return dots;
+    }
+    drawGlowDot(ctx, x, y, radius, dotColor, glowColor) {
+      ctx.beginPath();
+      ctx.fillStyle = glowColor;
+      ctx.arc(x, y, radius * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = dotColor;
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    draw() {
+      if (!state.player || !state.sceneWidth || !state.sceneHeight || !state.canvas) return;
+      const ctx = state.ctx;
+      const gridSize = state.gridSize || 20;
+      const x0 = state.canvas.width - this.margin - this.size;
+      const y0 = state.canvas.height - this.margin - this.size;
+      ctx.save();
+      ctx.fillStyle = this.backgroundColor;
+      ctx.fillRect(x0, y0, this.size, this.size);
+      ctx.strokeStyle = this.gridColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= gridSize; i++) {
+        const gx = x0 + i / gridSize * this.size;
+        ctx.moveTo(gx, y0);
+        ctx.lineTo(gx, y0 + this.size);
+        const gy = y0 + i / gridSize * this.size;
+        ctx.moveTo(x0, gy);
+        ctx.lineTo(x0 + this.size, gy);
+      }
+      ctx.stroke();
+      if (!this._beltDots) this._beltDots = this.buildBeltDots();
+      ctx.fillStyle = this.beltDotColor;
+      for (const dot of this._beltDots) {
+        const p = this.cellToMapPoint(dot.col, dot.row, x0, y0);
+        ctx.globalAlpha = dot.alpha;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      for (const planet of this.getSpecialPlanets()) {
+        const p = this.worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0);
+        this.drawGlowDot(ctx, p.x, p.y, this.specialRadius, this.specialColor, this.specialGlowColor);
+      }
+      {
+        const p = this.worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0);
+        this.drawGlowDot(ctx, p.x, p.y, this.playerRadius, this.playerColor, this.playerGlowColor);
+      }
+      ctx.strokeStyle = this.borderColor;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0, y0, this.size, this.size);
+      const bracket = Math.min(20, this.size * 0.12);
+      ctx.strokeStyle = this.cornerColor;
+      ctx.lineWidth = 2;
+      const corners = [
+        [x0, y0, 1, 1],
+        [x0 + this.size, y0, -1, 1],
+        [x0, y0 + this.size, 1, -1],
+        [x0 + this.size, y0 + this.size, -1, -1]
+      ];
+      for (const [cx, cy, dx, dy] of corners) {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + bracket * dy);
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx + bracket * dx, cy);
+        ctx.stroke();
+      }
+      ctx.fillStyle = this.labelColor;
+      ctx.font = "12px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("SECTOR MAP", x0 + 8, y0 - 8);
+      ctx.restore();
+    }
+  };
+
+  // js/effects/PullBeam.js
+  var BEAM_COLOR = "rgba(120, 210, 255, 1)";
+  var BEAM_GLOW_COLOR = "rgba(120, 210, 255, 0.35)";
+  var BEAM_GLOW_WIDTH = 13;
+  var BEAM_CORE_WIDTH = 4;
+  var OUTLINE_COLOR = "rgba(120, 210, 255, 0.9)";
+  var OUTLINE_GLOW_COLOR = "rgba(120, 210, 255, 0.3)";
+  var OUTLINE_GLOW_WIDTH = 9;
+  var OUTLINE_CORE_WIDTH = 3;
+  var OUTLINE_PADDING = 8;
+  var WAVE_COLOR = "rgba(215, 246, 255, 1)";
+  var WAVE_GLOW_COLOR = "rgba(215, 246, 255, 0.4)";
+  var WAVE_GLOW_WIDTH = 4;
+  var WAVE_CORE_WIDTH = 1.5;
+  var WAVE_AMPLITUDE = 5;
+  var WAVE_FREQUENCY = 0.05;
+  var WAVE_FREQUENCY_2 = 0.065;
+  var WAVE_SPEED = 0.012;
+  var WAVE_SAMPLE_SPACING = 8;
+  function buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, frequency, phaseOffset, now) {
+    const points = [];
+    const numSamples = Math.max(2, Math.floor(beamLength / WAVE_SAMPLE_SPACING));
+    for (let i = 0; i <= numSamples; i++) {
+      const s = i / numSamples * beamLength;
+      const wave = WAVE_AMPLITUDE * Math.sin(s * frequency - now * WAVE_SPEED + phaseOffset);
+      points.push({
+        x: originX + dirX * s + perpX * wave,
+        y: originY + dirY * s + perpY * wave
+      });
+    }
+    return points;
+  }
+  function strokePolyline(ctx, points) {
+    if (points.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.stroke();
+  }
+  function drawPullIndicator() {
+    const player = state.player;
+    if (!player || !player.pullTarget || player.mode !== "space") return;
+    const target = player.pullTarget;
+    const ctx = state.ctx;
+    const pulse = (Math.sin(Date.now() * 6e-3) + 1) / 2;
+    const now = Date.now();
+    ctx.save();
+    const originX = player.aimShoulderPos ? player.aimShoulderPos.x : player.pos.x;
+    const originY = player.aimShoulderPos ? player.aimShoulderPos.y : player.pos.y;
+    const dx = target.pos.x - originX;
+    const dy = target.pos.y - originY;
+    const beamLength = Math.sqrt(dx * dx + dy * dy);
+    ctx.beginPath();
+    ctx.moveTo(originX, originY);
+    ctx.lineTo(target.pos.x, target.pos.y);
+    ctx.globalAlpha = 0.4 + pulse * 0.3;
+    ctx.strokeStyle = BEAM_GLOW_COLOR;
+    ctx.lineWidth = BEAM_GLOW_WIDTH;
+    ctx.stroke();
+    ctx.globalAlpha = 0.7 + pulse * 0.3;
+    ctx.strokeStyle = BEAM_COLOR;
+    ctx.lineWidth = BEAM_CORE_WIDTH;
+    ctx.stroke();
+    if (beamLength > 1e-3) {
+      const dirX = dx / beamLength, dirY = dy / beamLength;
+      const perpX = -dirY, perpY = dirX;
+      const strand1 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY, 0, now);
+      const strand2 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY_2, Math.PI, now);
+      ctx.globalAlpha = 0.3 + pulse * 0.25;
+      ctx.strokeStyle = WAVE_GLOW_COLOR;
+      ctx.lineWidth = WAVE_GLOW_WIDTH;
+      strokePolyline(ctx, strand1);
+      strokePolyline(ctx, strand2);
+      ctx.globalAlpha = 0.6 + pulse * 0.3;
+      ctx.strokeStyle = WAVE_COLOR;
+      ctx.lineWidth = WAVE_CORE_WIDTH;
+      strokePolyline(ctx, strand1);
+      strokePolyline(ctx, strand2);
+    }
+    if (target.isRoundedRect) {
+      ctx.save();
+      ctx.translate(target.pos.x, target.pos.y);
+      ctx.rotate(target.rotationAngle);
+      const w = target.halfWidth + OUTLINE_PADDING;
+      const h = target.halfHeight + OUTLINE_PADDING;
+      ctx.beginPath();
+      ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + OUTLINE_PADDING);
+      ctx.globalAlpha = 0.4 + pulse * 0.4;
+      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
+      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.strokeStyle = OUTLINE_COLOR;
+      ctx.lineWidth = OUTLINE_CORE_WIDTH;
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(target.pos.x, target.pos.y, target.radius + OUTLINE_PADDING, 0, Math.PI * 2);
+      ctx.globalAlpha = 0.4 + pulse * 0.4;
+      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
+      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
+      ctx.stroke();
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.strokeStyle = OUTLINE_COLOR;
+      ctx.lineWidth = OUTLINE_CORE_WIDTH;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // js/world/SpikeyPlanetoid.js
+  var SpikeyPlanetoid = class extends Planetoid {
+    constructor(x, y, radius) {
+      super(x, y, radius, "gray");
+      this.isSpikey = true;
+      this.spikeHeight = 8;
+      this.spikeSpacing = 6;
+      this.padding = this.spikeHeight;
+      this.spikeRotation = 0;
+      this.spikeRotationSpeed = 0.02;
+    }
+    createOffscreen() {
+      const padding = this.padding;
+      this.offscreen = document.createElement("canvas");
+      this.offscreen.width = 2 * (this.radius + padding);
+      this.offscreen.height = 2 * (this.radius + padding);
+      const offCtx = this.offscreen.getContext("2d");
+      const cx = this.radius + padding;
+      const cy = this.radius + padding;
+      offCtx.beginPath();
+      offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
+      offCtx.fillStyle = this.color;
+      offCtx.fill();
+      offCtx.save();
+      offCtx.globalCompositeOperation = "multiply";
+      const offsetX = -this.radius * 0.5;
+      const offsetY = -this.radius * 0.5;
+      const lightGradient = offCtx.createRadialGradient(
+        cx + offsetX,
+        cy + offsetY,
+        0,
+        cx + offsetX,
+        cy + offsetY,
+        this.radius * 1.5
+      );
+      lightGradient.addColorStop(0, "white");
+      lightGradient.addColorStop(1, "black");
+      offCtx.beginPath();
+      offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
+      offCtx.fillStyle = lightGradient;
+      offCtx.fill();
+      offCtx.globalCompositeOperation = "source-over";
+      offCtx.restore();
+    }
+    drawSpikes(ctx) {
+      const numSpikes = Math.floor(2 * Math.PI * this.radius / this.spikeSpacing);
+      const angleStep = 2 * Math.PI / numSpikes;
+      const halfBaseAngle = angleStep / 2;
+      for (let i = 0; i < numSpikes; i++) {
+        const angle = i * angleStep;
+        const leftAngle = angle - halfBaseAngle;
+        const rightAngle = angle + halfBaseAngle;
+        const baseLeftX = Math.cos(leftAngle) * this.radius;
+        const baseLeftY = Math.sin(leftAngle) * this.radius;
+        const baseRightX = Math.cos(rightAngle) * this.radius;
+        const baseRightY = Math.sin(rightAngle) * this.radius;
+        const tipX = Math.cos(angle) * (this.radius + this.spikeHeight);
+        const tipY = Math.sin(angle) * (this.radius + this.spikeHeight);
+        ctx.beginPath();
+        ctx.moveTo(baseLeftX, baseLeftY);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(baseRightX, baseRightY);
+        ctx.closePath();
+        ctx.fillStyle = "darkgray";
+        ctx.fill();
+      }
+    }
+    draw() {
+      const ctx = state.ctx;
+      const now = Date.now();
+      if (now - this.lastAlphaUpdate > 500) {
+        const dist = this.pos.subtract(state.player.pos).length();
+        this.cachedAlpha = Math.max(0.01, 0.3 - dist / 1e3 * 0.65);
+        this.lastAlphaUpdate = now;
+      }
+      ctx.save();
+      ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 5]);
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      ctx.save();
+      ctx.shadowColor = "rgba(173,216,230,0.3)";
+      ctx.shadowBlur = 25;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      if (this.offscreen) {
+        ctx.drawImage(
+          this.offscreen,
+          this.pos.x - (this.radius + this.padding),
+          this.pos.y - (this.radius + this.padding)
+        );
+      } else {
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+      }
+      ctx.restore();
+      this.spikeRotation += this.spikeRotationSpeed;
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(this.spikeRotation);
+      this.drawSpikes(ctx);
+      ctx.restore();
+    }
+  };
+
+  // js/entities/world/Coin.js
+  var Coin = class extends Entity {
+    constructor(planet) {
+      super();
+      this.planet = planet;
+      this.angularSpeed = (Math.random() - 0.5) * 0.04;
+      this.angle = 0;
+      this.radius = COIN_RADIUS;
+      this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
+      this.orbitOffset = COIN_ORBIT_OFFSET;
+      this.arcPos = planet.isRoundedRect ? Math.random() * planet.getPerimeter() : 0;
+      this.arcSpeed = (Math.random() - 0.5) * 2;
+      this.updatePosition();
+    }
+    updatePosition() {
+      if (this.planet.isRoundedRect) {
+        const world = this.planet.worldPointAtArcPosition(this.arcPos, this.orbitOffset);
+        this.pos.x = world.point.x;
+        this.pos.y = world.point.y;
+      } else {
+        this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
+        this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
+      }
+    }
+    update() {
+      if (this.planet.isRoundedRect) {
+        this.arcPos += this.arcSpeed;
+      } else {
+        this.angle += this.angularSpeed;
+      }
+      this.updatePosition();
+    }
+    draw() {
+      const ctx = state.ctx;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+      ctx.fillStyle = "gold";
+      ctx.fill();
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(Date.now() * 0.01);
+      ctx.beginPath();
+      ctx.arc(-this.radius * 0.4, -this.radius * 0.4, this.radius * 0.4, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.fill();
+      ctx.restore();
+    }
+  };
+
+  // js/entities/world/SpaceGhost.js
+  var SpaceGhost = class extends Entity {
+    constructor(planet, color) {
+      super();
+      this.planet = planet;
+      this.angularSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.02;
+      this.angle = Math.random() * Math.PI * 2;
+      this.radius = ENEMY_RADIUS;
+      this.onSurface = true;
+      this.color = color;
+      this.lastInfluencePlanet = planet;
+      this.wavePhase = Math.random() * Math.PI * 2;
+      this.updatePosition();
+    }
+    updatePosition() {
+      const surfaceDist = this.planet.radius + this.radius;
+      this.pos.x = this.planet.pos.x + Math.cos(this.angle) * surfaceDist;
+      this.pos.y = this.planet.pos.y + Math.sin(this.angle) * surfaceDist;
+    }
+    update() {
+      this.wavePhase += 0.15;
+      if (this.onSurface) {
+        this.angle += this.angularSpeed;
+        this.updatePosition();
+        if (Math.random() < ENEMY_JUMP_PROB) {
+          for (const p of state.planetoids) {
+            if (p !== this.planet && !p.isSpikey) {
+              const dist = this.pos.subtract(p.pos).length();
+              if (dist < p.influenceRadius) {
+                const direction = this.pos.subtract(this.planet.pos).normalize();
+                this.vel = direction.multiply(JUMP_STRENGTH);
+                this.onSurface = false;
+                this.planet = p;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!this.onSurface) {
+        if (!this.vel) this.vel = new Vector2();
+        let dominant = this.findDominantPlanet();
+        if (dominant) {
+          this.lastInfluencePlanet = dominant;
+          const dir = dominant.pos.subtract(this.pos).normalize();
+          this.vel.add(dir.multiply(GRAVITY_STRENGTH));
+        }
+        this.vel = this.vel.multiply(DRAG);
+        this.pos.add(this.vel);
+        if (this.pos.x - this.radius < 0) {
+          this.pos.x = this.radius;
+          this.vel.x = -this.vel.x;
+        }
+        if (this.pos.x + this.radius > state.sceneWidth) {
+          this.pos.x = state.sceneWidth - this.radius;
+          this.vel.x = -this.vel.x;
+        }
+        if (this.pos.y - this.radius < 0) {
+          this.pos.y = this.radius;
+          this.vel.y = -this.vel.y;
+        }
+        if (this.pos.y + this.radius > state.sceneHeight) {
+          this.pos.y = state.sceneHeight - this.radius;
+          this.vel.y = -this.vel.y;
+        }
+        if (dominant) {
+          const offset = this.pos.subtract(dominant.pos);
+          const dist = offset.length();
+          if (dist <= dominant.radius + this.radius + SURFACE_TOLERANCE) {
+            if (!dominant.isSpikey) {
+              const normal = offset.normalize();
+              this.pos = dominant.pos.clone().add(
+                normal.multiply(dominant.radius + this.radius)
+              );
+              this.onSurface = true;
+              this.angle = Math.atan2(
+                this.pos.y - dominant.pos.y,
+                this.pos.x - dominant.pos.x
+              );
+              this.planet = dominant;
+              this.vel = new Vector2();
+            } else {
+              const normal = offset.normalize();
+              const dot = this.vel.dot(normal);
+              this.vel.subtract(normal.multiply(2 * dot));
+              this.pos.add(
+                normal.multiply(
+                  dominant.radius + this.radius + SURFACE_TOLERANCE - dist
+                )
+              );
+            }
+          }
+        }
+      }
+    }
+    findDominantPlanet() {
+      let closest = null;
+      let minDist = Infinity;
+      for (const planet of state.planetoids) {
+        const dist = this.pos.subtract(planet.pos).length();
+        if (dist < planet.influenceRadius && dist < minDist) {
+          minDist = dist;
+          closest = planet;
+        }
+      }
+      return closest;
+    }
+    draw() {
+      const ctx = state.ctx;
+      let planet = this.onSurface ? this.planet : this.lastInfluencePlanet;
+      let downDir = new Vector2(0, 1);
+      if (planet) {
+        downDir = planet.pos.subtract(this.pos).normalize();
+      }
+      const downAngle = Math.atan2(downDir.y, downDir.x);
+      const rotation = downAngle - Math.PI / 2;
+      ctx.save();
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.rotate(rotation);
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, Math.PI, 0, false);
+      const spikeCount = 4;
+      const width = this.radius * 2.1;
+      const step = width / spikeCount;
+      for (let i = 0; i < spikeCount; i++) {
+        const left = this.radius - i * step;
+        const right = this.radius - (i + 1) * step;
+        const mid = (left + right) / 2;
+        const wave = Math.sin(this.wavePhase + i) * (this.radius * 0.2);
+        ctx.lineTo(left, this.radius);
+        ctx.lineTo(mid, this.radius + this.radius * 0.25 + wave);
+        ctx.lineTo(right, this.radius);
+      }
+      ctx.closePath();
+      ctx.fill();
+      let pupilOffsetX = 0;
+      let pupilOffsetY = 0;
+      const pupilMove = this.radius * 0.12;
+      if (this.onSurface) {
+        if (this.angularSpeed > 0) {
+          pupilOffsetX = pupilMove;
+        } else {
+          pupilOffsetX = -pupilMove;
+        }
+      } else if (this.vel) {
+        if (Math.abs(this.vel.x) > Math.abs(this.vel.y)) {
+          pupilOffsetX = this.vel.x > 0 ? pupilMove : -pupilMove;
+        } else {
+          pupilOffsetY = this.vel.y > 0 ? pupilMove : -pupilMove;
+        }
+      }
+      ctx.fillStyle = "white";
+      const leftEyeX = -this.radius / 3;
+      const rightEyeX = this.radius / 3;
+      const eyeY = -this.radius / 3;
+      const eyeRadius = this.radius / 4;
+      ctx.beginPath();
+      ctx.arc(leftEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(rightEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "black";
+      const pupilRadius = this.radius / 8;
+      ctx.beginPath();
+      ctx.arc(leftEyeX + pupilOffsetX, eyeY + pupilOffsetY, pupilRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(rightEyeX + pupilOffsetX, eyeY + pupilOffsetY, pupilRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  };
+
+  // js/setup/worldGen.js
+  var CELL_SIZE = 3e3;
+  var GRID_SIZE = 20;
+  var CENTER_CELL = { col: 10, row: 10 };
+  var CELL_CHECK_INTERVAL = 15;
+  state.sceneWidth = CELL_SIZE * GRID_SIZE;
+  state.sceneHeight = CELL_SIZE * GRID_SIZE;
+  state.gridSize = GRID_SIZE;
+  initCellManifest(CELL_SIZE);
+  var PLANETOIDS_PER_CELL = 10;
+  var SPIKEY_PER_CELL = 10;
+  var ASTEROIDS_PER_CELL = 20;
+  var MAX_ENEMIES_PER_CELL = 5;
+  function cellCoordFor(worldX, worldY) {
+    return {
+      col: Math.floor(worldX / CELL_SIZE),
+      row: Math.floor(worldY / CELL_SIZE)
+    };
+  }
+  function cellKey(col, row) {
+    return `${col},${row}`;
+  }
+  function generateRegularPlanetoidsInCell(col, row) {
+    const originX = col * CELL_SIZE;
+    const originY = row * CELL_SIZE;
+    const regularPlanetoids = [];
+    for (let i = 0; i < PLANETOIDS_PER_CELL; i++) {
+      const radius = 30 + Math.random() * 40;
+      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+      const color = planetColors[Math.floor(Math.random() * planetColors.length)];
+      const p = new Planetoid(x, y, radius, color);
+      p.createOffscreen();
+      state.planetoids.push(p);
+      regularPlanetoids.push(p);
+    }
+    return regularPlanetoids;
+  }
+  function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoidPos = null, avoidRadius = 0) {
+    const originX = col * CELL_SIZE;
+    const originY = row * CELL_SIZE;
+    const MAX_REROLLS = 20;
+    const avoidRadiusSq = avoidRadius * avoidRadius;
+    const isSafe = (x, y) => !avoidPos || (x - avoidPos.x) ** 2 + (y - avoidPos.y) ** 2 >= avoidRadiusSq;
+    for (let i = 0; i < SPIKEY_PER_CELL; i++) {
+      const radius = 25 + Math.random() * 15;
+      let x, y, attempts = 0;
+      do {
+        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        attempts++;
+      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
+      const p = new SpikeyPlanetoid(x, y, radius);
+      p.createOffscreen();
+      state.planetoids.push(p);
+    }
+    for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
+      const radius = 20 + Math.random() * 25;
+      let x, y, attempts = 0;
+      do {
+        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
+        attempts++;
+      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
+      state.asteroids.push(new Asteroid(x, y, radius));
+    }
+    regularPlanetoids.forEach((planet) => {
+      const numCoins = 4 + Math.floor(planet.radius / 10);
+      for (let i = 0; i < numCoins; i++) {
+        const coin = new Coin(planet);
+        coin.angle = i / numCoins * Math.PI * 2 + Math.random() * 0.2;
+        state.coins.push(coin);
+      }
+    });
+    const safePlanetsForEnemies = avoidPos ? regularPlanetoids.filter((p) => isSafe(p.pos.x, p.pos.y)) : regularPlanetoids;
+    const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, safePlanetsForEnemies.length);
+    for (let i = 0; i < numEnemies; i++) {
+      const planet = safePlanetsForEnemies[Math.floor(Math.random() * safePlanetsForEnemies.length)];
+      const color = enemyColors[i % enemyColors.length];
+      state.enemies.push(new SpaceGhost(planet, color));
+    }
+  }
+  function generateCell(col, row) {
+    const key = cellKey(col, row);
+    if (state.activeCells.has(key)) return [];
+    state.activeCells.add(key);
+    const manifest = getCellManifest(col, row);
+    if (manifest) {
+      generateSpecialCell(col, row, manifest);
+      return [];
+    }
+    const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
+    generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
+    return regularPlanetoids;
+  }
+  function isInsideSkyDome(worldX, worldY) {
+    if (!state.skyDomePlanet) return false;
+    const dome = state.skyDomePlanet;
+    const topY = dome.pos.y - dome.halfHeight;
+    if (worldY > topY) return false;
+    const insetFactor = 0.9;
+    const nx = (worldX - dome.pos.x) / (dome.domeRadiusX * insetFactor);
+    const ny = (worldY - topY) / (dome.domeRadiusY * insetFactor);
+    return nx * nx + ny * ny < 1;
+  }
+  function cullDistantObjects(activeCellKeys) {
+    for (let i = state.planetoids.length - 1; i >= 0; i--) {
+      const p = state.planetoids[i];
+      if (p.isPermanent) continue;
+      if (p.isBeltPlanetoid) {
+        if (!shouldKeepBeltPlanetoid(p, state.player.pos.x, state.player.pos.y)) {
+          state.planetoids.splice(i, 1);
+        }
+        continue;
+      }
+      if (isInsideSkyDome(p.pos.x, p.pos.y)) {
+        state.planetoids.splice(i, 1);
+        continue;
+      }
+      const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
+      if (!activeCellKeys.has(cellKey(col, row))) {
+        state.planetoids.splice(i, 1);
+      }
+    }
+    const survivingPlanetoids = new Set(state.planetoids);
+    state.asteroids = state.asteroids.filter((a) => {
+      if (isInsideSkyDome(a.pos.x, a.pos.y)) return false;
+      const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+    state.coins = state.coins.filter((c) => {
+      if (!c.planet || !survivingPlanetoids.has(c.planet)) return false;
+      const { col, row } = cellCoordFor(c.planet.pos.x, c.planet.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+    state.enemies = state.enemies.filter((e) => {
+      if (e.onSurface && e.planet) {
+        if (!survivingPlanetoids.has(e.planet)) return false;
+        if (isInsideSkyDome(e.planet.pos.x, e.planet.pos.y)) return false;
+        const { col: col2, row: row2 } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
+        return activeCellKeys.has(cellKey(col2, row2));
+      }
+      if (isInsideSkyDome(e.pos.x, e.pos.y)) return false;
+      const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
+      return activeCellKeys.has(cellKey(col, row));
+    });
+  }
+  function updateActiveCells() {
+    const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
+    const activeCellKeys = /* @__PURE__ */ new Set();
+    for (let dRow = -1; dRow <= 1; dRow++) {
+      for (let dCol = -1; dCol <= 1; dCol++) {
+        const col = playerCell.col + dCol;
+        const row = playerCell.row + dRow;
+        if (col < 0 || col >= GRID_SIZE || row < 0 || row >= GRID_SIZE) continue;
+        const key = cellKey(col, row);
+        activeCellKeys.add(key);
+        generateCell(col, row);
+      }
+    }
+    for (const key of Array.from(state.activeCells)) {
+      if (!activeCellKeys.has(key)) {
+        state.activeCells.delete(key);
+      }
+    }
+    cullDistantObjects(activeCellKeys);
+    updateBeltSpawning(state.player.pos.x, state.player.pos.y);
+  }
+
+  // js/world/BeamPlanetoid.js
+  var BeamPlanetoid = class extends Planetoid {
+    constructor(x, y, radius, color, beamColor) {
+      super(x, y, radius, color);
+      this.beamColor = beamColor;
+      this.beamAngle = -Math.PI / 2;
+      this.beamLength = 140;
+      this.beamWidth = 14;
+      this.beamParticles = [];
+      this.portalParticles = [];
+      this.interior = null;
+    }
+    getBeamStart() {
+      return new Vector2(
+        this.pos.x + Math.cos(this.beamAngle) * this.radius,
+        this.pos.y + Math.sin(this.beamAngle) * this.radius
+      );
+    }
+    getBeamEnd(start) {
+      return new Vector2(
+        start.x + Math.cos(this.beamAngle) * this.beamLength,
+        start.y + Math.sin(this.beamAngle) * this.beamLength
+      );
+    }
+    getPortalPosition() {
+      if (this.interior) {
+        return this.interior.getPortalPosition();
+      }
+      throw new Error("No interior set for BeamPlanetoid");
+    }
+    spawnPortalParticles(pos) {
+      if (Math.random() < 0.5) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1 + Math.random() * 2;
+        const vel = new Vector2(
+          Math.cos(angle) * speed,
+          Math.sin(angle) * speed
+        );
+        this.portalParticles.push(
+          new PortalParticle(pos, vel, 40, this.beamColor)
+        );
+      }
+    }
+    spawnBeamParticles(start) {
+      if (Math.random() < 0.6) {
+        const beamDir = new Vector2(
+          Math.cos(this.beamAngle),
+          Math.sin(this.beamAngle)
+        );
+        const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
+        const speed = 2 + Math.random() * 2;
+        const vel = beamDir.multiply(speed).add(side);
+        this.beamParticles.push(
+          new BeamParticle(start, vel, 50, this.beamColor)
+        );
+      }
+    }
+    drawBeam(start, end) {
+      const ctx = state.ctx;
+      const gradient = ctx.createLinearGradient(
+        start.x,
+        start.y,
+        end.x,
+        end.y
+      );
+      gradient.addColorStop(0, this.beamColor);
+      gradient.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.save();
+      ctx.shadowColor = this.beamColor;
+      ctx.shadowBlur = 60;
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = this.beamWidth;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.shadowBlur = 20;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(start.x - 8, start.y);
+      ctx.lineTo(end.x - 8, end.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(start.x + 8, start.y);
+      ctx.lineTo(end.x + 8, end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    updateParticles() {
+      for (let i = this.beamParticles.length - 1; i >= 0; i--) {
+        const p = this.beamParticles[i];
+        p.update();
+        p.draw();
+        if (p.life <= 0) {
+          this.beamParticles.splice(i, 1);
+        }
+      }
+      for (let i = this.portalParticles.length - 1; i >= 0; i--) {
+        const p = this.portalParticles[i];
+        p.update();
+        p.draw();
+        if (p.life <= 0) {
+          this.portalParticles.splice(i, 1);
+        }
+      }
+    }
+    drawInterior() {
+      if (this.interior) {
+        this.interior.draw();
+      }
+    }
+    draw() {
+      super.draw();
+      this.drawInterior();
+      const start = this.getBeamStart();
+      const end = this.getBeamEnd(start);
+      const portal = this.getPortalPosition();
+      this.spawnBeamParticles(start);
+      this.spawnPortalParticles(portal);
+      this.drawBeam(start, end);
+      this.updateParticles();
+    }
+  };
+  var BeamParticle = class {
+    constructor(pos, vel, life = 40, color = "rgba(255,0,255,1)") {
+      this.pos = pos.clone();
+      this.vel = vel;
+      this.life = life;
+      this.maxLife = life;
+      this.color = color;
+    }
+    update() {
+      this.pos.add(this.vel);
+      this.life--;
+    }
+    draw() {
+      const ctx = state.ctx;
+      if (this.life <= 0) return;
+      const alpha = this.life / this.maxLife;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = this.color.replace("1)", `${alpha})`);
+      ctx.fill();
+    }
+  };
+  var PortalParticle = class {
+    constructor(pos, vel, life = 35, color = "rgba(255,0,255,1)") {
+      this.pos = pos.clone();
+      this.vel = vel;
+      this.life = life;
+      this.maxLife = life;
+      this.color = color;
+    }
+    update() {
+      this.pos.add(this.vel);
+      this.life--;
+    }
+    draw() {
+      const ctx = state.ctx;
+      if (this.life <= 0) return;
+      const alpha = this.life / this.maxLife;
+      const size = 3 * alpha;
+      ctx.beginPath();
+      ctx.arc(this.pos.x, this.pos.y, size, 0, Math.PI * 2);
+      ctx.fillStyle = this.color.replace("1)", `${alpha})`);
+      ctx.fill();
     }
   };
 
@@ -1389,285 +3134,6 @@
     }
   };
 
-  // js/world/SpikeyPlanetoid.js
-  var SpikeyPlanetoid = class extends Planetoid {
-    constructor(x, y, radius) {
-      super(x, y, radius, "gray");
-      this.isSpikey = true;
-      this.spikeHeight = 8;
-      this.spikeSpacing = 6;
-      this.padding = this.spikeHeight;
-      this.spikeRotation = 0;
-      this.spikeRotationSpeed = 0.02;
-    }
-    createOffscreen() {
-      const padding = this.padding;
-      this.offscreen = document.createElement("canvas");
-      this.offscreen.width = 2 * (this.radius + padding);
-      this.offscreen.height = 2 * (this.radius + padding);
-      const offCtx = this.offscreen.getContext("2d");
-      const cx = this.radius + padding;
-      const cy = this.radius + padding;
-      offCtx.beginPath();
-      offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
-      offCtx.fillStyle = this.color;
-      offCtx.fill();
-      offCtx.save();
-      offCtx.globalCompositeOperation = "multiply";
-      const offsetX = -this.radius * 0.5;
-      const offsetY = -this.radius * 0.5;
-      const lightGradient = offCtx.createRadialGradient(
-        cx + offsetX,
-        cy + offsetY,
-        0,
-        cx + offsetX,
-        cy + offsetY,
-        this.radius * 1.5
-      );
-      lightGradient.addColorStop(0, "white");
-      lightGradient.addColorStop(1, "black");
-      offCtx.beginPath();
-      offCtx.arc(cx, cy, this.radius, 0, Math.PI * 2);
-      offCtx.fillStyle = lightGradient;
-      offCtx.fill();
-      offCtx.globalCompositeOperation = "source-over";
-      offCtx.restore();
-    }
-    drawSpikes(ctx) {
-      const numSpikes = Math.floor(2 * Math.PI * this.radius / this.spikeSpacing);
-      const angleStep = 2 * Math.PI / numSpikes;
-      const halfBaseAngle = angleStep / 2;
-      for (let i = 0; i < numSpikes; i++) {
-        const angle = i * angleStep;
-        const leftAngle = angle - halfBaseAngle;
-        const rightAngle = angle + halfBaseAngle;
-        const baseLeftX = Math.cos(leftAngle) * this.radius;
-        const baseLeftY = Math.sin(leftAngle) * this.radius;
-        const baseRightX = Math.cos(rightAngle) * this.radius;
-        const baseRightY = Math.sin(rightAngle) * this.radius;
-        const tipX = Math.cos(angle) * (this.radius + this.spikeHeight);
-        const tipY = Math.sin(angle) * (this.radius + this.spikeHeight);
-        ctx.beginPath();
-        ctx.moveTo(baseLeftX, baseLeftY);
-        ctx.lineTo(tipX, tipY);
-        ctx.lineTo(baseRightX, baseRightY);
-        ctx.closePath();
-        ctx.fillStyle = "darkgray";
-        ctx.fill();
-      }
-    }
-    draw() {
-      const ctx = state.ctx;
-      const now = Date.now();
-      if (now - this.lastAlphaUpdate > 500) {
-        const dist = this.pos.subtract(state.player.pos).length();
-        this.cachedAlpha = Math.max(0.01, 0.3 - dist / 1e3 * 0.65);
-        this.lastAlphaUpdate = now;
-      }
-      ctx.save();
-      ctx.strokeStyle = `rgba(173,216,230,${this.cachedAlpha})`;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 5]);
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, this.influenceRadius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-      ctx.save();
-      ctx.shadowColor = "rgba(173,216,230,0.3)";
-      ctx.shadowBlur = 25;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-      if (this.offscreen) {
-        ctx.drawImage(
-          this.offscreen,
-          this.pos.x - (this.radius + this.padding),
-          this.pos.y - (this.radius + this.padding)
-        );
-      } else {
-        ctx.beginPath();
-        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
-        ctx.fillStyle = this.color;
-        ctx.fill();
-      }
-      ctx.restore();
-      this.spikeRotation += this.spikeRotationSpeed;
-      ctx.save();
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(this.spikeRotation);
-      this.drawSpikes(ctx);
-      ctx.restore();
-    }
-  };
-
-  // js/world/BeamPlanetoid.js
-  var BeamPlanetoid = class extends Planetoid {
-    constructor(x, y, radius, color, beamColor) {
-      super(x, y, radius, color);
-      this.beamColor = beamColor;
-      this.beamAngle = -Math.PI / 2;
-      this.beamLength = 140;
-      this.beamWidth = 14;
-      this.beamParticles = [];
-      this.portalParticles = [];
-      this.interior = null;
-    }
-    getBeamStart() {
-      return new Vector2(
-        this.pos.x + Math.cos(this.beamAngle) * this.radius,
-        this.pos.y + Math.sin(this.beamAngle) * this.radius
-      );
-    }
-    getBeamEnd(start) {
-      return new Vector2(
-        start.x + Math.cos(this.beamAngle) * this.beamLength,
-        start.y + Math.sin(this.beamAngle) * this.beamLength
-      );
-    }
-    getPortalPosition() {
-      if (this.interior) {
-        return this.interior.getPortalPosition();
-      }
-      throw new Error("No interior set for BeamPlanetoid");
-    }
-    spawnPortalParticles(pos) {
-      if (Math.random() < 0.5) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 1 + Math.random() * 2;
-        const vel = new Vector2(
-          Math.cos(angle) * speed,
-          Math.sin(angle) * speed
-        );
-        this.portalParticles.push(
-          new PortalParticle(pos, vel, 40, this.beamColor)
-        );
-      }
-    }
-    spawnBeamParticles(start) {
-      if (Math.random() < 0.6) {
-        const beamDir = new Vector2(
-          Math.cos(this.beamAngle),
-          Math.sin(this.beamAngle)
-        );
-        const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random() - 0.5) * 1.5);
-        const speed = 2 + Math.random() * 2;
-        const vel = beamDir.multiply(speed).add(side);
-        this.beamParticles.push(
-          new BeamParticle(start, vel, 50, this.beamColor)
-        );
-      }
-    }
-    drawBeam(start, end) {
-      const ctx = state.ctx;
-      const gradient = ctx.createLinearGradient(
-        start.x,
-        start.y,
-        end.x,
-        end.y
-      );
-      gradient.addColorStop(0, this.beamColor);
-      gradient.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.save();
-      ctx.shadowColor = this.beamColor;
-      ctx.shadowBlur = 60;
-      ctx.strokeStyle = gradient;
-      ctx.lineWidth = this.beamWidth;
-      ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-      ctx.shadowBlur = 20;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(start.x - 8, start.y);
-      ctx.lineTo(end.x - 8, end.y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(start.x + 8, start.y);
-      ctx.lineTo(end.x + 8, end.y);
-      ctx.stroke();
-      ctx.restore();
-    }
-    updateParticles() {
-      for (let i = this.beamParticles.length - 1; i >= 0; i--) {
-        const p = this.beamParticles[i];
-        p.update();
-        p.draw();
-        if (p.life <= 0) {
-          this.beamParticles.splice(i, 1);
-        }
-      }
-      for (let i = this.portalParticles.length - 1; i >= 0; i--) {
-        const p = this.portalParticles[i];
-        p.update();
-        p.draw();
-        if (p.life <= 0) {
-          this.portalParticles.splice(i, 1);
-        }
-      }
-    }
-    drawInterior() {
-      if (this.interior) {
-        this.interior.draw();
-      }
-    }
-    draw() {
-      super.draw();
-      this.drawInterior();
-      const start = this.getBeamStart();
-      const end = this.getBeamEnd(start);
-      const portal = this.getPortalPosition();
-      this.spawnBeamParticles(start);
-      this.spawnPortalParticles(portal);
-      this.drawBeam(start, end);
-      this.updateParticles();
-    }
-  };
-  var BeamParticle = class {
-    constructor(pos, vel, life = 40, color = "rgba(255,0,255,1)") {
-      this.pos = pos.clone();
-      this.vel = vel;
-      this.life = life;
-      this.maxLife = life;
-      this.color = color;
-    }
-    update() {
-      this.pos.add(this.vel);
-      this.life--;
-    }
-    draw() {
-      const ctx = state.ctx;
-      if (this.life <= 0) return;
-      const alpha = this.life / this.maxLife;
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = this.color.replace("1)", `${alpha})`);
-      ctx.fill();
-    }
-  };
-  var PortalParticle = class {
-    constructor(pos, vel, life = 35, color = "rgba(255,0,255,1)") {
-      this.pos = pos.clone();
-      this.vel = vel;
-      this.life = life;
-      this.maxLife = life;
-      this.color = color;
-    }
-    update() {
-      this.pos.add(this.vel);
-      this.life--;
-    }
-    draw() {
-      const ctx = state.ctx;
-      if (this.life <= 0) return;
-      const alpha = this.life / this.maxLife;
-      const size = 3 * alpha;
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, size, 0, Math.PI * 2);
-      ctx.fillStyle = this.color.replace("1)", `${alpha})`);
-      ctx.fill();
-    }
-  };
-
   // js/interiors/Interior.js
   var Interior = class {
     constructor(planetoid) {
@@ -1975,199 +3441,6 @@
       return new Vector2(portalX, portalY);
     }
   };
-
-  // js/entities/Entity.js
-  var Entity = class {
-    constructor() {
-      this.pos = new Vector2(0, 0);
-      this.vel = new Vector2(0, 0);
-      this.radius = 0;
-      this.mass = 0;
-    }
-    update() {
-    }
-    draw() {
-    }
-  };
-
-  // js/entities/world/Asteroid.js
-  var Asteroid = class extends Entity {
-    constructor(x, y, radius) {
-      super();
-      this.pos = new Vector2(x, y);
-      this.radius = radius;
-      this.mass = radius * radius;
-      let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
-      this.vel = direction.multiply(PLANET_SPEED);
-      this.angularSpeed = (Math.random() * 2 - 1) * 0.05;
-      this.angle = Math.random() * Math.PI * 2;
-      this.color = "#A85417";
-      this.points = this.generatePoints();
-      this.interiorPoints = [];
-      const numInterior = 2 + Math.floor(Math.random() * 2);
-      for (let i = 0; i < numInterior; i++) {
-        this.interiorPoints.push(new Vector2(
-          (Math.random() - 0.5) * this.radius * 1.2,
-          (Math.random() - 0.5) * this.radius * 1.2
-        ));
-      }
-    }
-    generatePoints() {
-      const numSides = 6 + Math.floor(Math.random() * 6);
-      const points = [];
-      const angleStep = 2 * Math.PI / numSides;
-      for (let i = 0; i < numSides; i++) {
-        const a = i * angleStep + (Math.random() - 0.5) * angleStep * 0.5;
-        const r = this.radius * (0.7 + Math.random() * 0.6);
-        points.push(new Vector2(Math.cos(a) * r, Math.sin(a) * r));
-      }
-      return points;
-    }
-    update() {
-      this.vel = this.vel.multiply(DRAG);
-      this.pos.add(this.vel);
-      this.angle += this.angularSpeed;
-      if (this.pos.x - this.radius < 0) {
-        this.pos.x = this.radius;
-        this.vel.x = -this.vel.x;
-      }
-      if (this.pos.x + this.radius > state.sceneWidth) {
-        this.pos.x = state.sceneWidth - this.radius;
-        this.vel.x = -this.vel.x;
-      }
-      if (this.pos.y - this.radius < 0) {
-        this.pos.y = this.radius;
-        this.vel.y = -this.vel.y;
-      }
-      if (this.pos.y + this.radius > state.sceneHeight) {
-        this.pos.y = state.sceneHeight - this.radius;
-        this.vel.y = -this.vel.y;
-      }
-    }
-    draw() {
-      const ctx = state.ctx;
-      ctx.save();
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(this.angle);
-      const lightDir = new Vector2(-0.7, -0.7).normalize();
-      const baseR = parseInt(this.color.substr(1, 2), 16);
-      const baseG = parseInt(this.color.substr(3, 2), 16);
-      const baseB = parseInt(this.color.substr(5, 2), 16);
-      for (let i = 0; i < this.points.length; i++) {
-        const j = (i + 1) % this.points.length;
-        const p1 = this.points[i].clone();
-        const p2 = this.points[j].clone();
-        this.interiorPoints.forEach((ip) => {
-          this.fillTriangle(ctx, p1, p2, ip, baseR, baseG, baseB, lightDir);
-        });
-        const mid = p1.clone().add(p2).multiply(0.5);
-        this.fillTriangle(ctx, p1, mid, p2, baseR, baseG, baseB, lightDir);
-      }
-      ctx.beginPath();
-      ctx.moveTo(this.points[0].x, this.points[0].y);
-      for (let i = 1; i < this.points.length; i++) {
-        ctx.lineTo(this.points[i].x, this.points[i].y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = "#3A1C08";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      const shadowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, this.radius);
-      shadowGrad.addColorStop(0, "rgba(0,0,0,0)");
-      shadowGrad.addColorStop(0.7, "rgba(0,0,0,0.15)");
-      shadowGrad.addColorStop(1, "rgba(0,0,0,0.3)");
-      ctx.fillStyle = shadowGrad;
-      ctx.beginPath();
-      ctx.moveTo(this.points[0].x, this.points[0].y);
-      for (let i = 1; i < this.points.length; i++) {
-        ctx.lineTo(this.points[i].x, this.points[i].y);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-    // --- Helper to fill a triangle with shading ---
-    fillTriangle(ctx, v0, v1, v2, baseR, baseG, baseB, lightDir) {
-      const edge = v2.subtract(v1);
-      const perp = new Vector2(edge.y, -edge.x);
-      const normal = perp.lengthSq() > 0 ? perp.normalize() : new Vector2(0, 1);
-      const dot = lightDir.dot(normal);
-      const edgeDistance = (v1.length() + v2.length()) / (2 * this.radius);
-      let brightness = 0.3 + Math.max(0, dot) * 0.7;
-      brightness = brightness * (1 - 0.4 * edgeDistance) + 0.2;
-      const cr = Math.min(255, Math.max(0, Math.floor(baseR * brightness)));
-      const cg = Math.min(255, Math.max(0, Math.floor(baseG * brightness)));
-      const cb = Math.min(255, Math.max(0, Math.floor(baseB * brightness)));
-      ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      ctx.fill();
-    }
-  };
-
-  // js/entities/Particle.js
-  var Particle = class {
-    constructor(pos, vel, life = 40) {
-      this.pos = pos.clone();
-      this.vel = vel;
-      this.life = life;
-      this.maxLife = life;
-      this.color = "rgb(255, 255, 0)";
-      this.radius = 2;
-      this.drag = 1;
-      this.growRate = 0;
-    }
-    update() {
-      this.pos.add(this.vel);
-      this.vel = this.vel.multiply(this.drag);
-      this.radius += this.growRate;
-      this.life--;
-    }
-    draw() {
-      const ctx = state.ctx;
-      if (this.life <= 0) return;
-      ctx.globalAlpha = this.life / this.maxLife;
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
-      ctx.fillStyle = this.color;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-  };
-
-  // js/utils.js
-  function createParticles(atPos, count) {
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = Math.random() * 4 + 2;
-      const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-      state.particles.push(new Particle(atPos, vel));
-    }
-  }
-  function createDeathParticles(atPos, count = 30) {
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = Math.random() * 6 + 3;
-      const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-      const particle = new Particle(atPos, vel);
-      particle.color = `hsl(${Math.random() * 60 + 20}, 100%, 50%)`;
-      state.particles.push(particle);
-    }
-  }
-  function initResizeListener() {
-    window.addEventListener("resize", () => {
-      state.canvas.width = window.innerWidth;
-      state.canvas.height = window.innerHeight;
-    });
-  }
-  function angleDiff(a, b) {
-    let diff = (a - b + Math.PI) % (2 * Math.PI);
-    if (diff < 0) diff += 2 * Math.PI;
-    return Math.abs(diff - Math.PI);
-  }
 
   // js/entities/world/Fireball.js
   var FIREBALL_SPEED = 14;
@@ -3298,181 +4571,6 @@
     }
   };
 
-  // js/entities/world/SpaceGhost.js
-  var SpaceGhost = class extends Entity {
-    constructor(planet, color) {
-      super();
-      this.planet = planet;
-      this.angularSpeed = (Math.random() > 0.5 ? 1 : -1) * 0.02;
-      this.angle = Math.random() * Math.PI * 2;
-      this.radius = ENEMY_RADIUS;
-      this.onSurface = true;
-      this.color = color;
-      this.lastInfluencePlanet = planet;
-      this.wavePhase = Math.random() * Math.PI * 2;
-      this.updatePosition();
-    }
-    updatePosition() {
-      const surfaceDist = this.planet.radius + this.radius;
-      this.pos.x = this.planet.pos.x + Math.cos(this.angle) * surfaceDist;
-      this.pos.y = this.planet.pos.y + Math.sin(this.angle) * surfaceDist;
-    }
-    update() {
-      this.wavePhase += 0.15;
-      if (this.onSurface) {
-        this.angle += this.angularSpeed;
-        this.updatePosition();
-        if (Math.random() < ENEMY_JUMP_PROB) {
-          for (const p of state.planetoids) {
-            if (p !== this.planet && !p.isSpikey) {
-              const dist = this.pos.subtract(p.pos).length();
-              if (dist < p.influenceRadius) {
-                const direction = this.pos.subtract(this.planet.pos).normalize();
-                this.vel = direction.multiply(JUMP_STRENGTH);
-                this.onSurface = false;
-                this.planet = p;
-                break;
-              }
-            }
-          }
-        }
-      }
-      if (!this.onSurface) {
-        if (!this.vel) this.vel = new Vector2();
-        let dominant = this.findDominantPlanet();
-        if (dominant) {
-          this.lastInfluencePlanet = dominant;
-          const dir = dominant.pos.subtract(this.pos).normalize();
-          this.vel.add(dir.multiply(GRAVITY_STRENGTH));
-        }
-        this.vel = this.vel.multiply(DRAG);
-        this.pos.add(this.vel);
-        if (this.pos.x - this.radius < 0) {
-          this.pos.x = this.radius;
-          this.vel.x = -this.vel.x;
-        }
-        if (this.pos.x + this.radius > state.sceneWidth) {
-          this.pos.x = state.sceneWidth - this.radius;
-          this.vel.x = -this.vel.x;
-        }
-        if (this.pos.y - this.radius < 0) {
-          this.pos.y = this.radius;
-          this.vel.y = -this.vel.y;
-        }
-        if (this.pos.y + this.radius > state.sceneHeight) {
-          this.pos.y = state.sceneHeight - this.radius;
-          this.vel.y = -this.vel.y;
-        }
-        if (dominant) {
-          const offset = this.pos.subtract(dominant.pos);
-          const dist = offset.length();
-          if (dist <= dominant.radius + this.radius + SURFACE_TOLERANCE) {
-            if (!dominant.isSpikey) {
-              const normal = offset.normalize();
-              this.pos = dominant.pos.clone().add(
-                normal.multiply(dominant.radius + this.radius)
-              );
-              this.onSurface = true;
-              this.angle = Math.atan2(
-                this.pos.y - dominant.pos.y,
-                this.pos.x - dominant.pos.x
-              );
-              this.planet = dominant;
-              this.vel = new Vector2();
-            } else {
-              const normal = offset.normalize();
-              const dot = this.vel.dot(normal);
-              this.vel.subtract(normal.multiply(2 * dot));
-              this.pos.add(
-                normal.multiply(
-                  dominant.radius + this.radius + SURFACE_TOLERANCE - dist
-                )
-              );
-            }
-          }
-        }
-      }
-    }
-    findDominantPlanet() {
-      let closest = null;
-      let minDist = Infinity;
-      for (const planet of state.planetoids) {
-        const dist = this.pos.subtract(planet.pos).length();
-        if (dist < planet.influenceRadius && dist < minDist) {
-          minDist = dist;
-          closest = planet;
-        }
-      }
-      return closest;
-    }
-    draw() {
-      const ctx = state.ctx;
-      let planet = this.onSurface ? this.planet : this.lastInfluencePlanet;
-      let downDir = new Vector2(0, 1);
-      if (planet) {
-        downDir = planet.pos.subtract(this.pos).normalize();
-      }
-      const downAngle = Math.atan2(downDir.y, downDir.x);
-      const rotation = downAngle - Math.PI / 2;
-      ctx.save();
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(rotation);
-      ctx.fillStyle = this.color;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius, Math.PI, 0, false);
-      const spikeCount = 4;
-      const width = this.radius * 2.1;
-      const step = width / spikeCount;
-      for (let i = 0; i < spikeCount; i++) {
-        const left = this.radius - i * step;
-        const right = this.radius - (i + 1) * step;
-        const mid = (left + right) / 2;
-        const wave = Math.sin(this.wavePhase + i) * (this.radius * 0.2);
-        ctx.lineTo(left, this.radius);
-        ctx.lineTo(mid, this.radius + this.radius * 0.25 + wave);
-        ctx.lineTo(right, this.radius);
-      }
-      ctx.closePath();
-      ctx.fill();
-      let pupilOffsetX = 0;
-      let pupilOffsetY = 0;
-      const pupilMove = this.radius * 0.12;
-      if (this.onSurface) {
-        if (this.angularSpeed > 0) {
-          pupilOffsetX = pupilMove;
-        } else {
-          pupilOffsetX = -pupilMove;
-        }
-      } else if (this.vel) {
-        if (Math.abs(this.vel.x) > Math.abs(this.vel.y)) {
-          pupilOffsetX = this.vel.x > 0 ? pupilMove : -pupilMove;
-        } else {
-          pupilOffsetY = this.vel.y > 0 ? pupilMove : -pupilMove;
-        }
-      }
-      ctx.fillStyle = "white";
-      const leftEyeX = -this.radius / 3;
-      const rightEyeX = this.radius / 3;
-      const eyeY = -this.radius / 3;
-      const eyeRadius = this.radius / 4;
-      ctx.beginPath();
-      ctx.arc(leftEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(rightEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "black";
-      const pupilRadius = this.radius / 8;
-      ctx.beginPath();
-      ctx.arc(leftEyeX + pupilOffsetX, eyeY + pupilOffsetY, pupilRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(rightEyeX + pupilOffsetX, eyeY + pupilOffsetY, pupilRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-  };
-
   // js/entities/world/Goomba.js
   var Goomba = class {
     constructor(homePlanet, startX, options = {}) {
@@ -3513,103 +4611,6 @@
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, srcX, 0, 32, 32, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
       ctx.restore();
-    }
-  };
-
-  // js/entities/world/Coin.js
-  var Coin = class extends Entity {
-    constructor(planet) {
-      super();
-      this.planet = planet;
-      this.angularSpeed = (Math.random() - 0.5) * 0.04;
-      this.angle = 0;
-      this.radius = COIN_RADIUS;
-      this.orbitRadius = planet.radius + COIN_ORBIT_OFFSET;
-      this.orbitOffset = COIN_ORBIT_OFFSET;
-      this.arcPos = planet.isRoundedRect ? Math.random() * planet.getPerimeter() : 0;
-      this.arcSpeed = (Math.random() - 0.5) * 2;
-      this.updatePosition();
-    }
-    updatePosition() {
-      if (this.planet.isRoundedRect) {
-        const world = this.planet.worldPointAtArcPosition(this.arcPos, this.orbitOffset);
-        this.pos.x = world.point.x;
-        this.pos.y = world.point.y;
-      } else {
-        this.pos.x = this.planet.pos.x + Math.cos(this.angle) * this.orbitRadius;
-        this.pos.y = this.planet.pos.y + Math.sin(this.angle) * this.orbitRadius;
-      }
-    }
-    update() {
-      if (this.planet.isRoundedRect) {
-        this.arcPos += this.arcSpeed;
-      } else {
-        this.angle += this.angularSpeed;
-      }
-      this.updatePosition();
-    }
-    draw() {
-      const ctx = state.ctx;
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
-      ctx.fillStyle = "gold";
-      ctx.fill();
-      ctx.save();
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(Date.now() * 0.01);
-      ctx.beginPath();
-      ctx.arc(-this.radius * 0.4, -this.radius * 0.4, this.radius * 0.4, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.8)";
-      ctx.fill();
-      ctx.restore();
-    }
-  };
-
-  // js/entities/world/Explosion.js
-  var EXPLOSION_DURATION = 400;
-  var RING_MAX_RADIUS = 70;
-  var FLASH_RADIUS = 30;
-  var FLASH_FRACTION = 0.3;
-  var PARTICLE_COUNT = 420;
-  var Explosion = class extends Entity {
-    constructor(x, y) {
-      super();
-      this.pos = new Vector2(x, y);
-      this.startTime = Date.now();
-      this.duration = EXPLOSION_DURATION;
-      createDeathParticles(this.pos.clone(), PARTICLE_COUNT);
-    }
-    get isDead() {
-      return Date.now() - this.startTime >= this.duration;
-    }
-    update() {
-    }
-    draw() {
-      const ctx = state.ctx;
-      const t = Math.min((Date.now() - this.startTime) / this.duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3);
-      ctx.save();
-      ctx.globalAlpha = 1 - t;
-      ctx.strokeStyle = "#ffcc66";
-      ctx.lineWidth = 4 * (1 - t) + 1;
-      ctx.beginPath();
-      ctx.arc(this.pos.x, this.pos.y, eased * RING_MAX_RADIUS, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-      const flashT = Math.min(t / FLASH_FRACTION, 1);
-      if (flashT < 1) {
-        ctx.save();
-        ctx.globalAlpha = 1 - flashT;
-        const grad = ctx.createRadialGradient(this.pos.x, this.pos.y, 0, this.pos.x, this.pos.y, FLASH_RADIUS);
-        grad.addColorStop(0, "rgba(255,255,220,1)");
-        grad.addColorStop(0.4, "rgba(255,180,60,0.8)");
-        grad.addColorStop(1, "rgba(255,100,20,0)");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(this.pos.x, this.pos.y, FLASH_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
     }
   };
 
@@ -3894,1219 +4895,7 @@
     }
   };
 
-  // js/systems/CollisionSystem.js
-  var CollisionSystem = class {
-    // Shared helper: distance from a circle (pos, radius) to a planet's
-    // true surface — nearestSurfacePoint for rect planets, plain
-    // center-distance-minus-radius for circular ones. Used everywhere a
-    // planet might be either shape, so each collision method doesn't need
-    // its own copy of this branch.
-    distanceToPlanetSurface(pos, planet) {
-      if (planet.isRoundedRect) {
-        return planet.distanceToSurface(pos.x, pos.y);
-      }
-      return pos.subtract(planet.pos).length() - planet.radius;
-    }
-    // General-purpose handler for ANY entity tagged isImmovable (FireBar
-    // is the first example, not the only intended one) colliding with
-    // ordinary movable entities (planetoids, asteroids, ...). This is
-    // NOT a special-cased hack — it's the direct physical limit of a
-    // normal elastic collision as one object's mass approaches infinity:
-    // solving the standard two-body elastic collision formula with
-    // m2 -> infinity reduces to "object 1 reflects off the surface
-    // normal (like bouncing off a wall), object 2 is completely
-    // unaffected." So rather than reuse handleElasticCollisions' mass-
-    // ratio math (which assumes both masses are finite and comparable),
-    // this applies that limiting case directly: a plain velocity
-    // reflection for the movable object, zero change for the immovable
-    // one, and the movable object gets pushed the FULL overlap distance
-    // out (not split between both, since only one side is actually free
-    // to move).
-    handleImmovableCollisions(immovables, movables) {
-      for (const im of immovables) {
-        for (const mv of movables) {
-          if (mv.isImmovable) continue;
-          let normal, targetPos;
-          let domeContact = null;
-          if (im.isRoundedRect) {
-            const topY = im.pos.y - im.halfHeight;
-            const usingDome = typeof im.nearestDomeSurfacePoint === "function" && mv.pos.y < topY;
-            const usingBase = !usingDome && typeof im.nearestBaseSurfacePoint === "function" && mv.pos.y > topY;
-            let surface;
-            if (usingDome) surface = im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y);
-            else if (usingBase) surface = im.nearestBaseSurfacePoint(mv.pos.x, mv.pos.y);
-            else surface = im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
-            if (surface.distance >= mv.radius) continue;
-            normal = surface.normal;
-            targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
-            if (usingDome) domeContact = surface.point;
-          } else {
-            const offset = mv.pos.subtract(im.pos);
-            const dist = offset.length();
-            const minDist = im.radius + mv.radius;
-            if (dist >= minDist || dist <= 0) continue;
-            normal = offset.normalize();
-            targetPos = im.pos.clone().add(normal.multiply(minDist));
-          }
-          mv.pos = targetPos;
-          const dot = mv.vel.dot(normal);
-          mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
-          if (domeContact && typeof im.triggerShieldImpact === "function") {
-            const intensity = Math.min(1, mv.radius / 60);
-            im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
-          }
-        }
-      }
-    }
-    // The fire bar's block and its rotating fireballs are both lethal to
-    // the player on contact — no bounce/physics interaction for the
-    // player, just instant death, same as touching a spikey planetoid.
-    handlePlayerFireBarCollisions(player, fireBars) {
-      for (const bar of fireBars) {
-        const blockDist = player.pos.subtract(bar.pos).length();
-        if (blockDist <= bar.blockRadius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
-          player.startDeath();
-          return;
-        }
-        for (const f of bar.getFireballPositions()) {
-          const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist <= f.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
-            player.startDeath();
-            return;
-          }
-        }
-      }
-    }
-    handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = "radius", radiusProp2 = "radius", massProp1 = "mass", massProp2 = "mass") {
-      for (let i = 0; i < entities1.length; i++) {
-        for (let j = entities1 === entities2 ? i + 1 : 0; j < entities2.length; j++) {
-          const p1 = entities1[i];
-          const p2 = entities2[j];
-          if (p1.isImmovable || p2.isImmovable) continue;
-          const offset = p1.pos.subtract(p2.pos);
-          const distSq = offset.lengthSq();
-          const sumR = p1[radiusProp1] + p2[radiusProp2];
-          const sumRSq = sumR * sumR;
-          if (distSq < sumRSq) {
-            const dist = Math.sqrt(distSq);
-            const overlap = sumR - dist;
-            const normal = offset.normalize();
-            const tangent = new Vector2(-normal.y, normal.x);
-            const m1 = p1[massProp1], m2 = p2[massProp2], totalMass = m1 + m2;
-            const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
-            p1.pos.add(normal.multiply(sep1));
-            p2.pos.add(normal.multiply(-sep2));
-            const v1 = p1.vel.clone(), v2 = p2.vel.clone();
-            const v1n = normal.dot(v1), v2n = normal.dot(v2);
-            const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
-            const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
-            const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
-            p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
-            p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
-          }
-        }
-      }
-    }
-    handlePlayerPlanetCollisions(player) {
-      for (const planet of state.planetoids.filter((p) => p.isSpikey)) {
-        const dist = player.pos.subtract(planet.pos).length();
-        if (dist <= planet.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
-          player.startDeath();
-          return;
-        }
-      }
-      if (player.onSurface) return;
-      if (player.pullTarget) {
-        if (!player.pullTarget.isSpikey && this.tryLandOnPlanet(player, player.pullTarget)) {
-          player.pullTarget = null;
-        }
-        return;
-      }
-      for (const planet of state.planetoids.filter((p) => !p.isSpikey)) {
-        if (this.tryLandOnPlanet(player, planet)) return;
-      }
-      player.onSurface = false;
-      player.currentPlanet = null;
-    }
-    // Attempts to land the player on a single planet (rounded-rect or
-    // circular). Returns true if landing occurred. Factored out of
-    // handlePlayerPlanetCollisions so the same logic can be applied
-    // either across the full planet list (normal flight) or to just one
-    // specific planet (the pull target, while otherwise passing through
-    // everything else — see above).
-    tryLandOnPlanet(player, planet) {
-      if (planet.isRoundedRect) {
-        if (planet.isSkyDome && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) {
-          return false;
-        }
-        if (planet.isSkyDome && player.vel.y < 0) {
-          return false;
-        }
-        const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
-        if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
-          player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
-          player.onSurface = true;
-          player.currentPlanet = planet;
-          player.lastInfluencePlanet = planet;
-          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
-          const impactVel = player.vel.clone();
-          player.vel = new Vector2(0, 0);
-          if (player.isGroundPounding) {
-            player.isGroundPounding = false;
-            const pushDir = surface.normal.clone().multiply(-1);
-            planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-            createParticles(player.pos, 20);
-          }
-          return true;
-        }
-        return false;
-      }
-      const offset = player.pos.subtract(planet.pos);
-      const dist = offset.length();
-      const surfaceDist = planet.radius + PLAYER_RADIUS;
-      if (dist <= surfaceDist + SURFACE_TOLERANCE) {
-        const normal = offset.normalize();
-        player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
-        player.onSurface = true;
-        player.currentPlanet = planet;
-        player.lastInfluencePlanet = planet;
-        const impactVel = player.vel.clone();
-        player.vel = new Vector2(0, 0);
-        player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
-        if (player.isGroundPounding) {
-          player.isGroundPounding = false;
-          const pushDir = normal.multiply(-1);
-          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-          createParticles(player.pos, 20);
-        }
-        return true;
-      }
-      return false;
-    }
-    handlePlayerAsteroidCollisions(player, asteroids) {
-      for (const a of asteroids) {
-        const dist = player.pos.subtract(a.pos).length();
-        if (dist <= PLAYER_RADIUS + a.radius) {
-          player.startDeath();
-          return;
-        }
-      }
-    }
-    handlePlayerEnemyCollisions(player, enemies) {
-      for (const e of enemies) {
-        const dist = player.pos.subtract(e.pos).length();
-        if (dist <= PLAYER_RADIUS + ENEMY_RADIUS) {
-          player.startDeath();
-          return;
-        }
-      }
-    }
-    // Distinguishes a stomp (jump on its head — kills it) from a
-    // damaging side/underneath touch (kills the player), the classic
-    // Mario-style rule: the player's center needs to be meaningfully
-    // above the goomba's own center, AND moving downward (or at least
-    // not actively still rising from a jump) — landing squarely on top,
-    // not just brushing past. Returns the list of goombas that got
-    // stomped (game.js removes them and gives the player a bounce); any
-    // non-stomp touch calls player.startDeath() directly here, same as
-    // handlePlayerEnemyCollisions above (which already safely no-ops
-    // during invincibility, so no extra guard needed here either).
-    handlePlayerGoombaCollisions(player, goombas) {
-      const stomped = [];
-      for (const g of goombas) {
-        const dist = player.pos.subtract(g.pos).length();
-        if (dist > PLAYER_RADIUS + g.radius) continue;
-        const isStomp = g.pos.y - player.pos.y > g.radius * 0.3 && player.vel.y >= 0;
-        if (isStomp) {
-          stomped.push(g);
-        } else {
-          player.startDeath();
-        }
-      }
-      return stomped;
-    }
-    // Same shape as handleFireballCollisions below, for goombas
-    // specifically — a separate method rather than folding into that
-    // one, since goombas aren't planetoids/asteroids and have their own
-    // simple circle-only collision (no surface-distance concept to
-    // reuse from distanceToPlanetSurface).
-    handleFireballGoombaCollisions(fireballs, goombas) {
-      const hitFireballs = /* @__PURE__ */ new Set();
-      const killedGoombas = /* @__PURE__ */ new Set();
-      for (const f of fireballs) {
-        for (const g of goombas) {
-          if (killedGoombas.has(g)) continue;
-          const dist = f.pos.subtract(g.pos).length();
-          if (dist < f.radius + g.radius) {
-            hitFireballs.add(f);
-            killedGoombas.add(g);
-            break;
-          }
-        }
-      }
-      return { hitFireballs, killedGoombas };
-    }
-    handleCoinCollisions(player, coins) {
-      for (let i = coins.length - 1; i >= 0; i--) {
-        const c = coins[i];
-        const dist = player.pos.subtract(c.pos).length();
-        if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
-          state.audioManager.playEatDot();
-          coins.splice(i, 1);
-          state.score++;
-        }
-      }
-    }
-    handlePlanetAsteroidCollisions(planetoids, asteroids) {
-      const toBreak = /* @__PURE__ */ new Set();
-      for (let p of planetoids) {
-        for (let a of asteroids) {
-          const dist = this.distanceToPlanetSurface(a.pos, p);
-          if (dist < a.radius) {
-            toBreak.add(a);
-            continue;
-          }
-          if (typeof p.nearestDomeSurfacePoint === "function") {
-            const topY = p.pos.y - p.halfHeight;
-            if (a.pos.y < topY) {
-              const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
-              if (domeSurface.distance < a.radius) {
-                toBreak.add(a);
-                if (typeof p.triggerShieldImpact === "function") {
-                  const intensity = Math.min(1, a.radius / 45);
-                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
-                }
-                continue;
-              }
-            }
-          }
-          if (typeof p.nearestBaseSurfacePoint === "function") {
-            const topY = p.pos.y - p.halfHeight;
-            if (a.pos.y > topY) {
-              const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
-              if (baseSurface.distance < a.radius) {
-                toBreak.add(a);
-              }
-            }
-          }
-        }
-      }
-      return toBreak;
-    }
-    // Checks every fireball against every asteroid, then every planetoid.
-    // Each fireball can only register a single hit per frame (whichever
-    // it's found to overlap first) — once it's hit something, it's spent
-    // and doesn't get checked against further targets.
-    //
-    // Returns:
-    //   hitFireballs     — Set of fireballs that hit something this frame
-    //                       (caller should remove these from state.fireballs)
-    //   toBreakAsteroids — Set of asteroids to break (pass to the
-    //                       existing breakAsteroid() in game.js, same as
-    //                       planet-asteroid collisions already do)
-    //   planetHits       — array of { fireball, planet } pairs, for the
-    //                       caller to apply a push impulse + spawn an
-    //                       explosion at each impact
-    handleFireballCollisions(fireballs, planetoids, asteroids) {
-      const hitFireballs = /* @__PURE__ */ new Set();
-      const toBreakAsteroids = /* @__PURE__ */ new Set();
-      const planetHits = [];
-      for (const f of fireballs) {
-        let hit = false;
-        for (const a of asteroids) {
-          const dist = f.pos.subtract(a.pos).length();
-          if (dist < f.radius + a.radius) {
-            hitFireballs.add(f);
-            toBreakAsteroids.add(a);
-            hit = true;
-            break;
-          }
-        }
-        if (hit) continue;
-        for (const p of planetoids) {
-          if (p.isSkyDome) {
-            const topY = p.pos.y - p.halfHeight;
-            if (f.pos.y >= topY) continue;
-            if (typeof p.nearestDomeSurfacePoint === "function") {
-              const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
-              if (domeSurface.distance < f.radius) {
-                hitFireballs.add(f);
-                planetHits.push({ fireball: f, planet: p });
-                if (typeof p.triggerShieldImpact === "function") {
-                  const intensity = Math.min(1, f.radius / 45);
-                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
-                }
-              }
-              continue;
-            }
-          }
-          const dist = this.distanceToPlanetSurface(f.pos, p);
-          if (dist < f.radius) {
-            hitFireballs.add(f);
-            planetHits.push({ fireball: f, planet: p });
-            break;
-          }
-        }
-      }
-      return { hitFireballs, toBreakAsteroids, planetHits };
-    }
-    // Maze ghosts track grid coordinates (mazeCol/mazeRow), same as the
-    // player does while in the maze — so this is a tile match, not a
-    // distance check. Any death this triggers goes through
-    // player.startDeath(), which already handles the invincibility
-    // window on its own, so no special-casing is needed here.
-    handlePlayerMazeGhostCollisions(player, ghosts) {
-      if (!ghosts) return;
-      for (const g of ghosts) {
-        if (player.mazeCol === g.mazeCol && player.mazeRow === g.mazeRow) {
-          player.startDeath();
-          return;
-        }
-      }
-    }
-  };
-
-  // js/systems/AISystem.js
-  var AISystem = class {
-    updateEnemies(enemies, planetoids) {
-      enemies.forEach((e) => e.update(planetoids));
-    }
-    updateInteriorGhosts(interior) {
-      if (interior && interior.ghosts) {
-        interior.ghosts.forEach((g) => g.update());
-      }
-    }
-  };
-
-  // js/AudioManager.js
-  var AudioManager = class {
-    constructor() {
-      this.eatDotIndex = 0;
-      this.eatDotAudio0 = new Audio("sounds/eat_dot_0.wav");
-      this.eatDotAudio1 = new Audio("sounds/eat_dot_1.wav");
-      this.deathAudio = new Audio("sounds/death_0.wav");
-      this.jumpAudio = new Audio("sounds/jump.wav");
-      this.jumpSmallAudio = new Audio("sounds/jumpsmall.wav");
-      this.bangLarge = new Audio("sounds/bangLarge.wav");
-      this.bangMedium = new Audio("sounds/bangMedium.wav");
-      this.bangSmall = new Audio("sounds/bangSmall.wav");
-      this.goombaStompAudio = new Audio("sounds/mario-goomba-stomp.mp3");
-      this.fireballAudio = new Audio("sounds/mario-fireball.mp3");
-      [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall, this.goombaStompAudio, this.fireballAudio].forEach((audio) => {
-        audio.volume = 0.5;
-        audio.preload = "auto";
-        audio.load();
-      });
-    }
-    playEatDot() {
-      const source = this.eatDotIndex === 0 ? this.eatDotAudio0 : this.eatDotAudio1;
-      this.eatDotIndex = 1 - this.eatDotIndex;
-      const audio = source.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playDeath() {
-      const audio = this.deathAudio.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playJump() {
-      const audio = this.jumpAudio.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playJumpSmall() {
-      const audio = this.jumpSmallAudio.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playGoombaStomp() {
-      const audio = this.goombaStompAudio.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playFireball() {
-      const audio = this.fireballAudio.cloneNode(true);
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    playBang(size, position) {
-      let audioSource;
-      if (size === "large") audioSource = this.bangLarge;
-      else if (size === "medium") audioSource = this.bangMedium;
-      else if (size === "small") audioSource = this.bangSmall;
-      else return;
-      const dist = state.player.pos.subtract(position).length();
-      let vol = 0.5 * Math.max(0, 1 - dist / 800);
-      if (vol <= 0) return;
-      const audio = audioSource.cloneNode(true);
-      audio.volume = vol;
-      audio.play().catch((e) => console.log("Audio play failed:", e));
-    }
-    // Optional: Reset method if needed for game restarts (e.g., call from initGame)
-    reset() {
-      this.eatDotIndex = 0;
-    }
-  };
-
-  // js/world/CellManifest.js
-  var BELT_START = { col: 0, row: 15 };
-  var BELT_END = { col: 15, row: 20 };
-  var BELT_THICKNESS_CELLS = 0.75;
-  var BELT_SPEED = 2.5;
-  var BELT_RADIUS_MIN = 30;
-  var BELT_RADIUS_MAX = 70;
-  var BELT_COLOR = "#dcc48a";
-  var BELT_SPAWN_INTERVAL_MS = 100;
-  var BELT_MAX_TOTAL_PLANETOIDS = 500;
-  var BELT_HIDE_MARGIN = 350;
-  var BELT_HIDE_STEP = 150;
-  var BELT_HIDE_MAX_STEPS = 35;
-  var BELT_EXTRA_STAGGER_CELLS = 0.4;
-  var BELT_CULL_RADIUS_CELLS = 3;
-  var cellSizeRef = 1;
-  var beltDirWorld = null;
-  var beltStartWorld = null;
-  function initCellManifest(cellSize) {
-    cellSizeRef = cellSize;
-    beltStartWorld = { x: BELT_START.col * cellSize, y: BELT_START.row * cellSize };
-    const endWorld = { x: BELT_END.col * cellSize, y: BELT_END.row * cellSize };
-    beltDirWorld = new Vector2(endWorld.x - beltStartWorld.x, endWorld.y - beltStartWorld.y).normalize();
-  }
-  function distancePointToSegment(px, py, x1, y1, x2, y2) {
-    const dx = x2 - x1, dy = y2 - y1;
-    const lengthSq = dx * dx + dy * dy;
-    if (lengthSq === 0) return Math.hypot(px - x1, py - y1);
-    let t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
-    t = Math.max(0, Math.min(1, t));
-    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
-  }
-  function isBeltCell(col, row) {
-    return distancePointToSegment(col, row, BELT_START.col, BELT_START.row, BELT_END.col, BELT_END.row) <= BELT_THICKNESS_CELLS;
-  }
-  function isEmptyBufferCell(col, row) {
-    if (isBeltCell(col, row)) return false;
-    for (let dRow = -1; dRow <= 1; dRow++) {
-      for (let dCol = -1; dCol <= 1; dCol++) {
-        if (dRow === 0 && dCol === 0) continue;
-        if (isBeltCell(col + dCol, row + dRow)) return true;
-      }
-    }
-    return false;
-  }
-  function getCellManifest(col, row) {
-    if (isBeltCell(col, row)) return { type: "belt" };
-    if (isEmptyBufferCell(col, row)) return { type: "empty" };
-    return null;
-  }
-  function isPositionHiddenFromCamera(x, y) {
-    const cam = state.camera;
-    const zoom = state.zoom;
-    const canvas = state.canvas;
-    if (!cam || !zoom || !canvas) return true;
-    const visibleWidth = canvas.width / zoom;
-    const visibleHeight = canvas.height / zoom;
-    return x < cam.x - BELT_HIDE_MARGIN || x > cam.x + visibleWidth + BELT_HIDE_MARGIN || y < cam.y - BELT_HIDE_MARGIN || y > cam.y + visibleHeight + BELT_HIDE_MARGIN;
-  }
-  function beltProgress(worldX, worldY) {
-    const dx = worldX - beltStartWorld.x, dy = worldY - beltStartWorld.y;
-    return dx * beltDirWorld.x + dy * beltDirWorld.y;
-  }
-  function shouldKeepBeltPlanetoid(planetoid, playerWorldX, playerWorldY) {
-    const dx = planetoid.pos.x - playerWorldX;
-    const dy = planetoid.pos.y - playerWorldY;
-    const maxDist = cellSizeRef * BELT_CULL_RADIUS_CELLS;
-    return dx * dx + dy * dy <= maxDist * maxDist;
-  }
-  function projectOntoBeltLine(x, y) {
-    const dx = x - beltStartWorld.x, dy = y - beltStartWorld.y;
-    const t = dx * beltDirWorld.x + dy * beltDirWorld.y;
-    return {
-      x: beltStartWorld.x + beltDirWorld.x * t,
-      y: beltStartWorld.y + beltDirWorld.y * t
-    };
-  }
-  function spawnBeltPlanetoidNear(refX, refY) {
-    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
-    const perpX = -beltDirWorld.y, perpY = beltDirWorld.x;
-    const jitter = (Math.random() * 2 - 1) * cellSizeRef * BELT_THICKNESS_CELLS;
-    let x = refX + perpX * jitter;
-    let y = refY + perpY * jitter;
-    let steps = 0;
-    while (!isPositionHiddenFromCamera(x, y) && steps < BELT_HIDE_MAX_STEPS) {
-      x -= beltDirWorld.x * BELT_HIDE_STEP;
-      y -= beltDirWorld.y * BELT_HIDE_STEP;
-      steps++;
-    }
-    const extraStagger = Math.random() * cellSizeRef * BELT_EXTRA_STAGGER_CELLS;
-    x -= beltDirWorld.x * extraStagger;
-    y -= beltDirWorld.y * extraStagger;
-    const p = new Planetoid(x, y, radius, BELT_COLOR);
-    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
-    p.isBeltPlanetoid = true;
-    p.createOffscreen();
-    state.planetoids.push(p);
-    return p;
-  }
-  function generateSpecialCell(col, row, manifest) {
-    if (manifest.type === "belt") {
-      establishBeltCell(col, row);
-    }
-  }
-  var lastBeltSpawnTime = 0;
-  var lastPlayerBeltProgress = null;
-  var BELT_ESTABLISH_COUNT = 40;
-  var BELT_SPAWN_SPACING = 300;
-  function isPlayerNearBeltCell(playerWorldX, playerWorldY) {
-    const playerCol = Math.floor(playerWorldX / cellSizeRef);
-    const playerRow = Math.floor(playerWorldY / cellSizeRef);
-    for (let dRow = -1; dRow <= 1; dRow++) {
-      for (let dCol = -1; dCol <= 1; dCol++) {
-        if (getCellManifest(playerCol + dCol, playerRow + dRow)) return true;
-      }
-    }
-    return false;
-  }
-  function establishBeltCell(col, row) {
-    let totalBeltCount = 0;
-    for (const p of state.planetoids) {
-      if (p.isBeltPlanetoid) totalBeltCount++;
-    }
-    const originX = col * cellSizeRef;
-    const originY = row * cellSizeRef;
-    for (let i = 0; i < BELT_ESTABLISH_COUNT; i++) {
-      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
-      spawnBeltPlanetoidInCell(originX, originY);
-      totalBeltCount++;
-    }
-  }
-  function spawnBeltPlanetoidInCell(originX, originY) {
-    const radius = BELT_RADIUS_MIN + Math.random() * (BELT_RADIUS_MAX - BELT_RADIUS_MIN);
-    const x = originX + radius + Math.random() * (cellSizeRef - 2 * radius);
-    const y = originY + radius + Math.random() * (cellSizeRef - 2 * radius);
-    const p = new Planetoid(x, y, radius, BELT_COLOR);
-    p.vel = beltDirWorld.clone().multiply(BELT_SPEED);
-    p.isBeltPlanetoid = true;
-    p.createOffscreen();
-    state.planetoids.push(p);
-    return p;
-  }
-  function updateBeltSpawning(playerWorldX, playerWorldY) {
-    if (!beltDirWorld || !beltStartWorld) return;
-    const nearNow = isPlayerNearBeltCell(playerWorldX, playerWorldY);
-    if (!nearNow) {
-      lastPlayerBeltProgress = null;
-      return;
-    }
-    const now = Date.now();
-    if (now - lastBeltSpawnTime < BELT_SPAWN_INTERVAL_MS) return;
-    lastBeltSpawnTime = now;
-    const currentProgress = beltProgress(playerWorldX, playerWorldY);
-    let spawnsNeeded = 1;
-    if (lastPlayerBeltProgress !== null) {
-      const distanceTraveled = Math.abs(currentProgress - lastPlayerBeltProgress);
-      spawnsNeeded = Math.max(1, Math.ceil(distanceTraveled / BELT_SPAWN_SPACING));
-    }
-    lastPlayerBeltProgress = currentProgress;
-    let totalBeltCount = 0;
-    for (const p of state.planetoids) {
-      if (p.isBeltPlanetoid) totalBeltCount++;
-    }
-    const projected = projectOntoBeltLine(playerWorldX, playerWorldY);
-    for (let i = 0; i < spawnsNeeded; i++) {
-      if (totalBeltCount >= BELT_MAX_TOTAL_PLANETOIDS) break;
-      spawnBeltPlanetoidNear(projected.x, projected.y);
-      totalBeltCount++;
-    }
-  }
-  function resetBeltState() {
-    lastBeltSpawnTime = 0;
-    lastPlayerBeltProgress = null;
-  }
-  function getBeltPlanetoidCount() {
-    let count = 0;
-    for (const p of state.planetoids) {
-      if (p.isBeltPlanetoid) count++;
-    }
-    return count;
-  }
-  function getCellKindLabel(col, row) {
-    const manifest = getCellManifest(col, row);
-    if (!manifest) return "normal";
-    return manifest.type;
-  }
-
-  // js/ui/Minimap.js
-  var Minimap = class {
-    constructor() {
-      this.size = 240;
-      this.margin = 20;
-      this.backgroundColor = "rgba(6, 14, 24, 0.72)";
-      this.gridColor = "rgba(80, 200, 255, 0.18)";
-      this.borderColor = "rgba(100, 220, 255, 0.85)";
-      this.cornerColor = "rgba(140, 230, 255, 1)";
-      this.labelColor = "rgba(150, 230, 255, 0.85)";
-      this.playerColor = "#ffffff";
-      this.playerGlowColor = "rgba(255,255,255,0.35)";
-      this.playerRadius = 5;
-      this.specialColor = "#ffd23f";
-      this.specialGlowColor = "rgba(255,210,63,0.5)";
-      this.specialRadius = 3;
-      this.beltDotColor = "#ff4d4d";
-      this.beltDotCount = 130;
-      this.beltJitterCells = BELT_THICKNESS_CELLS * 1.8;
-      this._beltDots = null;
-    }
-    // Which planetoids get plotted as the yellow "special" dots. Reads
-    // directly from state each call (rather than being passed in) to
-    // match how every other system in this codebase already works.
-    // Add state.rectPlanet here too if you want the rounded-rect planet
-    // included on the map as well.
-    getSpecialPlanets() {
-      return [state.mazePlanet, state.platformPlanet].filter(Boolean);
-    }
-    worldToMapPoint(worldX, worldY, x0, y0) {
-      return {
-        x: x0 + worldX / state.sceneWidth * this.size,
-        y: y0 + worldY / state.sceneHeight * this.size
-      };
-    }
-    // Same idea as worldToMapPoint, but for a point already expressed in
-    // CELL-space (fractional col/row) rather than world pixel coordinates
-    // — used for the belt scatter, since BELT_START/END are cell-space.
-    cellToMapPoint(col, row, x0, y0) {
-      const gridSize = state.gridSize || 20;
-      return {
-        x: x0 + col / gridSize * this.size,
-        y: y0 + row / gridSize * this.size
-      };
-    }
-    // Builds and caches the belt's scatter-dot pattern in CELL-space
-    // (not map-pixel-space), so it stays correct if this.size ever
-    // changes — each cached point is converted to map pixels fresh at
-    // draw time via cellToMapPoint.
-    buildBeltDots() {
-      const dx = BELT_END.col - BELT_START.col;
-      const dy = BELT_END.row - BELT_START.row;
-      const len = Math.hypot(dx, dy);
-      const dirX = len > 0 ? dx / len : 1;
-      const dirY = len > 0 ? dy / len : 0;
-      const perpX = -dirY, perpY = dirX;
-      const dots = [];
-      for (let i = 0; i < this.beltDotCount; i++) {
-        const t = Math.random();
-        const baseCol = BELT_START.col + dx * t;
-        const baseRow = BELT_START.row + dy * t;
-        const jitter = (Math.random() * 2 - 1) * this.beltJitterCells;
-        dots.push({
-          col: baseCol + perpX * jitter,
-          row: baseRow + perpY * jitter,
-          alpha: 0.5 + Math.random() * 0.5
-          // slight per-dot variation for visual texture
-        });
-      }
-      return dots;
-    }
-    drawGlowDot(ctx, x, y, radius, dotColor, glowColor) {
-      ctx.beginPath();
-      ctx.fillStyle = glowColor;
-      ctx.arc(x, y, radius * 2.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.fillStyle = dotColor;
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    draw() {
-      if (!state.player || !state.sceneWidth || !state.sceneHeight || !state.canvas) return;
-      const ctx = state.ctx;
-      const gridSize = state.gridSize || 20;
-      const x0 = state.canvas.width - this.margin - this.size;
-      const y0 = state.canvas.height - this.margin - this.size;
-      ctx.save();
-      ctx.fillStyle = this.backgroundColor;
-      ctx.fillRect(x0, y0, this.size, this.size);
-      ctx.strokeStyle = this.gridColor;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let i = 0; i <= gridSize; i++) {
-        const gx = x0 + i / gridSize * this.size;
-        ctx.moveTo(gx, y0);
-        ctx.lineTo(gx, y0 + this.size);
-        const gy = y0 + i / gridSize * this.size;
-        ctx.moveTo(x0, gy);
-        ctx.lineTo(x0 + this.size, gy);
-      }
-      ctx.stroke();
-      if (!this._beltDots) this._beltDots = this.buildBeltDots();
-      ctx.fillStyle = this.beltDotColor;
-      for (const dot of this._beltDots) {
-        const p = this.cellToMapPoint(dot.col, dot.row, x0, y0);
-        ctx.globalAlpha = dot.alpha;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      for (const planet of this.getSpecialPlanets()) {
-        const p = this.worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0);
-        this.drawGlowDot(ctx, p.x, p.y, this.specialRadius, this.specialColor, this.specialGlowColor);
-      }
-      {
-        const p = this.worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0);
-        this.drawGlowDot(ctx, p.x, p.y, this.playerRadius, this.playerColor, this.playerGlowColor);
-      }
-      ctx.strokeStyle = this.borderColor;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x0, y0, this.size, this.size);
-      const bracket = Math.min(20, this.size * 0.12);
-      ctx.strokeStyle = this.cornerColor;
-      ctx.lineWidth = 2;
-      const corners = [
-        [x0, y0, 1, 1],
-        [x0 + this.size, y0, -1, 1],
-        [x0, y0 + this.size, 1, -1],
-        [x0 + this.size, y0 + this.size, -1, -1]
-      ];
-      for (const [cx, cy, dx, dy] of corners) {
-        ctx.beginPath();
-        ctx.moveTo(cx, cy + bracket * dy);
-        ctx.lineTo(cx, cy);
-        ctx.lineTo(cx + bracket * dx, cy);
-        ctx.stroke();
-      }
-      ctx.fillStyle = this.labelColor;
-      ctx.font = "12px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText("SECTOR MAP", x0 + 8, y0 - 8);
-      ctx.restore();
-    }
-  };
-
-  // js/effects/PullBeam.js
-  var BEAM_COLOR = "rgba(120, 210, 255, 1)";
-  var BEAM_GLOW_COLOR = "rgba(120, 210, 255, 0.35)";
-  var BEAM_GLOW_WIDTH = 13;
-  var BEAM_CORE_WIDTH = 4;
-  var OUTLINE_COLOR = "rgba(120, 210, 255, 0.9)";
-  var OUTLINE_GLOW_COLOR = "rgba(120, 210, 255, 0.3)";
-  var OUTLINE_GLOW_WIDTH = 9;
-  var OUTLINE_CORE_WIDTH = 3;
-  var OUTLINE_PADDING = 8;
-  var WAVE_COLOR = "rgba(215, 246, 255, 1)";
-  var WAVE_GLOW_COLOR = "rgba(215, 246, 255, 0.4)";
-  var WAVE_GLOW_WIDTH = 4;
-  var WAVE_CORE_WIDTH = 1.5;
-  var WAVE_AMPLITUDE = 5;
-  var WAVE_FREQUENCY = 0.05;
-  var WAVE_FREQUENCY_2 = 0.065;
-  var WAVE_SPEED = 0.012;
-  var WAVE_SAMPLE_SPACING = 8;
-  function buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, frequency, phaseOffset, now) {
-    const points = [];
-    const numSamples = Math.max(2, Math.floor(beamLength / WAVE_SAMPLE_SPACING));
-    for (let i = 0; i <= numSamples; i++) {
-      const s = i / numSamples * beamLength;
-      const wave = WAVE_AMPLITUDE * Math.sin(s * frequency - now * WAVE_SPEED + phaseOffset);
-      points.push({
-        x: originX + dirX * s + perpX * wave,
-        y: originY + dirY * s + perpY * wave
-      });
-    }
-    return points;
-  }
-  function strokePolyline(ctx, points) {
-    if (points.length < 2) return;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
-    ctx.stroke();
-  }
-  function drawPullIndicator() {
-    const player = state.player;
-    if (!player || !player.pullTarget || player.mode !== "space") return;
-    const target = player.pullTarget;
-    const ctx = state.ctx;
-    const pulse = (Math.sin(Date.now() * 6e-3) + 1) / 2;
-    const now = Date.now();
-    ctx.save();
-    const originX = player.aimShoulderPos ? player.aimShoulderPos.x : player.pos.x;
-    const originY = player.aimShoulderPos ? player.aimShoulderPos.y : player.pos.y;
-    const dx = target.pos.x - originX;
-    const dy = target.pos.y - originY;
-    const beamLength = Math.sqrt(dx * dx + dy * dy);
-    ctx.beginPath();
-    ctx.moveTo(originX, originY);
-    ctx.lineTo(target.pos.x, target.pos.y);
-    ctx.globalAlpha = 0.4 + pulse * 0.3;
-    ctx.strokeStyle = BEAM_GLOW_COLOR;
-    ctx.lineWidth = BEAM_GLOW_WIDTH;
-    ctx.stroke();
-    ctx.globalAlpha = 0.7 + pulse * 0.3;
-    ctx.strokeStyle = BEAM_COLOR;
-    ctx.lineWidth = BEAM_CORE_WIDTH;
-    ctx.stroke();
-    if (beamLength > 1e-3) {
-      const dirX = dx / beamLength, dirY = dy / beamLength;
-      const perpX = -dirY, perpY = dirX;
-      const strand1 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY, 0, now);
-      const strand2 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY_2, Math.PI, now);
-      ctx.globalAlpha = 0.3 + pulse * 0.25;
-      ctx.strokeStyle = WAVE_GLOW_COLOR;
-      ctx.lineWidth = WAVE_GLOW_WIDTH;
-      strokePolyline(ctx, strand1);
-      strokePolyline(ctx, strand2);
-      ctx.globalAlpha = 0.6 + pulse * 0.3;
-      ctx.strokeStyle = WAVE_COLOR;
-      ctx.lineWidth = WAVE_CORE_WIDTH;
-      strokePolyline(ctx, strand1);
-      strokePolyline(ctx, strand2);
-    }
-    if (target.isRoundedRect) {
-      ctx.save();
-      ctx.translate(target.pos.x, target.pos.y);
-      ctx.rotate(target.rotationAngle);
-      const w = target.halfWidth + OUTLINE_PADDING;
-      const h = target.halfHeight + OUTLINE_PADDING;
-      ctx.beginPath();
-      ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + OUTLINE_PADDING);
-      ctx.globalAlpha = 0.4 + pulse * 0.4;
-      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
-      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
-      ctx.stroke();
-      ctx.globalAlpha = 0.7 + pulse * 0.3;
-      ctx.strokeStyle = OUTLINE_COLOR;
-      ctx.lineWidth = OUTLINE_CORE_WIDTH;
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      ctx.beginPath();
-      ctx.arc(target.pos.x, target.pos.y, target.radius + OUTLINE_PADDING, 0, Math.PI * 2);
-      ctx.globalAlpha = 0.4 + pulse * 0.4;
-      ctx.strokeStyle = OUTLINE_GLOW_COLOR;
-      ctx.lineWidth = OUTLINE_GLOW_WIDTH;
-      ctx.stroke();
-      ctx.globalAlpha = 0.7 + pulse * 0.3;
-      ctx.strokeStyle = OUTLINE_COLOR;
-      ctx.lineWidth = OUTLINE_CORE_WIDTH;
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // js/game.js
-  state.canvas = document.getElementById("gameCanvas");
-  state.ctx = state.canvas.getContext("2d");
-  state.canvas.width = window.innerWidth;
-  state.canvas.height = window.innerHeight;
-  var CELL_SIZE = 3e3;
-  var GRID_SIZE = 20;
-  var CENTER_CELL = { col: 10, row: 10 };
-  var CELL_CHECK_INTERVAL = 15;
-  state.sceneWidth = CELL_SIZE * GRID_SIZE;
-  state.sceneHeight = CELL_SIZE * GRID_SIZE;
-  state.gridSize = GRID_SIZE;
-  initCellManifest(CELL_SIZE);
-  var PLANETOIDS_PER_CELL = 10;
-  var SPIKEY_PER_CELL = 10;
-  var ASTEROIDS_PER_CELL = 20;
-  var MAX_ENEMIES_PER_CELL = 5;
-  var CHARACTER_IMAGE_SOURCES = {
-    body: "img/body.png",
-    head: "img/head.png",
-    leftarm: "img/leftarm.png",
-    rightarm: "img/rightarm.png",
-    leftboot: "img/leftboot.png",
-    rightboot: "img/rightboot.png"
-  };
-  state.characterImages = {};
-  var assetsLoaded = 0;
-  var ASSETS_TO_LOAD = 4 + Object.keys(CHARACTER_IMAGE_SOURCES).length;
-  function onAssetLoaded() {
-    assetsLoaded++;
-    if (assetsLoaded === ASSETS_TO_LOAD) {
-      initGame();
-      gameLoop();
-    }
-  }
-  state.planetTexture = new Image();
-  state.planetTexture.src = "img/planet_texture_2.jpg";
-  state.planetTexture.onload = onAssetLoaded;
-  state.platformTexture = new Image();
-  state.platformTexture.src = "img/platform.png";
-  state.platformTexture.onload = onAssetLoaded;
-  state.goombaTexture = new Image();
-  state.goombaTexture.src = "img/goomba.png";
-  state.goombaTexture.onload = onAssetLoaded;
-  state.grassTexture = new Image();
-  state.grassTexture.src = "img/grass.png";
-  state.grassTexture.onload = onAssetLoaded;
-  Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
-    const img = new Image();
-    img.src = src;
-    img.onload = onAssetLoaded;
-    state.characterImages[key] = img;
-  });
-  state.bootImage = state.characterImages.leftboot;
-  state.audioManager = new AudioManager();
-  initResizeListener();
-  state.mouse = { x: state.canvas.width / 2, y: state.canvas.height / 2 };
-  state.lastMouseMoveTime = Date.now();
-  state.canvas.addEventListener("mousemove", (e) => {
-    const rect = state.canvas.getBoundingClientRect();
-    state.mouse.x = e.clientX - rect.left;
-    state.mouse.y = e.clientY - rect.top;
-    state.lastMouseMoveTime = Date.now();
-  });
-  state.mouseDown = false;
-  state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  state.canvas.addEventListener("mousedown", (e) => {
-    if (tryRestartOrAdvance()) return;
-    if (e.button === 0) {
-      state.mouseDown = true;
-      if (state.player) state.player.shootFireball();
-    } else if (e.button === 2) {
-      if (state.player) state.player.trySelectPullTarget();
-    }
-  });
-  window.addEventListener("mouseup", (e) => {
-    if (e.button === 0) {
-      state.mouseDown = false;
-    } else if (e.button === 2) {
-      if (state.player) state.player.clearPullTarget();
-    }
-  });
-  state.fireballs = [];
-  state.explosions = [];
-  state.zoom = 1;
-  var ZOOM_MIN = 0.5;
-  var ZOOM_MAX = 2.5;
-  state.zoomMax = ZOOM_MAX;
-  state.zoomMin = ZOOM_MIN;
-  var ZOOM_STEP_PER_FRAME = 0.02;
-  var ZOOM_WHEEL_STEP = 0.08;
-  state.canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
-    state.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.zoom + delta));
-    state.zoomTarget = null;
-    state.lastWheelTime = Date.now();
-  }, { passive: false });
-  state.zoomTarget = null;
-  state.preMazeZoom = state.zoom;
-  var previousPlayerMode = null;
-  var ZOOM_EASE_RATE = 0.06;
-  var ZOOM_EASE_SNAP_THRESHOLD = 0.01;
-  var FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
-  var STAR_TILE_SIZE = 2e3;
-  state.starTileSize = STAR_TILE_SIZE;
-  state.starCanvas = document.createElement("canvas");
-  state.starCanvas.width = STAR_TILE_SIZE;
-  state.starCanvas.height = STAR_TILE_SIZE;
-  {
-    const starCtx = state.starCanvas.getContext("2d");
-    starCtx.fillStyle = "white";
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const x = Math.random() * STAR_TILE_SIZE;
-      const y = Math.random() * STAR_TILE_SIZE;
-      const size = Math.random() * 2 + 1;
-      starCtx.beginPath();
-      starCtx.arc(x, y, size, 0, Math.PI * 2);
-      starCtx.fill();
-    }
-  }
-  var gravitySystem;
-  var collisionSystem = new CollisionSystem();
-  var aiSystem = new AISystem();
-  var minimap = new Minimap();
-  var cellCheckCounter = 0;
-  window.addEventListener("keydown", (e) => {
-    state.keys[e.key] = true;
-    if (e.key === " ") {
-      if (state.player.onSurface && state.player.mode != "maze") state.player.jump();
-      else if (state.player.mode != "maze") state.player.tryGroundPound();
-    }
-    if (e.key === "ArrowDown" && state.player.mode != "maze") {
-      if (state.player.onSurface && state.player.currentPlanet instanceof BeamPlanetoid) {
-        const diff = angleDiff(state.player.angle, state.player.currentPlanet.beamAngle);
-        if (diff < Math.PI / 5) {
-          state.player.startTeleport(state.player.currentPlanet.interior instanceof MazeInterior ? "maze" : "platform");
-        }
-      }
-    }
-    if (e.key === "Enter") {
-      tryRestartOrAdvance();
-    }
-  });
-  window.addEventListener("keyup", (e) => {
-    state.keys[e.key] = false;
-  });
-  function tryRestartOrAdvance() {
-    if (state.gameOver) {
-      state.score = 0;
-      state.level = 1;
-      initGame();
-      return true;
-    } else if (state.levelComplete) {
-      state.level++;
-      initGame();
-      state.levelComplete = false;
-      return true;
-    }
-    return false;
-  }
-  function cellCoordFor(worldX, worldY) {
-    return {
-      col: Math.floor(worldX / CELL_SIZE),
-      row: Math.floor(worldY / CELL_SIZE)
-    };
-  }
-  function cellKey(col, row) {
-    return `${col},${row}`;
-  }
-  function generateRegularPlanetoidsInCell(col, row) {
-    const originX = col * CELL_SIZE;
-    const originY = row * CELL_SIZE;
-    const regularPlanetoids = [];
-    for (let i = 0; i < PLANETOIDS_PER_CELL; i++) {
-      const radius = 30 + Math.random() * 40;
-      const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-      const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
-      const color = planetColors[Math.floor(Math.random() * planetColors.length)];
-      const p = new Planetoid(x, y, radius, color);
-      p.createOffscreen();
-      state.planetoids.push(p);
-      regularPlanetoids.push(p);
-    }
-    return regularPlanetoids;
-  }
-  function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoidPos = null, avoidRadius = 0) {
-    const originX = col * CELL_SIZE;
-    const originY = row * CELL_SIZE;
-    const MAX_REROLLS = 20;
-    const avoidRadiusSq = avoidRadius * avoidRadius;
-    const isSafe = (x, y) => !avoidPos || (x - avoidPos.x) ** 2 + (y - avoidPos.y) ** 2 >= avoidRadiusSq;
-    for (let i = 0; i < SPIKEY_PER_CELL; i++) {
-      const radius = 25 + Math.random() * 15;
-      let x, y, attempts = 0;
-      do {
-        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
-        attempts++;
-      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
-      const p = new SpikeyPlanetoid(x, y, radius);
-      p.createOffscreen();
-      state.planetoids.push(p);
-    }
-    for (let i = 0; i < ASTEROIDS_PER_CELL; i++) {
-      const radius = 20 + Math.random() * 25;
-      let x, y, attempts = 0;
-      do {
-        x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
-        y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
-        attempts++;
-      } while (!isSafe(x, y) && attempts < MAX_REROLLS);
-      state.asteroids.push(new Asteroid(x, y, radius));
-    }
-    regularPlanetoids.forEach((planet) => {
-      const numCoins = 4 + Math.floor(planet.radius / 10);
-      for (let i = 0; i < numCoins; i++) {
-        const coin = new Coin(planet);
-        coin.angle = i / numCoins * Math.PI * 2 + Math.random() * 0.2;
-        state.coins.push(coin);
-      }
-    });
-    const safePlanetsForEnemies = avoidPos ? regularPlanetoids.filter((p) => isSafe(p.pos.x, p.pos.y)) : regularPlanetoids;
-    const numEnemies = Math.min(MAX_ENEMIES_PER_CELL, safePlanetsForEnemies.length);
-    for (let i = 0; i < numEnemies; i++) {
-      const planet = safePlanetsForEnemies[Math.floor(Math.random() * safePlanetsForEnemies.length)];
-      const color = enemyColors[i % enemyColors.length];
-      state.enemies.push(new SpaceGhost(planet, color));
-    }
-  }
-  function generateCell(col, row) {
-    const key = cellKey(col, row);
-    if (state.activeCells.has(key)) return [];
-    state.activeCells.add(key);
-    const manifest = getCellManifest(col, row);
-    if (manifest) {
-      generateSpecialCell(col, row, manifest);
-      return [];
-    }
-    const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
-    generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
-    return regularPlanetoids;
-  }
-  function isInsideSkyDome(worldX, worldY) {
-    if (!state.skyDomePlanet) return false;
-    const dome = state.skyDomePlanet;
-    const topY = dome.pos.y - dome.halfHeight;
-    if (worldY > topY) return false;
-    const insetFactor = 0.9;
-    const nx = (worldX - dome.pos.x) / (dome.domeRadiusX * insetFactor);
-    const ny = (worldY - topY) / (dome.domeRadiusY * insetFactor);
-    return nx * nx + ny * ny < 1;
-  }
-  function cullDistantObjects(activeCellKeys) {
-    for (let i = state.planetoids.length - 1; i >= 0; i--) {
-      const p = state.planetoids[i];
-      if (p.isPermanent) continue;
-      if (p.isBeltPlanetoid) {
-        if (!shouldKeepBeltPlanetoid(p, state.player.pos.x, state.player.pos.y)) {
-          state.planetoids.splice(i, 1);
-        }
-        continue;
-      }
-      if (isInsideSkyDome(p.pos.x, p.pos.y)) {
-        state.planetoids.splice(i, 1);
-        continue;
-      }
-      const { col, row } = cellCoordFor(p.pos.x, p.pos.y);
-      if (!activeCellKeys.has(cellKey(col, row))) {
-        state.planetoids.splice(i, 1);
-      }
-    }
-    const survivingPlanetoids = new Set(state.planetoids);
-    state.asteroids = state.asteroids.filter((a) => {
-      if (isInsideSkyDome(a.pos.x, a.pos.y)) return false;
-      const { col, row } = cellCoordFor(a.pos.x, a.pos.y);
-      return activeCellKeys.has(cellKey(col, row));
-    });
-    state.coins = state.coins.filter((c) => {
-      if (!c.planet || !survivingPlanetoids.has(c.planet)) return false;
-      const { col, row } = cellCoordFor(c.planet.pos.x, c.planet.pos.y);
-      return activeCellKeys.has(cellKey(col, row));
-    });
-    state.enemies = state.enemies.filter((e) => {
-      if (e.onSurface && e.planet) {
-        if (!survivingPlanetoids.has(e.planet)) return false;
-        if (isInsideSkyDome(e.planet.pos.x, e.planet.pos.y)) return false;
-        const { col: col2, row: row2 } = cellCoordFor(e.planet.pos.x, e.planet.pos.y);
-        return activeCellKeys.has(cellKey(col2, row2));
-      }
-      if (isInsideSkyDome(e.pos.x, e.pos.y)) return false;
-      const { col, row } = cellCoordFor(e.pos.x, e.pos.y);
-      return activeCellKeys.has(cellKey(col, row));
-    });
-  }
-  function updateActiveCells() {
-    const playerCell = cellCoordFor(state.player.pos.x, state.player.pos.y);
-    const activeCellKeys = /* @__PURE__ */ new Set();
-    for (let dRow = -1; dRow <= 1; dRow++) {
-      for (let dCol = -1; dCol <= 1; dCol++) {
-        const col = playerCell.col + dCol;
-        const row = playerCell.row + dRow;
-        if (col < 0 || col >= GRID_SIZE || row < 0 || row >= GRID_SIZE) continue;
-        const key = cellKey(col, row);
-        activeCellKeys.add(key);
-        generateCell(col, row);
-      }
-    }
-    for (const key of Array.from(state.activeCells)) {
-      if (!activeCellKeys.has(key)) {
-        state.activeCells.delete(key);
-      }
-    }
-    cullDistantObjects(activeCellKeys);
-    updateBeltSpawning(state.player.pos.x, state.player.pos.y);
-  }
+  // js/setup/levelSetup.js
   function initGame() {
     state.planetoids = [];
     state.asteroids = [];
@@ -5237,8 +5026,234 @@
     state.gameOver = false;
     state.levelComplete = false;
     state.audioManager.reset();
-    gravitySystem = new GravitySystem(state.planetoids);
+    state.gravitySystem = new GravitySystem(state.planetoids);
   }
+
+  // js/AudioManager.js
+  var AudioManager = class {
+    constructor() {
+      this.eatDotIndex = 0;
+      this.eatDotAudio0 = new Audio("sounds/eat_dot_0.wav");
+      this.eatDotAudio1 = new Audio("sounds/eat_dot_1.wav");
+      this.deathAudio = new Audio("sounds/death_0.wav");
+      this.jumpAudio = new Audio("sounds/jump.wav");
+      this.jumpSmallAudio = new Audio("sounds/jumpsmall.wav");
+      this.bangLarge = new Audio("sounds/bangLarge.wav");
+      this.bangMedium = new Audio("sounds/bangMedium.wav");
+      this.bangSmall = new Audio("sounds/bangSmall.wav");
+      this.goombaStompAudio = new Audio("sounds/mario-goomba-stomp.mp3");
+      this.fireballAudio = new Audio("sounds/mario-fireball.mp3");
+      [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall, this.goombaStompAudio, this.fireballAudio].forEach((audio) => {
+        audio.volume = 0.5;
+        audio.preload = "auto";
+        audio.load();
+      });
+    }
+    playEatDot() {
+      const source = this.eatDotIndex === 0 ? this.eatDotAudio0 : this.eatDotAudio1;
+      this.eatDotIndex = 1 - this.eatDotIndex;
+      const audio = source.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playDeath() {
+      const audio = this.deathAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playJump() {
+      const audio = this.jumpAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playJumpSmall() {
+      const audio = this.jumpSmallAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playGoombaStomp() {
+      const audio = this.goombaStompAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playFireball() {
+      const audio = this.fireballAudio.cloneNode(true);
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    playBang(size, position) {
+      let audioSource;
+      if (size === "large") audioSource = this.bangLarge;
+      else if (size === "medium") audioSource = this.bangMedium;
+      else if (size === "small") audioSource = this.bangSmall;
+      else return;
+      const dist = state.player.pos.subtract(position).length();
+      let vol = 0.5 * Math.max(0, 1 - dist / 800);
+      if (vol <= 0) return;
+      const audio = audioSource.cloneNode(true);
+      audio.volume = vol;
+      audio.play().catch((e) => console.log("Audio play failed:", e));
+    }
+    // Optional: Reset method if needed for game restarts (e.g., call from initGame)
+    reset() {
+      this.eatDotIndex = 0;
+    }
+  };
+
+  // js/setup/assetLoading.js
+  var CHARACTER_IMAGE_SOURCES = {
+    body: "img/body.png",
+    head: "img/head.png",
+    leftarm: "img/leftarm.png",
+    rightarm: "img/rightarm.png",
+    leftboot: "img/leftboot.png",
+    rightboot: "img/rightboot.png"
+  };
+  function loadAssets(onComplete) {
+    state.characterImages = {};
+    let assetsLoaded = 0;
+    const ASSETS_TO_LOAD = 4 + Object.keys(CHARACTER_IMAGE_SOURCES).length;
+    function onAssetLoaded() {
+      assetsLoaded++;
+      if (assetsLoaded === ASSETS_TO_LOAD) {
+        onComplete();
+      }
+    }
+    state.planetTexture = new Image();
+    state.planetTexture.src = "img/planet_texture_2.jpg";
+    state.planetTexture.onload = onAssetLoaded;
+    state.platformTexture = new Image();
+    state.platformTexture.src = "img/platform.png";
+    state.platformTexture.onload = onAssetLoaded;
+    state.goombaTexture = new Image();
+    state.goombaTexture.src = "img/goomba.png";
+    state.goombaTexture.onload = onAssetLoaded;
+    state.grassTexture = new Image();
+    state.grassTexture.src = "img/grass.png";
+    state.grassTexture.onload = onAssetLoaded;
+    Object.entries(CHARACTER_IMAGE_SOURCES).forEach(([key, src]) => {
+      const img = new Image();
+      img.src = src;
+      img.onload = onAssetLoaded;
+      state.characterImages[key] = img;
+    });
+    state.bootImage = state.characterImages.leftboot;
+    state.audioManager = new AudioManager();
+    initResizeListener();
+  }
+
+  // js/setup/inputHandlers.js
+  function tryRestartOrAdvance() {
+    if (state.gameOver) {
+      state.score = 0;
+      state.level = 1;
+      initGame();
+      return true;
+    } else if (state.levelComplete) {
+      state.level++;
+      initGame();
+      state.levelComplete = false;
+      return true;
+    }
+    return false;
+  }
+  function attachInputHandlers() {
+    state.mouse = { x: state.canvas.width / 2, y: state.canvas.height / 2 };
+    state.lastMouseMoveTime = Date.now();
+    state.canvas.addEventListener("mousemove", (e) => {
+      const rect = state.canvas.getBoundingClientRect();
+      state.mouse.x = e.clientX - rect.left;
+      state.mouse.y = e.clientY - rect.top;
+      state.lastMouseMoveTime = Date.now();
+    });
+    state.mouseDown = false;
+    state.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    state.canvas.addEventListener("mousedown", (e) => {
+      if (tryRestartOrAdvance()) return;
+      if (e.button === 0) {
+        state.mouseDown = true;
+        if (state.player) state.player.shootFireball();
+      } else if (e.button === 2) {
+        if (state.player) state.player.trySelectPullTarget();
+      }
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (e.button === 0) {
+        state.mouseDown = false;
+      } else if (e.button === 2) {
+        if (state.player) state.player.clearPullTarget();
+      }
+    });
+    const ZOOM_WHEEL_STEP = 0.08;
+    state.canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
+      state.zoom = Math.max(state.zoomMin, Math.min(state.zoomMax, state.zoom + delta));
+      state.zoomTarget = null;
+      state.lastWheelTime = Date.now();
+    }, { passive: false });
+    window.addEventListener("keydown", (e) => {
+      state.keys[e.key] = true;
+      if (e.key === " ") {
+        if (state.player.onSurface && state.player.mode != "maze") state.player.jump();
+        else if (state.player.mode != "maze") state.player.tryGroundPound();
+      }
+      if (e.key === "ArrowDown" && state.player.mode != "maze") {
+        if (state.player.onSurface && state.player.currentPlanet instanceof BeamPlanetoid) {
+          const diff = angleDiff(state.player.angle, state.player.currentPlanet.beamAngle);
+          if (diff < Math.PI / 5) {
+            state.player.startTeleport(state.player.currentPlanet.interior instanceof MazeInterior ? "maze" : "platform");
+          }
+        }
+      }
+      if (e.key === "Enter") {
+        tryRestartOrAdvance();
+      }
+    });
+    window.addEventListener("keyup", (e) => {
+      state.keys[e.key] = false;
+    });
+  }
+
+  // js/game.js
+  state.canvas = document.getElementById("gameCanvas");
+  state.ctx = state.canvas.getContext("2d");
+  state.canvas.width = window.innerWidth;
+  state.canvas.height = window.innerHeight;
+  state.fireballs = [];
+  state.explosions = [];
+  state.zoom = 1;
+  var ZOOM_MIN = 0.5;
+  var ZOOM_MAX = 2.5;
+  state.zoomMax = ZOOM_MAX;
+  state.zoomMin = ZOOM_MIN;
+  var ZOOM_STEP_PER_FRAME = 0.02;
+  state.zoomTarget = null;
+  state.preMazeZoom = state.zoom;
+  var previousPlayerMode = null;
+  var ZOOM_EASE_RATE = 0.06;
+  var ZOOM_EASE_SNAP_THRESHOLD = 0.01;
+  var FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
+  var STAR_TILE_SIZE = 2e3;
+  state.starTileSize = STAR_TILE_SIZE;
+  state.starCanvas = document.createElement("canvas");
+  state.starCanvas.width = STAR_TILE_SIZE;
+  state.starCanvas.height = STAR_TILE_SIZE;
+  {
+    const starCtx = state.starCanvas.getContext("2d");
+    starCtx.fillStyle = "white";
+    for (let i = 0; i < STAR_COUNT; i++) {
+      const x = Math.random() * STAR_TILE_SIZE;
+      const y = Math.random() * STAR_TILE_SIZE;
+      const size = Math.random() * 2 + 1;
+      starCtx.beginPath();
+      starCtx.arc(x, y, size, 0, Math.PI * 2);
+      starCtx.fill();
+    }
+  }
+  var collisionSystem = new CollisionSystem();
+  var aiSystem = new AISystem();
+  var minimap = new Minimap();
+  var cellCheckCounter = 0;
+  attachInputHandlers();
+  loadAssets(() => {
+    initGame();
+    gameLoop();
+  });
   function updatePlanetoids() {
     for (const p of state.planetoids) {
       if (p.isImmovable) {
@@ -5353,7 +5368,7 @@
         if (state.player.pullTarget) {
           state.player.applyPullForce();
         } else {
-          gravitySystem.applyTo(state.player);
+          state.gravitySystem.applyTo(state.player);
         }
       }
       state.player.update();
