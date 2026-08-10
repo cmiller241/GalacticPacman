@@ -95,6 +95,16 @@ export class Player extends Entity {
     // legs/arms pendulate faster or slower in lockstep with how much
     // ground he's actually covering. Lower = faster-looking stride.
     this.strideLength = 90;
+    // Vertical walk bob — the body's effective height is lowest when
+    // both legs are angled apart (scissored mid-stride) and highest
+    // when either leg passes through vertical beneath it, same as a
+    // real walk cycle. See drawFullBody for how this gets applied.
+    this.walkBobStrength = 3;
+    // Tracks the walk-bob's own value frame to frame, so spawnWalkDust
+    // can detect the exact moment it crosses back above its "just
+    // planted" threshold, rather than sampling on a flat per-frame
+    // chance unrelated to actual footsteps.
+    this.lastWalkBobT = 0;
 
     // Arm swing amplitude relative to the leg swing amplitude (0.6,
     // hardcoded below in drawFullBody). The right arm moves opposite
@@ -200,6 +210,12 @@ export class Player extends Entity {
     // updateOrientationAndFacing().
     this.mouseIdleThreshold = 2000;
     this.mouseIdle = true;
+    // How long (ms) after the last scroll-wheel zoom to also treat the
+    // mouse as idle — see updateOrientationAndFacing for why: rapid
+    // zoom changes shift the computed mouse WORLD position even though
+    // the cursor's screen position hasn't moved, which otherwise makes
+    // the aim-tracked arm/head jitter while scrolling.
+    this.mouseWheelSuppressDuration = 200;
 
     // How much smaller the full-body rig renders inside the maze
     // interior versus the main planet-surface/space mode. Tune to
@@ -429,9 +445,7 @@ export class Player extends Entity {
     const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
 
     state.fireballs.push(new Fireball(tipX, tipY, angle));
-    if (state.audioManager && typeof state.audioManager.playShoot === 'function') {
-      state.audioManager.playShoot();
-    }
+    state.audioManager.playFireball();
   }
 
   // ----------------------------
@@ -687,6 +701,64 @@ export class Player extends Entity {
     this.updatePlatformPosition();
   }
 
+  // Spawns an occasional dust puff at the player's feet while actively
+  // walking on a surface — reuses the same Particle class already used
+  // for explosions/impacts elsewhere (see utils.js's createParticles),
+  // just with a dusty tan/beige color instead of that pattern's fiery
+  // oranges, and a gentle scatter-and-drift-up rather than an
+  // energetic burst. Called from all three on-surface walking branches
+  // in move() below (isSkyDome flat walking, generic rect-perimeter
+  // walking, and circular-planet walking), since dust should kick up
+  // regardless of which underlying walking system currently applies.
+  spawnWalkDust() {
+    if (!this.currentPlanet) return;
+
+    // Ties dust to actual FOOTSTEPS rather than a flat per-frame
+    // chance — the walk-bob (see drawFullBody) is exactly 0 when a leg
+    // passes through vertical and peaks at 1 right when it's most
+    // scissored, about to plant. Detecting the moment it crosses back
+    // above a high threshold catches that "just planted" instant, once
+    // per actual footfall (twice per full walkTime cycle, once per
+    // leg) — a flat per-frame chance instead just produced a
+    // continuous, undifferentiated trail with no relationship to
+    // individual steps.
+    const bobT = Math.sin(this.walkTime) ** 2;
+    const justPlanted = bobT > 0.85 && this.lastWalkBobT <= 0.85;
+    this.lastWalkBobT = bobT;
+    if (!justPlanted) return;
+
+    // "Down" toward whatever surface the player is currently standing
+    // on — same derivation used elsewhere in this class (surface
+    // normal for rect-type planets, direction-to-center for circular
+    // ones), so dust spawns at the actual feet regardless of
+    // orientation.
+    let downDir;
+    if (this.currentPlanet.isRoundedRect) {
+      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
+      downDir = surface.normal.clone().multiply(-1);
+    } else {
+      downDir = this.currentPlanet.pos.subtract(this.pos).normalize();
+    }
+    const feetPos = this.pos.clone().add(downDir.multiply(this.radius * 0.9));
+    const sideDir = new Vector2(-downDir.y, downDir.x); // perpendicular to "down" — scatters dust sideways along the surface, regardless of its orientation
+
+    // A small CLUSTER per footstep (2-3 particles), not a single dot —
+    // reads as an actual puff kicking up rather than a trailing spark.
+    const puffCount = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < puffCount; i++) {
+      const sideSpread = (Math.random() - 0.5) * 2.5;
+      const upSpeed = 0.2 + Math.random() * 0.4;
+      const vel = sideDir.multiply(sideSpread).add(downDir.multiply(-upSpeed));
+
+      const particle = new Particle(feetPos, vel, 22 + Math.random() * 14);
+      particle.color = `hsl(${35 + Math.random() * 15}, ${30 + Math.random() * 15}%, ${55 + Math.random() * 15}%)`; // dusty tan/beige
+      particle.radius = 2 + Math.random() * 1.5;
+      particle.drag = 0.9;      // slows down rather than drifting at constant speed forever, like real dust settling
+      particle.growRate = 0.06; // gently expands over its life, like a puff dispersing rather than staying a fixed-size dot
+      state.particles.push(particle);
+    }
+  }
+
   move(keys) {
     // ----------------------------
     // MAZE MODE
@@ -884,6 +956,7 @@ export class Player extends Entity {
 
       if (this.isWalking) {
         this.walkTime += (Math.abs(ds) / this.strideLength) * Math.PI * 2;
+        this.spawnWalkDust();
       }
     } else if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
@@ -912,6 +985,7 @@ export class Player extends Entity {
       if (this.isWalking) {
         const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
         this.walkTime += (distanceMoved / this.strideLength) * Math.PI * 2;
+        this.spawnWalkDust();
       }
     }
   }
@@ -1111,7 +1185,9 @@ export class Player extends Entity {
     if (this.mode !== "space") return;
 
     const lastMove = state.lastMouseMoveTime || 0;
-    this.mouseIdle = (Date.now() - lastMove) > this.mouseIdleThreshold;
+    const lastWheel = state.lastWheelTime || 0;
+    const recentlyScrolled = (Date.now() - lastWheel) < this.mouseWheelSuppressDuration;
+    this.mouseIdle = recentlyScrolled || (Date.now() - lastMove) > this.mouseIdleThreshold;
 
     if (this.mouseIdle) return; // facing stays whatever move() set
 
@@ -1181,7 +1257,7 @@ export class Player extends Entity {
   // canvas is baked at a higher resolution than that (see
   // initScaledAssets) so zooming in stays crisp.
   // ----------------------------
-  drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO) {
+  drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal = false) {
     const sprite = this.scaledParts[partKey];
     if (!sprite) return;
     const s = this.bodyScale;
@@ -1190,6 +1266,16 @@ export class Player extends Entity {
     const wy = offsetX * sinO + offsetY * cosO;
     ctx.translate(originPos.x + wx * s, originPos.y + wy * s);
     ctx.rotate(orientation + angle);
+    // Mirrors the sprite art itself (e.g. so a thumb baked into the
+    // artwork points the correct way after a rotation that swings the
+    // limb well outside its normal range of motion) — added AFTER the
+    // rotate above but BEFORE drawImage. Because it's applied here, the
+    // existing -jointX*s/-jointY*s offset below still correctly lands
+    // the joint at the origin with no separate adjustment needed: the
+    // flip mirrors the offset along with the art, and those two
+    // mirrored quantities still cancel out the same way they did
+    // unflipped.
+    if (flipHorizontal) ctx.scale(-1, 1);
     ctx.drawImage(sprite.canvas, -jointX * s, -jointY * s, sprite.displayWidth, sprite.displayHeight);
     ctx.restore();
   }
@@ -1213,11 +1299,30 @@ export class Player extends Entity {
     // mid-stride forever.
     const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
     const walkAngle = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
+
+    // sin(walkTime)^2 is 0 exactly when walkAngle itself is 0 (legs
+    // neutral, one passing through vertical — body at its highest) and
+    // 1 exactly when walkAngle is at its own extreme (legs maximally
+    // scissored apart — body at its lowest), naturally oscillating at
+    // TWICE walkAngle's frequency, matching that this happens once per
+    // EACH leg's neutral-to-spread swing, not once per full stride.
+    // Applied along (-sinO, cosO) — the character's own local "down"
+    // direction (toward whatever surface they're standing on) after
+    // the orientation rotation, not always world-+Y, since "down" can
+    // point any direction on a curved planet.
+    const walkBobT = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
+    const walkBobAmount = walkBobT * this.walkBobStrength;
+    originPos = new Vector2(
+      originPos.x + -sinO * walkBobAmount,
+      originPos.y + cosO * walkBobAmount
+    );
+
     const dirSign = this.facingDirection < 0 ? -1 : 1;
 
     let leftBootAngle = walkAngle;
     let rightBootAngle = -walkAngle;
     let leftArmAngle, rightArmAngle;
+    let rightArmFlipped = false;
 
     if (inMaze) {
       // No mouse/aim concept in the maze — both arms just sway
@@ -1249,10 +1354,21 @@ export class Player extends Entity {
     }
 
     if (!inMaze && !this.onSurface) {
-      // Simple in-flight pose: legs splayed. Right arm settles back to
-      // rest (walkAngle is 0 while airborne); left arm keeps aiming.
+      // Simple in-flight pose: legs splayed, and the non-blaster
+      // (right) arm raises up and slightly outward — angled, not
+      // straight up — rather than just hanging at the side, which is
+      // what happened before this: walkAngle (what normally drives its
+      // swing) evaluates to 0 while airborne, so it had nothing to
+      // move it. Reuses the same world-angle-then-convert approach the
+      // aiming arm already uses (worldAngleToLocalRotation) with a
+      // fixed "up and outward" target instead of the mouse/pull
+      // target, so the direction stays correct regardless of current
+      // body orientation or the left/right facing mirror.
       leftBootAngle = -0.7;
       rightBootAngle = 0.7;
+      const raisedWorldAngle = -Math.PI / 2 - (Math.PI * 0.75) * dirSign; // "up," tilted 135° AWAY from the blaster-arm side — sign flipped and magnitude increased from the previous +45°-toward-blaster version, per feedback
+      rightArmAngle = this.worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign);
+      rightArmFlipped = true; // mirrors the sprite art so the thumb (baked into the artwork) points toward the body instead of away from it at this large a rotation
     }
 
     this.drawLimb(ctx, 'leftboot', cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
@@ -1274,7 +1390,7 @@ export class Player extends Entity {
     }
 
     this.drawLimb(ctx, 'rightboot', cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
-    this.drawLimb(ctx, 'rightarm', cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(ctx, 'rightarm', cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO, rightArmFlipped);
 
     const headSprite = this.scaledParts.head;
     if (headSprite) {

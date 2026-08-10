@@ -23,11 +23,26 @@ import { RoundedRectPlanetoid } from './RoundedRectPlanetoid.js';
 export class SkyDomePlanetoid extends RoundedRectPlanetoid {
   constructor(x, y, options = {}) {
     const halfWidth = options.halfWidth ?? 2000;    // per the user's tuned defaults
-    const halfHeight = options.halfHeight ?? 30;    // thin — reads as a ground strip, not a block
+    const halfHeight = options.halfHeight ?? 32;    // full height 64 = 2x the ground tile's 32px, for pixel-perfect scaling (see drawBodyTexture below)
     const cornerRadius = options.cornerRadius ?? 0;
     const color = options.color ?? '#5c8a4a'; // grassy green ground, distinct from the original rect planet's tan
 
     super(x, y, halfWidth, halfHeight, cornerRadius, color);
+
+    // Grass sits ABOVE the metal base's own top edge and becomes the
+    // TRUE walking/gravity/landing surface — rather than updating every
+    // individual consumer of "where's the surface" (Player.js's
+    // walking code, CollisionSystem's landing check, game.js's
+    // JumpPlatform pillar height), this single adjustment covers all
+    // of them at once: they all ultimately derive their reference from
+    // this.halfHeight, so growing it by the grass layer's own
+    // thickness automatically pushes the true surface up to the top of
+    // the grass everywhere. The metal base (drawMetalBase,
+    // nearestBaseSurfacePoint) is the one thing that needs to actively
+    // COMPENSATE for this, since it should stay anchored exactly where
+    // it always was, not drift upward along with everything else.
+    this.grassHeight = options.grassHeight ?? 32; // matches drawGrassCap's own rendered tile height (16px source * 2x scale)
+    this.halfHeight += this.grassHeight;
 
     this.vel = new Vector2(0, 0);
     this.rotationAngle = 0;
@@ -44,6 +59,14 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     // GravitySystem.js and CollisionSystem.js.
     this.isSkyDome = true;
 
+    // Exempts this from RoundedRectPlanetoid's live directional
+    // sun-shading pass — that effect simulates lighting on a rocky,
+    // roughly spherical-reading surface, which doesn't suit a flat
+    // grass tile, and it would only ever hit this ground body, never
+    // JumpPlatform's separately-baked pillar underneath it, causing a
+    // visible brightness mismatch between the two.
+    this.noSunShading = true;
+
     // (gravity window is now bounded by the dome shell itself — see
     // isWithinGravityWindow below — rather than a fixed height above
     // the ground.)
@@ -54,6 +77,31 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     // flat base sitting right at the platform's top surface.
     this.domeRadiusX = options.domeRadiusX ?? halfWidth; // matches the platform's own width exactly, so the dome's base diameter lines up with the platform's edges rather than overhanging them
     this.domeRadiusY = options.domeRadiusY ?? halfWidth;
+    // Metal base's own vertical radius — a SIXTH of the dome's height.
+    // Stored once here rather than recomputed separately in
+    // drawMetalBase/nearestBaseSurfacePoint, so the visible shape and
+    // the actual collision shape can never drift out of sync with
+    // each other.
+    this.baseRadiusY = options.baseRadiusY ?? this.domeRadiusY / 6;
+    // Panel detailing on the metal base — a rim glow (tinted toward
+    // the dome's own light, suggesting reflected glass-light on the
+    // metal), horizontal panel-seam lines, and curved seams converging
+    // toward the base's own bottom-center point (like longitude lines
+    // on a globe). Deliberately no small indicator lights here, per
+    // explicit feedback.
+    this.baseGlowColor = options.baseGlowColor ?? '180, 210, 255';
+    this.baseLineColor = options.baseLineColor ?? '10, 10, 12';
+    this.baseHorizontalLineCount = options.baseHorizontalLineCount ?? 3;
+    this.baseSeamCount = options.baseSeamCount ?? 6;
+    // Subtle light edge highlight — above each horizontal line, right
+    // of each curved seam — simulating a raised panel edge catching
+    // light, alongside the existing dark seam line itself.
+    this.baseHighlightColor = options.baseHighlightColor ?? '210, 220, 235';
+    // How far the seams converge toward center by the bottom, as a
+    // fraction of their starting distance from center — 1 = fully
+    // converge to a single point (the original look), lower values
+    // spread the endpoints out instead of all meeting at one spot.
+    this.baseSeamConvergence = options.baseSeamConvergence ?? 0.35;
     this.domeFillColor = options.domeFillColor ?? 'rgba(130, 196, 255, 0.9)'; // 25% more saturated than the original (141,195,244), via HSL conversion
     this.domeRimColor = options.domeRimColor ?? 'rgba(75, 150, 225, 0.85)'; // deeper blue at the rim, for the glass-gradient effect below — also 25% more saturated than the original (90,150,210)
     this.domeOutlineColor = options.domeOutlineColor ?? '#ffffff';
@@ -81,14 +129,20 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     // inner glow" reads as the same energy, not a separately-tinted one.
     this.domeInnerGlowReach = options.domeInnerGlowReach ?? 40; // how far inward, in world units, the inner glow extends from the edge
 
-    // Hex grid overlay — baked ONCE (see createOffscreen below) rather
-    // than redrawn every frame. A grid covering a dome this size works
-    // out to 800+ individual hexagons; since the dome never moves or
-    // rotates, the pattern itself never changes, so re-stroking all of
-    // them 60 times a second would be pure waste.
+    // Hex grid overlay — a small repeating tile baked ONCE (see
+    // createOffscreen below) and tiled across the dome at draw time
+    // with a slowly-shifting offset, rather than re-stroking ~800+
+    // individual hexagons freshly every frame — still cheap regardless
+    // of the scroll animation, since it's just a handful of image
+    // blits either way.
     this.domeHexSize = options.domeHexSize ?? 60; // hexagon "radius," center to vertex
     this.domeHexColor = options.domeHexColor ?? '255,255,255';
     this.domeHexOpacity = options.domeHexOpacity ?? 0.12; // "very transparent," per the brief
+    // World units per millisecond the background grid drifts —
+    // positive drifts LEFT (see drawScrollingHexTile's own comment for
+    // why positive means left). Small and slow on purpose.
+    this.domeHexScrollSpeed = options.domeHexScrollSpeed ?? 0.006;
+    this.domeHexLineWidth = options.domeHexLineWidth ?? 1;
 
     // Foreground pass gets its OWN, larger hex grid — bigger hexagons
     // read as closer to the camera (the near surface of the glass,
@@ -99,14 +153,19 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     // background grid is ever retuned.
     this.domeForegroundHexSize = options.domeForegroundHexSize ?? this.domeHexSize * 1.8;
     this.domeForegroundHexOpacity = options.domeForegroundHexOpacity ?? Math.min(1, this.domeHexOpacity * 2.5); // clearer/less transparent than the background grid, per the brief — a multiplier rather than an independent fixed value, so it stays proportional if the background's opacity is ever retuned
+    // Negative — the opposite sign of domeHexScrollSpeed — so the
+    // foreground drifts RIGHT while the background drifts left, per
+    // the brief.
+    this.domeForegroundHexScrollSpeed = options.domeForegroundHexScrollSpeed ?? -0.01;
+    this.domeForegroundHexLineWidth = options.domeForegroundHexLineWidth ?? 1.5;
 
     // Foreground pass's tint/outline opacity — pulled out as proper
     // tunables since these get adjusted often while dialing in the
     // look (this replaces what used to be hardcoded 0.12/0.4 values
     // directly in drawForegroundGlass). Default tint now matches the
     // 0.4 already in use.
-    this.domeForegroundTintOpacity = options.domeForegroundTintOpacity ?? 0.6;
-    this.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity ?? 0.6;
+    this.domeForegroundTintOpacity = options.domeForegroundTintOpacity ?? 0.8;
+    this.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity ?? 0.2;
 
     // How much the ENTIRE foreground pass (tint, hex grid, outline —
     // all together) scales with current camera zoom. Zoomed IN, less
@@ -164,6 +223,34 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     }
   }
 
+  // The TRUE walking/gravity/landing surface — the top of the grass.
+  // This is what this.halfHeight already measures out to (see the
+  // constructor's own comment on why it was grown by grassHeight), so
+  // this getter exists purely so every call site can read intent
+  // directly ("the true surface") instead of re-deriving
+  // `this.pos.y - this.halfHeight` from memory each time, which used
+  // to be spread across half a dozen methods with no way to tell at a
+  // glance whether a given one had (correctly, or incorrectly)
+  // remembered to add grassHeight back on top.
+  get trueSurfaceY() {
+    return this.pos.y - this.halfHeight;
+  }
+
+  // The dome/metal-base's shared ORIGINAL anchor position — where the
+  // dome's own shell and the metal base's own top edge both live,
+  // unmoved from before the grass layer was introduced. Everything
+  // that needs to stay anchored at the pre-grass position (the dome's
+  // visible shape and collision shell, the metal base's visible shape
+  // and collision shell) reads this getter; everything that needs the
+  // NEW, grass-adjusted surface (gravity gate, walking, the grass cap
+  // itself) reads trueSurfaceY above instead. Having both as named
+  // getters is what makes that distinction legible at each call site,
+  // rather than a bare `+ this.grassHeight` whose presence or absence
+  // was easy to get wrong when duplicated by hand across methods.
+  get domeAnchorY() {
+    return this.trueSurfaceY + this.grassHeight;
+  }
+
   // True if a world point falls within the rectangular "capture zone"
   // directly above the platform's top surface — the ONLY region this
   // planet ever pulls from or can be landed on from. No rotation
@@ -175,11 +262,222 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
   // a ring all around them, but actively misleading here, where
   // gravity only ever works within the small rectangular window
   // directly above the surface (see isWithinGravityWindow).
+  // Overrides the inherited rocky-texture-plus-tint body with the
+  // ground.png tile (32x32) instead, repeated pixel-perfectly across
+  // the platform's width only — no vertical tiling, since the tile's
+  // own 32px height is scaled to match the platform's FULL height
+  // exactly (which is why the constructor defaults halfHeight to a
+  // clean multiple of 32 — that's what keeps this scale factor a whole
+  // number). imageSmoothingEnabled = false is what actually makes this
+  // "pixel perfect": with a non-integer scale, the browser would
+  // interpolate/blur the source pixels when stretching; with a whole-
+  // number scale and smoothing off, each source pixel becomes a clean
+  // NxN block with no blur at all.
+  // Intentionally empty. This used to tile the grass ground.png tile
+  // across the platform's rectangle; that's now replaced entirely by
+  // the metal half-ellipse base (see drawMetalBase below). The
+  // underlying halfWidth/halfHeight rectangle still exists and is
+  // still exactly what all collision/gravity/landing/walking physics
+  // uses — it's simply no longer drawn, the same relationship the
+  // dome's own gravity-window rectangle already has with the visible
+  // glass ellipse above it (a real collision concept with no matching
+  // visible rectangle of its own).
+  drawBodyTexture(bodyCtx, w, h) {}
+
+  // Bottom half-ellipse "base" — dark gray metal, replacing the old
+  // rectangular grass-tiled ground body. Mirrors the dome's own shape
+  // (a matching ellipse, curved DOWNWARD instead of upward), its flat
+  // top sitting at the same reference line the dome's own flat base
+  // sits at, sized via baseRadiusY (a sixth of the dome's own height).
+  // Now has REAL matching collision too — see nearestBaseSurfacePoint
+  // below, used by CollisionSystem the same way nearestDomeSurfacePoint
+  // is for the dome's own shell.
+  drawMetalBase() {
+    const ctx = state.ctx;
+    const cx = this.pos.x;
+    const cy = this.domeAnchorY; // stays anchored at the ORIGINAL, pre-grass position — see nearestBaseSurfacePoint's identical comment
+    const baseRadiusX = this.halfWidth;
+    const baseRadiusY = this.baseRadiusY;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI); // LOWER half (right -> bottom -> left)
+    ctx.closePath(); // needed for fill's shape to be correct — unlike the outline stroke below, closing a fill path is harmless
+
+    const grad = ctx.createLinearGradient(cx, cy, cx, cy + baseRadiusY);
+    grad.addColorStop(0, '#8a8a92');   // brighter highlight than before, for more contrast
+    grad.addColorStop(0.5, '#333338'); // dark gray
+    grad.addColorStop(1, '#050506');   // near-pure black toward the underside
+
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    // Inner glow near the top rim, where the metal meets the grass/
+    // dome above — same layered-inset-stroke technique as the dome's
+    // own inner glow, tinted toward the dome's light color so it reads
+    // as reflected glass-light rather than an unrelated color.
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.closePath();
+    ctx.clip();
+    const glowLayers = [
+      { inset: 0, alpha: 0.12 },
+      { inset: baseRadiusY * 0.15, alpha: 0.08 },
+      { inset: baseRadiusY * 0.3, alpha: 0.04 }
+    ];
+    for (const layer of glowLayers) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX - layer.inset, baseRadiusY - layer.inset, 0, 0, Math.PI);
+      ctx.lineWidth = baseRadiusY * 0.2;
+      ctx.strokeStyle = `rgba(${this.baseGlowColor}, ${layer.alpha})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Horizontal panel-seam lines — plain straight strokes, clipped to
+    // the ellipse so they naturally narrow with its curve at each
+    // depth rather than needing their own width calculation. Each dark
+    // line gets a subtle light highlight just above it, simulating a
+    // raised panel edge catching light.
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.closePath();
+    ctx.clip();
+    const highlightOffset = 2;
+    ctx.lineWidth = 2;
+    for (let i = 1; i <= this.baseHorizontalLineCount; i++) {
+      const t = i / (this.baseHorizontalLineCount + 1);
+      const lineY = cy + baseRadiusY * t;
+
+      ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.15)`;
+      ctx.beginPath();
+      ctx.moveTo(cx - baseRadiusX, lineY - highlightOffset);
+      ctx.lineTo(cx + baseRadiusX, lineY - highlightOffset);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.5)`;
+      ctx.beginPath();
+      ctx.moveTo(cx - baseRadiusX, lineY);
+      ctx.lineTo(cx + baseRadiusX, lineY);
+      ctx.stroke();
+    }
+
+    // Curved seams — evenly-spaced starting points along the flat top
+    // edge, each a quadratic curve whose control point shares the
+    // starting X (so it starts moving straight down before bending
+    // inward). Deliberately do NOT all converge to the exact same
+    // bottom-center point — each seam's endpoint is only pulled toward
+    // center by baseSeamConvergence, spreading them out along the
+    // bottom instead of meeting at one spot. Each dark seam gets a
+    // subtle light highlight just to its right.
+    const bottomY = cy + baseRadiusY;
+    for (let i = 1; i < this.baseSeamCount; i++) {
+      const t = i / this.baseSeamCount;
+      const startX = cx - baseRadiusX + t * (baseRadiusX * 2);
+      const endX = cx + (startX - cx) * (1 - this.baseSeamConvergence);
+      const controlY = cy + baseRadiusY * 0.6;
+
+      ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.12)`;
+      ctx.beginPath();
+      ctx.moveTo(startX + highlightOffset, cy);
+      ctx.quadraticCurveTo(startX + highlightOffset, controlY, endX + highlightOffset, bottomY);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.4)`;
+      ctx.beginPath();
+      ctx.moveTo(startX, cy);
+      ctx.quadraticCurveTo(startX, controlY, endX, bottomY);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    // Thin outline for definition. Deliberately NO closePath() here —
+    // same reasoning as the dome's own outline (see drawDome's
+    // comment): stroke() doesn't auto-close a path, and closing it
+    // would draw an unwanted straight line across the flat top edge.
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#1e1e20';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // A single row of grass.png (32x16, scaled 2x = 64x32 world units
+  // per tile — a fixed 2x, matching the ground tile's own scale,
+  // rather than the "derive scale from height" approach used
+  // elsewhere, since this is a thin cap layer, not something meant to
+  // exactly fill a specific height), tiled horizontally across the
+  // platform's full width, extending UPWARD from the flat top line
+  // into the dome's own open interior — where the player actually
+  // stands — rather than downward into the metal base's own territory.
+  // Deliberately NOT clipped to the metal base's ellipse (an earlier
+  // version was, which was the actual bug: it made the grass read as
+  // sitting on top of / part of the metal structure, instead of being
+  // its own distinct ground layer within the dome). A plain
+  // rectangular clip is enough here — at this shallow a depth the dome
+  // is already at its full width, so there's no curve to worry about
+  // clipping against.
+  //
+  // JumpPlatform's own pillar terminates at this exact same flat line
+  // (its groundY option) — the pillar's bottom lands right where this
+  // grass layer's own BOTTOM edge is, so the two should still connect
+  // correctly with no changes needed there.
+  drawGrassCap() {
+    const ctx = state.ctx;
+    const grassImg = state.grassTexture;
+    if (!grassImg || !grassImg.complete) return;
+
+    // trueSurfaceY is exactly the grass layer's own top edge.
+    const grassTopY = this.trueSurfaceY;
+    const scale = 2;
+    const tileW = 32 * scale;
+    const fullWidth = this.halfWidth * 2;
+    const startX = this.pos.x - this.halfWidth;
+
+    // Mathematically, filling exactly grassHeight lands precisely on
+    // the metal base's own compensated top edge (see drawMetalBase/
+    // nearestBaseSurfacePoint) with no gap. In practice, canvas's own
+    // subpixel rounding when the whole scene is scaled by the current
+    // zoom can still leave a hairline seam there at certain zoom
+    // levels, even though the two shapes share the exact same
+    // coordinate. A small, fixed overlap beyond the true height —
+    // extending slightly into the metal base's own territory — costs
+    // nothing (grass is drawn AFTER the metal base, so it simply
+    // covers this sliver) and reliably eliminates the seam regardless
+    // of zoom, rather than depending on exact edge alignment.
+    const seamOverlap = 2;
+    const drawHeight = this.grassHeight + seamOverlap;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(startX, grassTopY, fullWidth, drawHeight);
+    ctx.clip();
+
+    ctx.imageSmoothingEnabled = false;
+    for (let x = 0; x < fullWidth; x += tileW) {
+      ctx.drawImage(grassImg, startX + x, grassTopY, tileW, drawHeight);
+    }
+    ctx.restore();
+  }
+
   createOffscreen() {
     super.createOffscreen();
     this.ringCanvas = null;
-    this.hexGridCanvas = this.bakeHexGridOverlay(this.domeHexSize, this.domeHexOpacity);
-    this.hexGridForegroundCanvas = this.bakeHexGridOverlay(this.domeForegroundHexSize, this.domeForegroundHexOpacity);
+    const bgTile = this.bakeHexGridTile(this.domeHexSize, this.domeHexOpacity, this.domeHexLineWidth);
+    this.hexGridCanvas = bgTile.canvas;
+    this.hexGridTileW = bgTile.tileW;
+    this.hexGridTileH = bgTile.tileH;
+
+    const fgTile = this.bakeHexGridTile(this.domeForegroundHexSize, this.domeForegroundHexOpacity, this.domeForegroundHexLineWidth);
+    this.hexGridForegroundCanvas = fgTile.canvas;
+    this.hexGridForegroundTileW = fgTile.tileW;
+    this.hexGridForegroundTileH = fgTile.tileH;
   }
 
   // Draws one hexagon outline (stroke only, not filled — reads as a
@@ -197,52 +495,70 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     ctx.stroke();
   }
 
-  // Bakes a full hex grid, clipped to the dome's own silhouette, into
-  // a small offscreen canvas sized to just the dome's upper-half
-  // bounding box (domeRadiusX*2 wide, domeRadiusY tall — no need to
-  // bake the lower half of the ellipse, since the dome shape only ever
-  // uses the upper half). Blitted directly at (boxX, boxY) — a single
-  // cheap image copy instead of re-stroking ~800+ hexagons 60 times a
-  // second. Parameterized by hexSize/opacity (rather than always
-  // reading this.domeHexSize) and returns the canvas rather than
-  // storing it directly, so this one method can bake BOTH the
-  // background grid and the foreground grid's larger hexagons, called
-  // twice from createOffscreen, instead of duplicating this logic.
-  bakeHexGridOverlay(hexSize, opacity) {
-    const w = this.domeRadiusX * 2;
-    const h = this.domeRadiusY;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const bctx = canvas.getContext('2d');
-
-    // Ellipse's true center sits at the BASE of this canvas (local
-    // y = h), so the UPPER half (angle π to 2π) falls entirely within
-    // this canvas's bounds — matches how the dome itself is drawn.
-    const localCx = w / 2, localCy = h;
-    bctx.beginPath();
-    bctx.ellipse(localCx, localCy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-    bctx.closePath();
-    bctx.clip();
-
-    bctx.strokeStyle = `rgba(${this.domeHexColor}, ${opacity})`;
-    bctx.lineWidth = 1;
-
+  // Bakes a SMALL, seamlessly-repeating hex tile — NOT clipped to the
+  // dome shape (clipping happens separately at draw time, see
+  // drawScrollingHexTile), since this tile needs to tile/repeat across
+  // the dome's area with a scrolling offset for the animation. The hex
+  // grid pattern has a true period of exactly `hexWidth` horizontally
+  // and `2 * hexHeightStep` vertically (two rows, since alternating
+  // row offsets need two rows to complete one full cycle) — baking a
+  // canvas of EXACTLY that size, with hexagons drawn out to a small
+  // margin beyond its edges (so anything crossing a boundary still
+  // gets drawn), produces a tile that lines up perfectly with itself
+  // when repeated, with no visible seam. Parameterized by hexSize/
+  // opacity so this one method bakes both the background grid and the
+  // foreground grid's larger hexagons, called twice from
+  // createOffscreen, instead of duplicating this logic.
+  bakeHexGridTile(hexSize, opacity, lineWidth = 1) {
     const hexWidth = Math.sqrt(3) * hexSize;
     const hexHeightStep = hexSize * 1.5;
-    const endRow = Math.ceil(h / hexHeightStep) + 1;
-    const endCol = Math.ceil(w / hexWidth) + 1;
+    const tileW = hexWidth;
+    const tileH = hexHeightStep * 2;
 
-    for (let row = -1; row <= endRow; row++) {
+    const canvas = document.createElement('canvas');
+    canvas.width = tileW;
+    canvas.height = tileH;
+    const bctx = canvas.getContext('2d');
+    bctx.strokeStyle = `rgba(${this.domeHexColor}, ${opacity})`;
+    bctx.lineWidth = lineWidth;
+
+    for (let row = -1; row <= 2; row++) {
       const y = row * hexHeightStep;
       const rowOffset = (row % 2 !== 0) ? hexWidth / 2 : 0;
-      for (let col = -1; col <= endCol; col++) {
+      for (let col = -1; col <= 2; col++) {
         const x = col * hexWidth + rowOffset;
         this.strokeHexagon(bctx, x, y, hexSize);
       }
     }
 
-    return canvas;
+    return { canvas, tileW, tileH };
+  }
+
+  // Draws a pre-baked, seamlessly-repeating hex tile across the dome's
+  // area with a horizontal scroll offset based on elapsed real time —
+  // shared by both the background (drawDome) and foreground
+  // (drawForegroundGlass) hex layers, just with different tile
+  // canvases/speeds. Still just a handful of cheap image blits per
+  // frame regardless of the animation, same as the static version this
+  // replaced. Positive scrollSpeed drifts content leftward, negative
+  // drifts it rightward (see the two call sites for why each uses the
+  // sign it does).
+  drawScrollingHexTile(ctx, cx, cy, boxX, boxY, boxW, tileCanvas, tileW, tileH, scrollSpeed) {
+    if (!tileCanvas) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+
+    const scrollOffset = ((Date.now() * scrollSpeed) % tileW + tileW) % tileW; // double-mod keeps this positive regardless of sign/timing
+    const startX = boxX - scrollOffset - tileW;
+    for (let y = boxY - tileH; y < cy; y += tileH) {
+      for (let x = startX; x < boxX + boxW + tileW; x += tileW) {
+        ctx.drawImage(tileCanvas, x, y);
+      }
+    }
+    ctx.restore();
   }
 
   // True for any point above the ground's own surface AND inside the
@@ -258,16 +574,62 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
   // nearestDomeSurfacePoint (nx²+ny² <= 1 in the dome's own normalized
   // space), just without needing the exact boundary point/normal.
   isWithinGravityWindow(worldX, worldY) {
-    const topY = this.pos.y - this.halfHeight;
-    if (worldY > topY) return false; // never applies below the ground's own surface — approaching from below just flies past, same as before
+    if (worldY > this.trueSurfaceY) return false; // never applies below the ground's own surface — approaching from below just flies past, same as before
 
+    // The dome's own shell stays anchored at its ORIGINAL, pre-grass
+    // position (domeAnchorY, not trueSurfaceY) — the grass is a floor
+    // WITHIN the dome's interior, not something that pushes the dome's
+    // own curved shell upward too.
     const nx = (worldX - this.pos.x) / this.domeRadiusX;
-    const ny = (worldY - topY) / this.domeRadiusY;
+    const ny = (worldY - this.domeAnchorY) / this.domeRadiusY;
     return (nx * nx + ny * ny) <= 1;
   }
 
-  // Nearest point on the DOME's curved shell to a world point, its
-  // true elliptical outward normal, and the distance to it — a
+  // Nearest point on an ellipse to a world point, its true elliptical
+  // outward normal, and the distance to it — the shared math behind
+  // both nearestDomeSurfacePoint and nearestBaseSurfacePoint below,
+  // which used to each carry their own ~25-line copy of this,
+  // differing only in which radii they used and which direction their
+  // degenerate (dead-center) fallback pushed. Parameterized by center/
+  // radii/fallback so both are now just a few lines expressing what's
+  // actually different between them, with the math itself living in
+  // exactly one place.
+  //
+  // Uses the standard normalized-space approximation for nearest point
+  // on an ellipse (scale into a unit circle, solve there, scale back) —
+  // exact when radiusX equals radiusY, and a good approximation
+  // otherwise.
+  nearestEllipseSurfacePoint(centerX, centerY, radiusX, radiusY, worldX, worldY, fallbackDirY) {
+    const lx = worldX - centerX, ly = worldY - centerY;
+    const nx = lx / radiusX, ny = ly / radiusY;
+    const nDist = Math.sqrt(nx * nx + ny * ny);
+
+    let blx, bly;
+    if (nDist < 1e-6) {
+      // Degenerate: essentially at the ellipse's own center — push
+      // toward fallbackDirY (e.g. -1 = up for the dome, +1 = down for
+      // the base) as a reasonable default rather than dividing by
+      // (near) zero.
+      blx = 0;
+      bly = fallbackDirY * radiusY;
+    } else {
+      blx = (nx / nDist) * radiusX;
+      bly = (ny / nDist) * radiusY;
+    }
+
+    const boundaryX = centerX + blx, boundaryY = centerY + bly;
+    // True elliptical outward normal — gradient of (x/rx)^2+(y/ry)^2=1
+    // at the boundary point, not the cruder "point minus center"
+    // shortcut (which is only exact for a true circle).
+    const normal = new Vector2(blx / (radiusX * radiusX), bly / (radiusY * radiusY)).normalize();
+
+    const dx = worldX - boundaryX, dy = worldY - boundaryY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    return { point: new Vector2(boundaryX, boundaryY), normal, distance };
+  }
+
+  // Nearest point on the DOME's curved shell to a world point — a
   // completely separate surface from nearestSurfacePoint (the
   // platform body, inherited from RoundedRectPlanetoid). Deliberately
   // kept separate rather than folded into nearestSurfacePoint: that
@@ -280,48 +642,32 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
   // is present via `typeof x.nearestDomeSurfacePoint === 'function'`
   // rather than a separate flag, so nothing needs updating elsewhere
   // if a future planet type adds a dome the same way.
-  //
-  // Uses the standard normalized-space approximation for nearest point
-  // on an ellipse (scale into a unit circle, solve there, scale back) —
-  // exact when domeRadiusX equals domeRadiusY (the current default),
-  // and a good approximation otherwise.
   nearestDomeSurfacePoint(worldX, worldY) {
-    const ex = this.pos.x;
-    const ey = this.pos.y - this.halfHeight; // dome's ellipse center = the platform's own top surface line
-    const rx = this.domeRadiusX, ry = this.domeRadiusY;
+    // The dome's own shell stays anchored at its ORIGINAL, pre-grass
+    // position (domeAnchorY) — same as the metal base (see
+    // nearestBaseSurfacePoint's identical comment).
+    return this.nearestEllipseSurfacePoint(this.pos.x, this.domeAnchorY, this.domeRadiusX, this.domeRadiusY, worldX, worldY, -1);
+  }
 
-    const lx = worldX - ex, ly = worldY - ey;
-    const nx = lx / rx, ny = ly / ry;
-    const nDist = Math.sqrt(nx * nx + ny * ny);
-
-    let blx, bly;
-    if (nDist < 1e-6) {
-      // Degenerate: essentially at the ellipse's own center — push
-      // straight up as a reasonable default rather than dividing by
-      // (near) zero.
-      blx = 0;
-      bly = -ry;
-    } else {
-      blx = (nx / nDist) * rx;
-      bly = (ny / nDist) * ry;
-    }
-
-    const boundaryX = ex + blx, boundaryY = ey + bly;
-    // True elliptical outward normal — gradient of (x/rx)^2+(y/ry)^2=1
-    // at the boundary point, not the cruder "point minus center"
-    // shortcut (which is only exact for a true circle).
-    const normal = new Vector2(blx / (rx * rx), bly / (ry * ry)).normalize();
-
-    const dx = worldX - boundaryX, dy = worldY - boundaryY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    return { point: new Vector2(boundaryX, boundaryY), normal, distance };
+  // Same underlying math as nearestDomeSurfacePoint above, mirrored
+  // for the metal base's LOWER ellipse instead of the dome's upper
+  // one. Used by CollisionSystem.js's handleImmovableCollisions/
+  // handlePlanetAsteroidCollisions for anything approaching from
+  // BELOW the platform's flat line (mv.pos.y > topY), the same way the
+  // dome version is used for anything approaching from above — giving
+  // planetoids/asteroids real curved collision against the base's true
+  // visible shape instead of the old flat rectangle underneath it.
+  nearestBaseSurfacePoint(worldX, worldY) {
+    // The metal base's own position needs to stay anchored at
+    // domeAnchorY (the ORIGINAL, pre-grass position), not drift upward
+    // along with the true walking surface.
+    return this.nearestEllipseSurfacePoint(this.pos.x, this.domeAnchorY, this.halfWidth, this.baseRadiusY, worldX, worldY, 1);
   }
 
   drawDome() {
     const ctx = state.ctx;
     const cx = this.pos.x;
-    const cy = this.pos.y - this.halfHeight; // flat base sits right at the platform's top surface
+    const cy = this.domeAnchorY; // dome's own visible shape stays anchored at its original, pre-grass position, matching nearestDomeSurfacePoint
 
     ctx.save();
     ctx.beginPath();
@@ -390,13 +736,11 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     }
     ctx.restore();
 
-    // Hex grid overlay — pre-baked (see bakeHexGridOverlay), so this is
-    // just a single cheap image blit, not hundreds of live strokes.
-    // The baked image is already shaped to the dome's silhouette (it
-    // was clipped at bake time), so no additional clip is needed here.
-    if (this.hexGridCanvas) {
-      ctx.drawImage(this.hexGridCanvas, boxX, boxY);
-    }
+    // Hex grid overlay — pre-baked as a small repeating tile (see
+    // bakeHexGridTile), tiled across the dome with a slowly-shifting
+    // offset for the scroll effect. Still just a handful of cheap
+    // image blits per frame regardless of the animation.
+    this.drawScrollingHexTile(ctx, cx, cy, boxX, boxY, boxW, this.hexGridCanvas, this.hexGridTileW, this.hexGridTileH, this.domeHexScrollSpeed);
 
     // Outer glow — bleeds OUTWARD from the outline into the
     // surrounding space, rather than the line just stopping abruptly.
@@ -424,11 +768,16 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
 
     // Outline — drawn separately, after restore, so the fade above
     // (and its composite mode) can't affect it; stays crisp and fully
-    // opaque regardless of the fill's fade.
+    // opaque regardless of the fill's fade. Deliberately NO closePath()
+    // here (unlike the fill/clip paths above, where it's harmless) —
+    // stroke() doesn't auto-close a path the way fill()/clip() do, so
+    // closing it here would stroke the flat straight line back across
+    // the base too, which is exactly the unwanted line at the dome/
+    // ground seam this fixes. Leaving the path open means only the
+    // curved arc itself gets stroked.
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-    ctx.closePath();
     ctx.lineWidth = this.domeOutlineWidth;
     ctx.strokeStyle = this.domeOutlineColor;
     ctx.stroke();
@@ -508,6 +857,8 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
 
   draw() {
     this.drawDome(); // background layer, drawn first so the platform body renders on top of it
+    this.drawMetalBase();
+    this.drawGrassCap();
     super.draw();
   }
 
@@ -526,7 +877,13 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
   drawForegroundGlass() {
     const ctx = state.ctx;
     const cx = this.pos.x;
-    const cy = this.pos.y - this.halfHeight;
+    // Must match drawDome's own domeAnchorY exactly, or this pass's
+    // clip region (meant to cover everything inside the dome,
+    // including the grass) would drift out of alignment with what's
+    // actually being drawn underneath it. Reading the same getter both
+    // places is what guarantees that now, rather than two separately
+    // hand-derived expressions that happened to agree.
+    const cy = this.domeAnchorY;
 
     // How much of the foreground pass shows right now, based on
     // current zoom — see domeForegroundZoomReference/Floor's comment
@@ -555,21 +912,25 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
 
     // Larger hexagons than the background grid — reads as closer to
     // the camera, matching the whole point of this being a separate,
-    // later-drawn "near glass" pass. Pre-baked (see createOffscreen),
-    // so still just a cheap image blit — globalAlpha here scales the
-    // already-baked opacity down further for the zoom effect, rather
-    // than needing to re-bake anything per frame.
-    if (this.hexGridForegroundCanvas) {
-      ctx.save();
-      ctx.globalAlpha = zoomFactor;
-      ctx.drawImage(this.hexGridForegroundCanvas, cx - this.domeRadiusX, cy - this.domeRadiusY);
-      ctx.restore();
-    }
+    // later-drawn "near glass" pass. Pre-baked as a small repeating
+    // tile (see bakeHexGridTile), tiled with a slowly-shifting offset
+    // for the scroll effect (opposite direction from the background
+    // grid) — still just a handful of cheap image blits per frame.
+    // globalAlpha here scales the already-baked opacity down further
+    // for the zoom effect; set BEFORE the call since
+    // drawScrollingHexTile's own internal save/restore (for its clip)
+    // won't itself reset an alpha set before it was called, so it's
+    // reset explicitly afterward instead.
+    ctx.globalAlpha = zoomFactor;
+    this.drawScrollingHexTile(ctx, cx, cy, cx - this.domeRadiusX, cy - this.domeRadiusY, this.domeRadiusX * 2, this.hexGridForegroundCanvas, this.hexGridForegroundTileW, this.hexGridForegroundTileH, this.domeForegroundHexScrollSpeed);
+    ctx.globalAlpha = 1;
 
+    // Same reasoning as drawDome's outline: no closePath() here,
+    // since stroke() doesn't auto-close a path and closing it would
+    // draw the unwanted flat line across the base too.
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
-    ctx.closePath();
     ctx.globalAlpha = this.domeForegroundOutlineOpacity * zoomFactor;
     ctx.lineWidth = this.domeOutlineWidth;
     ctx.strokeStyle = this.domeOutlineColor;
