@@ -69,6 +69,17 @@ let gamepadHeldRight = false;
 let gamepadHeldZoomIn = false;
 let gamepadHeldZoomOut = false;
 
+// Shared by both R1 and L1 below (see their own comment) — auto-enters
+// V.A.T.S. per state.vatsAutoEnterOnLock's own setting (see game.js's
+// comment on that flag for the reasoning), gated the same way
+// Triangle's own handler is: only makes sense in "space" mode, and
+// only actually needs to do anything if V.A.T.S. isn't already active.
+function maybeAutoEnterVats() {
+  if (state.vatsAutoEnterOnLock && !state.vatsActive && state.player && state.player.mode === "space") {
+    state.vatsActive = true;
+  }
+}
+
 export function pollGamepad() {
   const gamepads = navigator.getGamepads();
   // Just the first connected gamepad — this game has no multiplayer or
@@ -195,14 +206,23 @@ export function pollGamepad() {
   // TargetLock.js's selectNextLockTarget/selectPreviousLockTarget),
   // neither is a hold-to-lock button. L1 is the mirror of R1 — in the
   // common case, pressing one then the other undoes the first press.
+  // Each also tries to auto-enter V.A.T.S. first (see
+  // maybeAutoEnterVats above) — collapses "Triangle, then R1/L1, then
+  // L2, then Triangle again, then R1/L1, then L2..." down to just
+  // "R1/L1, then L2, then R1/L1, then L2...", since wanting to target
+  // something and wanting the world to slow down to target it are
+  // really the same intent, not two separate gestures — a no-op if
+  // state.vatsAutoEnterOnLock is off or V.A.T.S. is already active.
   const r1Pressed = gp.buttons[BUTTON_R1]?.pressed || false;
   if (r1Pressed && !lastR1Pressed && state.player) {
+    maybeAutoEnterVats();
     state.player.tryLockTargetNext();
   }
   lastR1Pressed = r1Pressed;
 
   const l1Pressed = gp.buttons[BUTTON_L1]?.pressed || false;
   if (l1Pressed && !lastL1Pressed && state.player) {
+    maybeAutoEnterVats();
     state.player.tryLockTargetPrevious();
   }
   lastL1Pressed = l1Pressed;

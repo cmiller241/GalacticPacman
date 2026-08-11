@@ -5633,6 +5633,11 @@
   var gamepadHeldRight = false;
   var gamepadHeldZoomIn = false;
   var gamepadHeldZoomOut = false;
+  function maybeAutoEnterVats() {
+    if (state.vatsAutoEnterOnLock && !state.vatsActive && state.player && state.player.mode === "space") {
+      state.vatsActive = true;
+    }
+  }
   function pollGamepad() {
     const gamepads = navigator.getGamepads();
     const gp = Array.from(gamepads).find((g) => g);
@@ -5711,11 +5716,13 @@
     state.gamepadRunHeld = gp.buttons[BUTTON_SQUARE]?.pressed || false;
     const r1Pressed = gp.buttons[BUTTON_R1]?.pressed || false;
     if (r1Pressed && !lastR1Pressed && state.player) {
+      maybeAutoEnterVats();
       state.player.tryLockTargetNext();
     }
     lastR1Pressed = r1Pressed;
     const l1Pressed = gp.buttons[BUTTON_L1]?.pressed || false;
     if (l1Pressed && !lastL1Pressed && state.player) {
+      maybeAutoEnterVats();
       state.player.tryLockTargetPrevious();
     }
     lastL1Pressed = l1Pressed;
@@ -5773,6 +5780,7 @@
   state.timeScale = 1;
   state.timeScaleTarget = 1;
   state.vatsActive = false;
+  state.vatsAutoEnterOnLock = true;
   var VATS_TIME_SCALE = 0.05;
   state.vatsTimeScale = VATS_TIME_SCALE;
   var VATS_EASE_RATE = 0.12;
