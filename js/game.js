@@ -94,6 +94,14 @@ const ZOOM_EASE_SNAP_THRESHOLD = 0.01; // once this close to the target, just sn
 state.timeScale = 1;
 state.timeScaleTarget = 1;
 state.vatsActive = false;
+// Accessibility-style preference (see gamepadInput.js's R1/L1
+// handling): if true, pressing R1/L1 to cycle a lock target ALSO turns
+// V.A.T.S. on if it isn't already active, rather than requiring an
+// explicit Triangle press first. Flip to false to require Triangle
+// first, the original behavior. Doesn't change what Triangle itself
+// does either way — it's still always available to slow things down
+// and look around before committing to a lock.
+state.vatsAutoEnterOnLock = false;
 const VATS_TIME_SCALE = 0.05; // world speed while V.A.T.S. is active — near-freeze, not a dramatic-but-still-moving slowdown
 state.vatsTimeScale = VATS_TIME_SCALE; // exposed so VatsOverlay.js can compute a fade progress that matches the easing curve below, rather than snapping on/off out of sync with it
 const VATS_EASE_RATE = 0.12;
