@@ -22,12 +22,15 @@ class FireEmber {
     this.hue = 18 + Math.random() * 30; // orange-yellow range
   }
 
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.vx *= 0.97; // gentle drag, so embers slow rather than fly straight forever
-    this.vy *= 0.97;
-    this.life -= this.decay;
+  update(timeScale) {
+    this.x += this.vx * timeScale;
+    this.y += this.vy * timeScale;
+    // Math.pow for the drag decay — see Asteroid.js's identical
+    // reasoning for why an exponential per-frame rate needs to be
+    // exponentiated by timeScale, not just multiplied.
+    this.vx *= Math.pow(0.97, timeScale);
+    this.vy *= Math.pow(0.97, timeScale);
+    this.life -= this.decay * timeScale;
   }
 }
 
@@ -53,7 +56,7 @@ export class FireBar {
     // use) works without needing to know this is a FireBar at all.
     this.radius = this.blockRadius;
 
-    this.barLength = options.barLength ?? 250;       // how far fireballs extend from the block, on EACH side
+    this.barLength = options.barLength ?? 500;       // how far fireballs extend from the block, on EACH side
     this.numFireballs = options.numFireballs ?? 10;   // per side (so numFireballs*2 total — double-sided through the pivot)
     this.fireballRadius = options.fireballRadius ?? 15;
     this.rotationSpeed = options.rotationSpeed ?? 0.05; // radians/frame
@@ -70,17 +73,24 @@ export class FireBar {
   }
 
   update() {
-    this.angle += this.rotationSpeed;
+    const timeScale = state.timeScale;
+    this.angle += this.rotationSpeed * timeScale;
 
     const fireballs = this.getFireballPositions();
     for (const f of fireballs) {
-      if (Math.random() < this.emberSpawnChance) {
+      // Scaled so fewer embers spawn per REAL second while slowed —
+      // this loop still runs once per real frame regardless of
+      // timeScale (only how far things move per frame changes, not
+      // the frame rate itself), so without scaling this chance the
+      // spawn rate per real-second would stay exactly the same even
+      // while everything else visibly slows down.
+      if (Math.random() < this.emberSpawnChance * timeScale) {
         this.embers.push(new FireEmber(f.x, f.y));
       }
     }
 
     for (let i = this.embers.length - 1; i >= 0; i--) {
-      this.embers[i].update();
+      this.embers[i].update(timeScale);
       if (this.embers[i].life <= 0) {
         this.embers.splice(i, 1);
       }

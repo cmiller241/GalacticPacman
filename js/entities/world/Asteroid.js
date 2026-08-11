@@ -41,9 +41,17 @@ export class Asteroid extends Entity {
   }
 
   update() {
-    this.vel = this.vel.multiply(DRAG);
-    this.pos.add(this.vel);
-    this.angle += this.angularSpeed;
+    // Math.pow rather than a plain multiply for drag: DRAG is an
+    // exponential per-frame decay rate, so scaling it correctly by
+    // state.timeScale means raising it to that power, not multiplying
+    // it — otherwise the asteroid's velocity would decay at its normal,
+    // un-slowed rate even while its visible movement is slowed down,
+    // and it wouldn't actually resume at the same velocity once V.A.T.S.
+    // ends (see Player.js's applyPullForce for the fuller version of
+    // this same reasoning, applied to gravity/pull acceleration).
+    this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
+    this.pos.add(this.vel.clone().multiply(state.timeScale));
+    this.angle += this.angularSpeed * state.timeScale;
 
     // Bounce off walls
     if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }

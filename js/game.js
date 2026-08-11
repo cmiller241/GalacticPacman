@@ -19,10 +19,14 @@ import { createParticles } from './utils.js';
 import { Minimap } from './ui/Minimap.js';
 import { getCellKindLabel, getBeltPlanetoidCount } from './world/CellManifest.js';
 import { drawPullIndicator } from './effects/PullBeam.js';
+import { drawAimIndicator } from './effects/AimIndicator.js';
+import { drawLockOutline } from './effects/LockOutline.js';
+import { drawVatsOverlay } from './effects/VatsOverlay.js';
 import { cellCoordFor, updateActiveCells, CELL_CHECK_INTERVAL } from './setup/worldGen.js';
 import { initGame } from './setup/levelSetup.js';
 import { loadAssets } from './setup/assetLoading.js';
 import { attachInputHandlers } from './setup/inputHandlers.js';
+import { pollGamepad } from './setup/gamepadInput.js';
 
 // Setup canvas and ctx
 state.canvas = document.getElementById('gameCanvas');
@@ -67,6 +71,33 @@ state.preMazeZoom = state.zoom;
 let previousPlayerMode = null; // tracked frame-to-frame in gameLoop to detect maze entry/exit
 const ZOOM_EASE_RATE = 0.06; // fraction of remaining distance closed per frame — higher = snappier, lower = more gradual
 const ZOOM_EASE_SNAP_THRESHOLD = 0.01; // once this close to the target, just snap to it and stop easing
+
+// ----------------------------
+// V.A.T.S. TIME SCALE
+// ----------------------------
+// state.timeScale is a global multiplier every world entity's own
+// movement/rotation/decay reads each frame (see Asteroid.js, Goomba.js,
+// FireBar.js, Particle.js, Fireball.js, GravitySystem.js, Player.js's
+// applyPullForce/airborne integration, and updatePlanetoids below) —
+// 1 = normal speed, VATS_TIME_SCALE = the slowed speed while V.A.T.S.
+// (Triangle, see gamepadInput.js's tryToggleVats) is active. Eased
+// toward its target the same decelerating way state.zoom is above,
+// rather than snapping instantly, so the slowdown/speed-up itself
+// reads as a smooth transition rather than a jarring toggle.
+//
+// Deliberately does NOT affect: player input reading, aim computation
+// (computeLeftArmAimAngle — angle-based, not per-frame integration),
+// lock-cycling (L1/R1), facing direction, or walking input response
+// (move()'s own direct position-from-input logic) — all of that stays
+// fully responsive while V.A.T.S. is active, which is the whole point:
+// the world slows down around a player who can still act at full speed.
+state.timeScale = 1;
+state.timeScaleTarget = 1;
+state.vatsActive = false;
+const VATS_TIME_SCALE = 0.05; // world speed while V.A.T.S. is active — near-freeze, not a dramatic-but-still-moving slowdown
+state.vatsTimeScale = VATS_TIME_SCALE; // exposed so VatsOverlay.js can compute a fade progress that matches the easing curve below, rather than snapping on/off out of sync with it
+const VATS_EASE_RATE = 0.12;
+const VATS_EASE_SNAP_THRESHOLD = 0.005;
 
 // How hard a fireball impact shoves a planet (scaled by the fireball's
 // own speed, same pattern as GROUND_POUND_PUSH_STRENGTH). Tune to taste.
@@ -127,7 +158,7 @@ function updatePlanetoids() {
       p.vel.y = 0;
       continue; // never moves, so skip position update and wall-bounce entirely
     }
-    p.pos.add(p.vel);
+    p.pos.add(p.vel.clone().multiply(state.timeScale));
     // Belt planetoids are exempt from the world-edge bounce: their
     // trajectory is deliberately authored (see CellManifest.js), and
     // the upstream spawn setback used to avoid visible pop-in can
@@ -141,7 +172,7 @@ function updatePlanetoids() {
       if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
     }
     if (p.isRoundedRect) {
-      p.rotationAngle += p.rotationSpeed;
+      p.rotationAngle += p.rotationSpeed * state.timeScale;
     }
   }
 }
@@ -188,6 +219,18 @@ function gameLoop(timestamp) {
   state.lastFrameTime = timestamp;
 
   state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+
+  // Gamepad state has no push events at all (unlike keyboard/mouse) —
+  // has to be read fresh every frame, before anything below that
+  // depends on it, INCLUDING the gameOver/levelComplete screens below
+  // (pollGamepad checks those flags itself first and handles X-button
+  // restart/advance there, mirroring how the mouse path's
+  // tryRestartOrAdvance() already gets checked before any other mouse
+  // action) — if this call were placed after those early-returns
+  // instead, it would simply never run at all while either screen is
+  // showing, and X would silently do nothing on them.
+  pollGamepad();
+
   if (state.gameOver) {
     state.ctx.fillStyle = 'white';
     state.ctx.font = '48px Arial';
@@ -196,7 +239,7 @@ function gameLoop(timestamp) {
     state.ctx.font = '32px Arial';
     state.ctx.fillText(`Final Score: ${state.score}`, state.canvas.width / 2, state.canvas.height / 2 + 30);
     state.ctx.font = '24px Arial';
-    state.ctx.fillText('Press Enter to Restart', state.canvas.width / 2, state.canvas.height / 2 + 70);
+    state.ctx.fillText('Press Enter or X to Restart', state.canvas.width / 2, state.canvas.height / 2 + 70);
     state.player.isDying = 'false';
     requestAnimationFrame(gameLoop);
     return;
@@ -208,9 +251,24 @@ function gameLoop(timestamp) {
     state.ctx.font = '32px Arial';
     state.ctx.fillText(`Score: ${state.score}`, state.canvas.width / 2, state.canvas.height / 2 + 30);
     state.ctx.font = '24px Arial';
-    state.ctx.fillText('Press Enter to start next level', state.canvas.width / 2, state.canvas.height / 2 + 70);
+    state.ctx.fillText('Press Enter or X to start next level', state.canvas.width / 2, state.canvas.height / 2 + 70);
     requestAnimationFrame(gameLoop);
     return;
+  }
+
+  // Eases state.timeScale toward whatever pollGamepad() set
+  // state.vatsActive to this frame — same decelerating-ease technique
+  // as the auto-zoom block below, just a separate value with its own
+  // target/rate. Runs here, before updatePlanetoids and everything
+  // else that reads state.timeScale this frame, so the whole world
+  // sees a single, already-settled value for this frame rather than a
+  // stale one from last frame.
+  state.timeScaleTarget = state.vatsActive ? VATS_TIME_SCALE : 1;
+  const timeScaleDiff = state.timeScaleTarget - state.timeScale;
+  if (Math.abs(timeScaleDiff) < VATS_EASE_SNAP_THRESHOLD) {
+    state.timeScale = state.timeScaleTarget;
+  } else {
+    state.timeScale += timeScaleDiff * VATS_EASE_RATE;
   }
 
   updatePlanetoids();
@@ -260,7 +318,7 @@ function gameLoop(timestamp) {
     }
     state.player.update();
     if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
-    if (state.mouseDown) state.player.shootFireball();
+    if (state.mouseDown || state.gamepadFireHeld) state.player.shootFireball();
   } else {
     state.player.update(); // Run death animation
   }
@@ -404,6 +462,11 @@ function gameLoop(timestamp) {
   // Exposed on state so Player.js can convert the tracked mouse
   // position (canvas-space) into world-space for blaster aiming.
   state.camera = camera;
+  // Exposed alongside camera so Raycast.js's findNearestOccluder can
+  // tell whether a candidate occluder is actually within the visible
+  // viewport, without needing its own separate way to derive this.
+  state.visibleWidth = visibleWidth;
+  state.visibleHeight = visibleHeight;
   state.ctx.save();
   state.ctx.scale(zoom, zoom);
   state.ctx.translate(-camera.x, -camera.y);
@@ -431,6 +494,9 @@ function gameLoop(timestamp) {
   state.goombas.forEach(g => g.draw());
   state.player.draw();
   drawPullIndicator();
+  drawVatsOverlay();
+  drawLockOutline();
+  drawAimIndicator();
   state.coins.forEach(c => c.draw());
   state.fireballs.forEach(f => f.draw());
   state.particles.forEach(p => p.draw());
