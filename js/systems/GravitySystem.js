@@ -1,4 +1,5 @@
 // js/systems/GravitySystem.js
+import { state } from '../state.js';
 import { Vector2 } from '../vector2.js';
 import { INFLUENCE_PADDING } from '../constants.js';
 
@@ -23,7 +24,7 @@ export class GravitySystem {
       }
       let grav = entity.GRAVITY_STRENGTH || 0.35;
       if (entity.isGroundPounding) grav *= entity.GROUND_POUND_GRAV_MULTIPLIER || 3;
-      entity.vel.add(dir.multiply(grav));
+      entity.vel.add(dir.multiply(grav * state.timeScale));
     }
   }
 

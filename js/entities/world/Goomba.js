@@ -39,7 +39,7 @@ export class Goomba {
     const minX = planet.pos.x - coreHalfWidth + this.radius;
     const maxX = planet.pos.x + coreHalfWidth - this.radius;
 
-    const desiredX = this.pos.x + this.direction * this.speed;
+    const desiredX = this.pos.x + this.direction * this.speed * state.timeScale;
     if (desiredX < minX || desiredX > maxX) {
       this.direction *= -1; // reached the edge — turn around instead of falling off
     } else {
@@ -52,7 +52,7 @@ export class Goomba {
     const topY = planet.pos.y - planet.halfHeight;
     this.pos.y = topY - this.radius;
 
-    this.walkCyclePhase += this.walkCycleSpeed;
+    this.walkCyclePhase += this.walkCycleSpeed * state.timeScale;
   }
 
   draw() {

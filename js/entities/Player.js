@@ -19,6 +19,8 @@ import {
 } from '../utils.js';
 import { Particle } from './Particle.js';
 import { Fireball } from './world/Fireball.js';
+import { findNearestOccluder } from '../systems/Raycast.js';
+import { isValidLockTarget, selectNextLockTarget, selectPreviousLockTarget } from '../systems/TargetLock.js';
 
 export class Player extends Entity {
   constructor(x, y) {
@@ -138,6 +140,20 @@ export class Player extends Entity {
     this.aimShoulderPos = null;
     this.aimWorldAngle = 0;
     this.aimRelativeAngle = 0;
+    // this.pos AS OF the moment aimShoulderPos above was computed —
+    // recorded so shootFireball() can tell how far this.pos has moved
+    // since (computeLeftArmAimAngle runs during drawing, which happens
+    // AFTER shootFireball() within the same frame — see game.js's
+    // gameLoop — so this is always at least one frame behind by the
+    // time a shot actually fires). Re-anchoring the cached shoulder
+    // offset to the CURRENT this.pos at firing time, rather than firing
+    // from wherever the shoulder was a frame ago, matters most while
+    // pulling: this.pos accelerates continuously during a pull, and the
+    // early part of one often still curves in from residual launch
+    // velocity rather than moving in a straight line at the target, so
+    // the one-frame-old angle can be meaningfully wrong — enough to
+    // miss a small target even though everything LOOKED lined up.
+    this.aimAnchorPos = null;
 
     // How much of the arm's aim angle the head mimics when looking
     // up/down at the aim target — 1.0 would match the arm exactly;
@@ -182,6 +198,43 @@ export class Player extends Entity {
     this.jumpHorizontalCarry = 0.6;
     this.lastShotTime = 0;
 
+    // How much faster walking is while state.gamepadRunHeld is true
+    // (Square button) — multiplies PLAYER_LINEAR_SPEED directly in
+    // move()'s walking branches, so running speeds up everything that
+    // already scales off that value (footstep timing, dust frequency)
+    // for free, with no separate handling needed.
+    this.runSpeedMultiplier = 1.8;
+
+    // How much higher a jump launches while running (Square held) —
+    // a real, well-established platformer convention (a running jump
+    // going higher/farther than a standing one), and physically
+    // sensible too: momentum carrying into the jump. Deliberately more
+    // modest than runSpeedMultiplier above — jump height changes read
+    // as more dramatic per unit of multiplier than walking speed does,
+    // so a smaller boost here still feels clearly noticeable without
+    // tipping into "broken."
+    this.runJumpMultiplier = 1.3;
+
+    // Continuous mid-air horizontal steering (SkyDomePlanetoid gravity
+    // only — see move()'s airborne branch for why): per-frame
+    // acceleration while holding left/right, and a cap on how fast
+    // holding a direction can build vel.x up to. Deliberately modest —
+    // this is meant to read as "can nudge his arc a bit," not full
+    // in-air control comparable to ground walking.
+    this.airControlAccel = 0.3;
+    this.airControlMaxSpeed = 4;
+
+    // Scales down the horizontal velocity carried into a fall when
+    // walking off a SkyDomePlanetoid/JumpPlatform edge (see move()'s
+    // isSkyDome branch) — full PLAYER_LINEAR_SPEED read as an
+    // unnaturally strong "launch off a ramp," since it's roughly 14x
+    // GRAVITY_STRENGTH's own per-frame pull, so gravity took many
+    // frames to visually catch up and dominate the trajectory. A
+    // fraction still carries real, visible momentum (stepping off
+    // reads as a natural fall with a bit of forward drift, not an
+    // abrupt stop) without that launched-off-a-ramp look.
+    this.edgeFallCarryFraction = 0.35;
+
     // ----------------------------
     // PULL TARGET (right-click "pull star")
     // ----------------------------
@@ -196,12 +249,36 @@ export class Player extends Entity {
     // gets culled while out of range — never needs manual cleanup
     // elsewhere.
     this.pullTarget = null;
+    // ----------------------------
+    // this.lockedTarget (gamepad R1 "hard lock") is a reference to
+    // whichever planetoid/asteroid/goomba is currently locked on, or
+    // null. While set, it takes ABSOLUTE priority over every other aim
+    // source (even pullTarget) in computeLeftArmAimAngle below — the
+    // whole point is that the blaster persists pointing at it
+    // regardless of stick input, mouse position, or anything else.
+    // Validity (still exists, still on screen) is re-checked every
+    // frame in computeLeftArmAimAngle itself, which clears this the
+    // moment either check fails, rather than needing a separate
+    // per-frame update pass. See TargetLock.js for the actual
+    // candidate-gathering/selection logic, and tryLockTargetNext/
+    // tryLockTargetPrevious/clearLockTarget below for how this gets
+    // set/cleared.
+    this.lockedTarget = null;
     // Acceleration per frame while pulling, and a speed cap so holding
     // it indefinitely (or starting very close to the target) doesn't
     // build unbounded velocity. Both are guesses — tune once you see it
     // in motion.
-    this.pullAccel = 0.6;
+    this.pullAccel = 0.85;
     this.pullMaxSpeed = 18;
+    // Fraction of velocity PERPENDICULAR to the pull direction removed
+    // each frame (see applyPullForce's own comment for the full
+    // reasoning) — without this, any sideways/tangential velocity
+    // present when a pull starts just persists, and a purely radial
+    // attractive force with nothing damping that tangential component
+    // is exactly what produces real orbital mechanics: circling the
+    // target for multiple loops while the pull only very gradually
+    // tightens the radius, rather than converging on it directly.
+    this.pullTangentialDamping = 0.12;
 
     // How long (ms) the mouse can go without moving before we consider
     // it "idle": facing stops following it (reverts to whatever
@@ -351,6 +428,22 @@ export class Player extends Entity {
     const shoulderX = originPos.x + wx * s;
     const shoulderY = originPos.y + wy * s;
 
+    // "Forward" flips to the opposite world angle when mirrored, since
+    // the whole rig reflects about the vertical (radial, up/down)
+    // axis. Computed here (rather than only where it was previously
+    // used, further below) so the gamepad-idle fallback right below
+    // can also use it as its default aim direction.
+    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+
+    // Re-checked every frame — the moment a lock stops being valid
+    // (destroyed, or scrolled out of the viewport), it's cleared here
+    // and this frame just falls through to the normal aim priority
+    // chain below instead, rather than needing a separate per-frame
+    // watcher elsewhere.
+    if (this.lockedTarget && !isValidLockTarget(this.lockedTarget)) {
+      this.lockedTarget = null;
+    }
+
     // While actively pulling toward a planet, aim at the pull target's
     // actual world position instead of the mouse — the beam in
     // PullBeam.js originates from this same aimShoulderPos, so this is
@@ -358,9 +451,46 @@ export class Player extends Entity {
     // than wherever the mouse happens to be hovering (which can easily
     // drift away from the target once a pull is already underway).
     let targetWorldX, targetWorldY;
-    if (this.pullTarget) {
+    if (this.lockedTarget) {
+      // Absolute top priority — even above pullTarget. A hard lock
+      // means the blaster persists pointing at this object no matter
+      // what else is going on; the right stick, mouse, and (unless
+      // it's pulling toward this SAME object — see L2's own handling
+      // in gamepadInput.js) pulling itself all get overridden while
+      // this is set.
+      targetWorldX = this.lockedTarget.pos.x;
+      targetWorldY = this.lockedTarget.pos.y;
+    } else if (this.pullTarget) {
       targetWorldX = this.pullTarget.pos.x;
       targetWorldY = this.pullTarget.pos.y;
+    } else if (state.gamepadAimActive) {
+      // The right stick gives a DIRECTION (normalized dx/dy), not a
+      // world position — atan2 below only cares about the direction
+      // from shoulder to target, not the distance, so projecting an
+      // arbitrary point far out along that direction works exactly
+      // the same as a real target position would.
+      targetWorldX = shoulderX + state.gamepadAimX * 1000;
+      targetWorldY = shoulderY + state.gamepadAimY * 1000;
+    } else if (state.gamepadIsActiveDevice) {
+      // Gamepad is the player's current input device, but the right
+      // stick itself is centered right now — falling through to the
+      // mouse fallback below would be wrong here. For a gamepad-only
+      // player the mouse cursor typically sits wherever it started
+      // (often near screen-center, which the camera keeps close to the
+      // player's own world position), making the shoulder-to-mouse
+      // vector tiny and numerically unstable. That instability was the
+      // actual cause of fireballs occasionally firing straight up
+      // despite the blaster visually appearing to point forward: the
+      // arm's VISUAL pose (natural sway, gated by mouseIdle) looked
+      // fine, but aimWorldAngle underneath was quietly still being
+      // computed from that degenerate mouse position regardless, since
+      // aimWorldAngle is deliberately kept accurate every frame even
+      // while the arm itself is just swaying (see where this method is
+      // called from drawFullBody). Defaulting to straight ahead here
+      // fixes the actual number fed to shootFireball()/the aim
+      // raycast, not just the arm's visual pose.
+      targetWorldX = shoulderX + Math.cos(forwardAngle) * 1000;
+      targetWorldY = shoulderY + Math.sin(forwardAngle) * 1000;
     } else {
       const cam = state.camera || { x: 0, y: 0 };
       const zoom = state.zoom || 1;
@@ -371,16 +501,34 @@ export class Player extends Entity {
 
     const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
 
-    // "Forward" flips to the opposite world angle when mirrored, since
-    // the whole rig reflects about the vertical (radial, up/down) axis.
-    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
-
     // Signed angle from forward to target, normalized to (-π, π]
     let relative = Math.atan2(
       Math.sin(targetAngle - forwardAngle),
       Math.cos(targetAngle - forwardAngle)
     );
-    relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+    // A hard lock bypasses the forward-cone clamp entirely — this is
+    // the actual fix for two symptoms that both trace back to the same
+    // cause: shots not going where the lock visually indicated, and
+    // repeated L1/R1 presses oscillating between just two objects
+    // instead of cycling through everyone in view. Both shootFireball()
+    // and tryLockTargetNext()'s own "next clockwise" search read
+    // this.aimWorldAngle directly, trusting it to be the TRUE angle to
+    // the locked target — but whenever that angle sat outside
+    // maxAimFromForward of wherever "forward" currently was, clamping
+    // pinned aimWorldAngle to the edge of that cone instead. Firing
+    // then went wherever the cone's edge pointed, not the target itself
+    // (looking "stale," as if using the target's position from whenever
+    // it was first locked, since the pinned angle barely moved frame to
+    // frame) — and cycling used that same wrong, barely-moving angle as
+    // its search's starting point, so successive presses kept
+    // re-finding whichever two candidates happened to straddle the
+    // cone's edge rather than sweeping around the whole group. A hard
+    // lock is a deliberate targeting mode, not normal free-aim, so it
+    // makes sense for it to ignore this arm-range constraint altogether
+    // rather than working around it.
+    if (!this.lockedTarget) {
+      relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+    }
     const clampedTargetAngle = forwardAngle + relative;
 
     // Cache for shootFireball() (so shots spawn exactly where the arm
@@ -390,6 +538,22 @@ export class Player extends Entity {
     this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
     this.aimWorldAngle = clampedTargetAngle;
     this.aimRelativeAngle = relative;
+    this.aimAnchorPos = this.pos.clone();
+
+    // Raycast from the muzzle tip, along the actual firing angle (the
+    // same formula shootFireball() itself uses for a real shot's
+    // direction), to find whatever the aim indicator should rest on
+    // and whatever L2 (gamepad) should be able to pull toward — see
+    // findNearestOccluder's own comment. Cached here (not recomputed
+    // separately by AimIndicator.js or gamepadInput.js) so both of
+    // those always agree on exactly the same target.
+    const fireAngle = clampedTargetAngle + this.blasterAngleOffset;
+    const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
+    const muzzleX = shoulderX + Math.cos(fireAngle) * muzzleDist;
+    const muzzleY = shoulderY + Math.sin(fireAngle) * muzzleDist;
+    const aimResult = findNearestOccluder(muzzleX, muzzleY, fireAngle);
+    this.aimTargetPoint = aimResult.point;
+    this.aimTargetObject = aimResult.object;
 
     return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
   }
@@ -439,13 +603,56 @@ export class Player extends Entity {
     if (now - this.lastShotTime < this.fireCooldown) return;
     this.lastShotTime = now;
 
-    const angle = this.aimWorldAngle + this.blasterAngleOffset;
+    // aimShoulderPos/aimWorldAngle were computed during the PREVIOUS
+    // frame's drawing pass (see aimAnchorPos's own comment for why),
+    // so this.pos may have moved since — re-anchor the cached shoulder
+    // offset to wherever this.pos actually is right now, rather than
+    // firing from where the shoulder was a frame ago.
+    const anchor = this.aimAnchorPos || this.pos;
+    const shoulderX = this.aimShoulderPos.x + (this.pos.x - anchor.x);
+    const shoulderY = this.aimShoulderPos.y + (this.pos.y - anchor.y);
+
+    // For a hard lock or an active pull, there's a known, LIVE target
+    // position worth aiming at exactly, rather than trusting the
+    // previous frame's cached angle — this is what actually fixes
+    // shots drifting off a small target while pulling toward it (the
+    // scenario most likely to have moved meaningfully since last
+    // frame). Mouse/stick aim has no such live position to re-derive
+    // from (the mouse didn't move just because the player did), so
+    // those keep using the cached angle as before.
+    let angle;
+    if (this.lockedTarget) {
+      // Deliberately excludes blasterAngleOffset below — see that
+      // property's own comment: it's a permanent few-degree visual
+      // fudge so the fireball appears to leave from the barrel opening
+      // in leftarm.png, tuned for ordinary free-aim where the player
+      // judges "does this look right" by eye. Applied to an actual
+      // hard lock, that same bias becomes a real miss: its linear
+      // deviation scales with distance (~8.7% of range at 5°), which a
+      // close/large target's own radius usually absorbs but a distant
+      // or small one often can't — exactly the intermittent "off by a
+      // few degrees" pattern this exists to fix. A lock's whole point
+      // is guaranteed centering, so it gets the true angle, unmodified.
+      angle = Math.atan2(this.lockedTarget.pos.y - shoulderY, this.lockedTarget.pos.x - shoulderX);
+    } else if (this.pullTarget) {
+      angle = Math.atan2(this.pullTarget.pos.y - shoulderY, this.pullTarget.pos.x - shoulderX) + this.blasterAngleOffset;
+    } else {
+      angle = this.aimWorldAngle + this.blasterAngleOffset;
+    }
+
     const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
-    const tipX = this.aimShoulderPos.x + Math.cos(angle) * muzzleDist;
-    const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
+    const tipX = shoulderX + Math.cos(angle) * muzzleDist;
+    const tipY = shoulderY + Math.sin(angle) * muzzleDist;
 
     state.fireballs.push(new Fireball(tipX, tipY, angle));
     state.audioManager.playFireball();
+    // Firing is one of the two actions that immediately ends V.A.T.S.
+    // (the other is a successful pull — see trySelectPullTarget below)
+    // — set here, at the point a shot actually fires, rather than in
+    // gamepadInput.js's R2 handling, since that only INITIATES the
+    // call each frame and has no way to know whether this cooldown
+    // check above actually let a shot through.
+    state.vatsActive = false;
   }
 
   // ----------------------------
@@ -459,32 +666,49 @@ export class Player extends Entity {
   // grounded, launches off the current planet with a real jump-strength
   // kick so the pull can actually take hold immediately (see below for
   // why that launch matters, not just a bare onSurface flip).
-  trySelectPullTarget() {
+  //
+  // explicitTarget, if given, skips the mouse-position lookup entirely
+  // and uses that object instead — this is how gamepadInput.js's L2
+  // handler reuses this same method with the raycast-derived
+  // aimTargetObject rather than duplicating everything below it. Still
+  // validated the same way an explicit target STILL has to actually be
+  // a current, pullable planetoid (in state.planetoids, not
+  // isPullExempt) — the raycast that produced aimTargetObject also
+  // considers asteroids as occluders, which were never valid pull
+  // targets even via mouse, so this guards against pulling one of
+  // those in by mistake.
+  trySelectPullTarget(explicitTarget = null) {
     if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
 
-    const cam = state.camera || { x: 0, y: 0 };
-    const zoom = state.zoom || 1;
-    const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
-    const worldX = mouse.x / zoom + cam.x;
-    const worldY = mouse.y / zoom + cam.y;
-
     let best = null;
-    let bestDistSq = Infinity;
-    for (const planet of state.planetoids) {
-      if (planet.isPullExempt) continue; // e.g. JumpPlatform - jump-only, never a valid pull target
-      let hit;
-      if (planet.isRoundedRect) {
-        hit = typeof planet.containsPoint === 'function' && planet.containsPoint(worldX, worldY);
-      } else {
-        const dx = worldX - planet.pos.x;
-        const dy = worldY - planet.pos.y;
-        hit = (dx * dx + dy * dy) <= planet.radius * planet.radius;
+    if (explicitTarget) {
+      if (state.planetoids.includes(explicitTarget) && !explicitTarget.isPullExempt) {
+        best = explicitTarget;
       }
-      if (!hit) continue;
-      const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        best = planet;
+    } else {
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+      const worldX = mouse.x / zoom + cam.x;
+      const worldY = mouse.y / zoom + cam.y;
+
+      let bestDistSq = Infinity;
+      for (const planet of state.planetoids) {
+        if (planet.isPullExempt) continue; // e.g. JumpPlatform - jump-only, never a valid pull target
+        let hit;
+        if (planet.isRoundedRect) {
+          hit = typeof planet.containsPoint === 'function' && planet.containsPoint(worldX, worldY);
+        } else {
+          const dx = worldX - planet.pos.x;
+          const dy = worldY - planet.pos.y;
+          hit = (dx * dx + dy * dy) <= planet.radius * planet.radius;
+        }
+        if (!hit) continue;
+        const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          best = planet;
+        }
       }
     }
 
@@ -507,11 +731,53 @@ export class Player extends Entity {
       this.pullTarget = best;
       this.onSurface = false;
       this.currentPlanet = null;
+      // A successful pull is the other of the two actions that
+      // immediately ends V.A.T.S. (the other is firing — see
+      // shootFireball above) — set here, inside the `if (best)` branch,
+      // since this method can also just no-op if no valid target was
+      // found (explicitTarget invalid, or nothing under the mouse),
+      // and V.A.T.S. should only end on an ACTUAL pull, not merely an
+      // attempt.
+      state.vatsActive = false;
     }
   }
 
   clearPullTarget() {
     this.pullTarget = null;
+  }
+
+  // ----------------------------
+  // HARD LOCK (gamepad R1 = next/clockwise, L1 = previous/counter-
+  // clockwise, circle = release)
+  // ----------------------------
+  // Both cycle from wherever the blaster is currently aimed
+  // (this.aimWorldAngle — kept accurate every frame regardless of
+  // source, so this works whether there's no lock yet, per the
+  // first-press case starting from whatever the normal aim system
+  // currently has it pointed at, or an existing lock, since
+  // aimWorldAngle would already equal the angle to the current
+  // lockedTarget by the time either of these runs again). See
+  // TargetLock.js's selectNextLockTarget/selectPreviousLockTarget for
+  // the actual candidate-gathering/sorting logic — the two are mirror
+  // images of each other, so in the common case a single R1 press
+  // followed by a single L1 press (or vice versa) lands back on
+  // whatever was locked before, reading as a genuine undo.
+  tryLockTargetNext() {
+    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+    const originPos = this.aimShoulderPos || this.pos;
+    const referenceAngle = this.aimWorldAngle ?? 0;
+    this.lockedTarget = selectNextLockTarget(this.lockedTarget, referenceAngle, originPos);
+  }
+
+  tryLockTargetPrevious() {
+    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+    const originPos = this.aimShoulderPos || this.pos;
+    const referenceAngle = this.aimWorldAngle ?? 0;
+    this.lockedTarget = selectPreviousLockTarget(this.lockedTarget, referenceAngle, originPos);
+  }
+
+  clearLockTarget() {
+    this.lockedTarget = null;
   }
 
   // Called from gameLoop INSTEAD OF normal gravity while pullTarget is
@@ -536,8 +802,36 @@ export class Player extends Entity {
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < 1e-6) return;
 
-    this.vel.x += (dx / dist) * this.pullAccel;
-    this.vel.y += (dy / dist) * this.pullAccel;
+    const dirX = dx / dist, dirY = dy / dist;
+
+    // Split current velocity into a RADIAL component (along dirX/dirY,
+    // toward the target) and whatever's left over — the TANGENTIAL
+    // (perpendicular/sideways) component — and damp only that second
+    // part. A plain "keep adding acceleration toward the target," with
+    // nothing ever removing sideways velocity, is a purely radial
+    // attractive force — the same shape as gravity, which is exactly
+    // why it was producing real orbits instead of a direct approach:
+    // whatever tangential velocity was present when the pull started
+    // (almost always some, since the initiating launch-kick fires
+    // straight out from wherever the player was standing, not
+    // necessarily toward the pull target at all) just persisted,
+    // circling the target while the radial pull only very slowly
+    // tightened the loop. Damping the tangential part each frame is
+    // what actually converges the path onto the target directly.
+    const radialSpeed = this.vel.x * dirX + this.vel.y * dirY;
+    const tangentX = this.vel.x - radialSpeed * dirX;
+    const tangentY = this.vel.y - radialSpeed * dirY;
+    // Math.pow for the retained fraction — same reasoning as
+    // Asteroid.js's drag: damping is an exponential per-frame decay
+    // rate, so scaling it correctly by timeScale means exponentiating
+    // the RETAINED fraction (1 - damping), not just multiplying the
+    // damping amount directly.
+    const tangentRetention = Math.pow(1 - this.pullTangentialDamping, state.timeScale);
+    this.vel.x -= tangentX * (1 - tangentRetention);
+    this.vel.y -= tangentY * (1 - tangentRetention);
+
+    this.vel.x += dirX * this.pullAccel * state.timeScale;
+    this.vel.y += dirY * this.pullAccel * state.timeScale;
 
     const speed = this.vel.length();
     if (speed > this.pullMaxSpeed) {
@@ -582,6 +876,7 @@ export class Player extends Entity {
       this.deathAlpha = 1;
       createDeathParticles(this.pos, 400);
       state.audioManager.playDeath();
+      state.vatsActive = false; // dying ends V.A.T.S. immediately, same as a successful shot or pull already do
     }
   }
 
@@ -742,9 +1037,14 @@ export class Player extends Entity {
     const feetPos = this.pos.clone().add(downDir.multiply(this.radius * 0.9));
     const sideDir = new Vector2(-downDir.y, downDir.x); // perpendicular to "down" — scatters dust sideways along the surface, regardless of its orientation
 
-    // A small CLUSTER per footstep (2-3 particles), not a single dot —
+    // A small CLUSTER per footstep (2-3 particles, 4-6 while running) —
     // reads as an actual puff kicking up rather than a trailing spark.
-    const puffCount = 2 + Math.floor(Math.random() * 2);
+    // Running already triggers this MORE OFTEN for free too, since
+    // walkTime (and therefore footstep timing) advances by actual
+    // distance covered per frame, which running increases directly —
+    // this only adds the extra per-footstep volume on top of that.
+    const running = state.gamepadRunHeld;
+    const puffCount = (running ? 4 : 2) + Math.floor(Math.random() * (running ? 3 : 2));
     for (let i = 0; i < puffCount; i++) {
       const sideSpread = (Math.random() - 0.5) * 2.5;
       const upSpeed = 0.2 + Math.random() * 0.4;
@@ -909,9 +1209,10 @@ export class Player extends Entity {
       const planet = this.currentPlanet;
       this.isWalking = false;
       let ds = 0;
+      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
 
-      if (keys['ArrowLeft']) { ds = -PLAYER_LINEAR_SPEED; this.facingDirection = -1; this.isWalking = true; }
-      if (keys['ArrowRight']) { ds = PLAYER_LINEAR_SPEED; this.facingDirection = 1; this.isWalking = true; }
+      if (keys['ArrowLeft']) { ds = -speed; this.facingDirection = -1; this.isWalking = true; }
+      if (keys['ArrowRight']) { ds = speed; this.facingDirection = 1; this.isWalking = true; }
 
       // isSkyDome planets (SkyDomePlanetoid, JumpPlatform) are always
       // axis-aligned and never rotate, so walking on them is handled
@@ -934,12 +1235,14 @@ export class Player extends Entity {
 
         if (desiredX < minX || desiredX > maxX) {
           // Walked past the edge of the flat top — detach and fall,
-          // carrying current walking speed into vel.x so stepping off
-          // a ledge reads as a natural fall with a bit of forward
-          // momentum, not an abrupt stop or a slide onto the side.
+          // carrying a FRACTION of current walking speed into vel.x
+          // (see edgeFallCarryFraction's own comment for why not the
+          // full speed) so stepping off a ledge reads as a natural
+          // fall with a bit of forward momentum, not an abrupt stop, a
+          // slide onto the side, or an unnaturally strong launch.
           this.onSurface = false;
           this.currentPlanet = null;
-          this.vel = new Vector2(ds, 0);
+          this.vel = new Vector2(ds * this.edgeFallCarryFraction, 0);
         } else {
           const topY = planet.pos.y - planet.halfHeight;
           this.pos = new Vector2(desiredX, topY - PLAYER_RADIUS);
@@ -960,7 +1263,8 @@ export class Player extends Entity {
       }
     } else if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
-      const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
+      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
+      const angularSpeed = speed / surfaceDist;
 
       this.isWalking = false;
       const prevAngle = this.angle;
@@ -986,6 +1290,31 @@ export class Player extends Entity {
         const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
         this.walkTime += (distanceMoved / this.strideLength) * Math.PI * 2;
         this.spawnWalkDust();
+      }
+    } else if (!this.onSurface && this.lastInfluencePlanet && this.lastInfluencePlanet.isSkyDome) {
+      // Continuous mid-air horizontal steering, specific to
+      // SkyDomePlanetoid gravity — "left/right" always maps to a
+      // consistent world direction there (unlike a circular planet,
+      // where it wouldn't mean anything fixed while airborne). Without
+      // this, a jump that started from a standstill could never be
+      // steered at all once airborne, even holding left/right the
+      // whole time: getOutwardLaunchDirection() only reads input ONCE,
+      // at the moment jump() is called, and the edge-detach fall sets
+      // vel.x once too — neither is ever revisited afterward, so with
+      // no horizontal input held at that single instant, the rest of
+      // the arc was locked in as purely vertical no matter what was
+      // pressed mid-air. This adds a light touch of ongoing control on
+      // top of whatever the jump/fall already set vel.x to, not a
+      // replacement for it — gentle acceleration while held, capped at
+      // airControlMaxSpeed, so it reads as "can nudge the arc a bit,"
+      // not full ground-level walking control transplanted into the air.
+      if (keys['ArrowLeft']) {
+        this.vel.x = Math.max(this.vel.x - this.airControlAccel, -this.airControlMaxSpeed);
+        this.facingDirection = -1;
+      }
+      if (keys['ArrowRight']) {
+        this.vel.x = Math.min(this.vel.x + this.airControlAccel, this.airControlMaxSpeed);
+        this.facingDirection = 1;
       }
     }
   }
@@ -1033,9 +1362,11 @@ export class Player extends Entity {
   }
 
   jump() {
+    const jumpBoost = state.gamepadRunHeld ? this.runJumpMultiplier : 1;
+
     if (this.mode === "platform") {
       if (this.onGround) {
-        this.platformVel.y = -JUMP_STRENGTH * 0.5;
+        this.platformVel.y = -JUMP_STRENGTH * 0.5 * jumpBoost;
         this.onGround = false;
         state.audioManager.playJump();
       }
@@ -1044,7 +1375,7 @@ export class Player extends Entity {
 
     if (this.onSurface && this.currentPlanet) {
       const direction = this.getOutwardLaunchDirection();
-      this.vel = direction.multiply(JUMP_STRENGTH);
+      this.vel = direction.multiply(JUMP_STRENGTH * jumpBoost);
       this.onSurface = false;
       this.currentPlanet = null;
       state.audioManager.playJump();
@@ -1148,8 +1479,14 @@ export class Player extends Entity {
     // PLANET MOVEMENT
     // ----------------------------
     if (!this.onSurface) {
-      this.vel = this.vel.multiply(DRAG);
-      this.pos.add(this.vel);
+      // Math.pow for the drag decay — see Asteroid.js's identical
+      // reasoning: an exponential per-frame rate has to be
+      // exponentiated by timeScale, not just multiplied, or the
+      // player's velocity would decay at its normal, un-slowed rate
+      // even while visible movement is slowed, and wouldn't resume at
+      // the same speed once V.A.T.S. ends.
+      this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
+      this.pos.add(this.vel.clone().multiply(state.timeScale));
 
       if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
       if (this.pos.x + this.radius > state.sceneWidth) { this.pos.x = state.sceneWidth - this.radius; this.vel.x = -this.vel.x; }
@@ -1187,7 +1524,14 @@ export class Player extends Entity {
     const lastMove = state.lastMouseMoveTime || 0;
     const lastWheel = state.lastWheelTime || 0;
     const recentlyScrolled = (Date.now() - lastWheel) < this.mouseWheelSuppressDuration;
-    this.mouseIdle = recentlyScrolled || (Date.now() - lastMove) > this.mouseIdleThreshold;
+    // A hard lock (this.lockedTarget) counts as live aim input too,
+    // same as an actively-pushed gamepad stick — without this, facing
+    // would stay frozen at whatever it was before the lock (never
+    // turning to actually face a locked target that's behind the
+    // player), and the arm would keep showing its idle sway pose
+    // instead of visually tracking the lock (see drawFullBody's own
+    // mouseIdle check).
+    this.mouseIdle = !this.lockedTarget && !state.gamepadAimActive && (recentlyScrolled || (Date.now() - lastMove) > this.mouseIdleThreshold);
 
     if (this.mouseIdle) return; // facing stays whatever move() set
 
@@ -1204,23 +1548,42 @@ export class Player extends Entity {
     const downAngle = Math.atan2(downDir.y, downDir.x);
     const orientation = downAngle - Math.PI / 2;
 
-    const cam = state.camera || { x: 0, y: 0 };
-    const zoom = state.zoom || 1;
-    const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
-    const mouseWorldX = mouse.x / zoom + cam.x;
-    const mouseWorldY = mouse.y / zoom + cam.y;
-
-    // Project the vector from the character to the mouse onto the
-    // tangent ("forward/back") axis at this orientation. Positive means
-    // the mouse is on the local +x side (dirSign +1); negative means
-    // it's on the local -x side (dirSign -1) — same convention drawing
-    // and aiming already use elsewhere.
     const tangentX = Math.cos(orientation);
     const tangentY = Math.sin(orientation);
-    const toMouseX = mouseWorldX - this.pos.x;
-    const toMouseY = mouseWorldY - this.pos.y;
-    const projection = toMouseX * tangentX + toMouseY * tangentY;
 
+    // A hard lock takes priority over everything else here too — the
+    // astronaut should turn to face whatever's locked on, even if it's
+    // currently behind him, rather than the mouse/stick case below
+    // (which the lock overrides the same way computeLeftArmAimAngle's
+    // own priority chain already does for the aim angle itself).
+    let toTargetX, toTargetY;
+    if (this.lockedTarget) {
+      toTargetX = this.lockedTarget.pos.x - this.pos.x;
+      toTargetY = this.lockedTarget.pos.y - this.pos.y;
+    } else if (state.gamepadAimActive) {
+      // The right stick already gives a DIRECTION, not a position — no
+      // subtraction from the player's own position needed, unlike the
+      // mouse case below (which has to convert a screen point into a
+      // world point, then subtract). Same projection-onto-tangent-axis
+      // technique either way, just a different source for the vector
+      // being projected.
+      toTargetX = state.gamepadAimX;
+      toTargetY = state.gamepadAimY;
+    } else {
+      const cam = state.camera || { x: 0, y: 0 };
+      const zoom = state.zoom || 1;
+      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+      const mouseWorldX = mouse.x / zoom + cam.x;
+      const mouseWorldY = mouse.y / zoom + cam.y;
+      toTargetX = mouseWorldX - this.pos.x;
+      toTargetY = mouseWorldY - this.pos.y;
+    }
+    const projection = toTargetX * tangentX + toTargetY * tangentY;
+
+    // Positive means the target (locked object, mouse, or stick
+    // direction) is on the local +x side (dirSign +1); negative means
+    // it's on the local -x side (dirSign -1) — same convention drawing
+    // and aiming already use elsewhere.
     this.facingDirection = projection >= 0 ? 1 : -1;
   }
 

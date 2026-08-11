@@ -8,11 +8,10 @@
 // the frame-by-frame simulation loop itself. Called once from game.js
 // at startup.
 //
-// tryRestartOrAdvance lives here (not exported — only ever used by the
-// two handlers below it, both of which live in this same file) rather
-// than back in game.js, since "what a click or Enter press does on the
-// game-over/level-complete screen" is itself just another input
-// handler, not simulation logic.
+// tryRestartOrAdvance lives here (exported so gamepadInput.js's X
+// button can also trigger it) rather than back in game.js, since "what
+// a click or Enter press does on the game-over/level-complete screen"
+// is itself just another input handler, not simulation logic.
 import { state } from '../state.js';
 import { MazeInterior } from '../interiors/MazeInterior.js';
 import { BeamPlanetoid } from '../world/BeamPlanetoid.js';
@@ -24,7 +23,7 @@ import { initGame } from './levelSetup.js';
 // level-complete screen. Returns true if it actually did something, so
 // the mousedown handler can skip firing/pulling on the same click that
 // triggered a restart.
-function tryRestartOrAdvance() {
+export function tryRestartOrAdvance() {
   if (state.gameOver) {
     state.score = 0;
     state.level = 1;

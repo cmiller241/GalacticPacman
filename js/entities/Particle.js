@@ -32,10 +32,14 @@ export class Particle {
     this.growRate = 0; // radius change per frame — 0 = constant size, positive = expands over its lifetime
   }
   update() {
-    this.pos.add(this.vel);
-    this.vel = this.vel.multiply(this.drag);
-    this.radius += this.growRate;
-    this.life--;
+    const timeScale = state.timeScale;
+    this.pos.add(this.vel.clone().multiply(timeScale));
+    // Math.pow for the drag decay — see Asteroid.js's identical
+    // reasoning for why an exponential per-frame rate needs to be
+    // exponentiated by timeScale, not just multiplied.
+    this.vel = this.vel.multiply(Math.pow(this.drag, timeScale));
+    this.radius += this.growRate * timeScale;
+    this.life -= timeScale;
   }
   draw() {
     const ctx = state.ctx;

@@ -132,9 +132,9 @@
       return points;
     }
     update() {
-      this.vel = this.vel.multiply(DRAG);
-      this.pos.add(this.vel);
-      this.angle += this.angularSpeed;
+      this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
+      this.pos.add(this.vel.clone().multiply(state.timeScale));
+      this.angle += this.angularSpeed * state.timeScale;
       if (this.pos.x - this.radius < 0) {
         this.pos.x = this.radius;
         this.vel.x = -this.vel.x;
@@ -229,10 +229,11 @@
       this.growRate = 0;
     }
     update() {
-      this.pos.add(this.vel);
-      this.vel = this.vel.multiply(this.drag);
-      this.radius += this.growRate;
-      this.life--;
+      const timeScale = state.timeScale;
+      this.pos.add(this.vel.clone().multiply(timeScale));
+      this.vel = this.vel.multiply(Math.pow(this.drag, timeScale));
+      this.radius += this.growRate * timeScale;
+      this.life -= timeScale;
     }
     draw() {
       const ctx = state.ctx;
@@ -1350,6 +1351,193 @@
     ctx.restore();
   }
 
+  // js/effects/AimIndicator.js
+  var X_COLOR = "rgba(255, 40, 40, 1)";
+  var X_GLOW_COLOR = "rgba(255, 40, 40, 0.35)";
+  var X_ARM_LENGTH = 14;
+  var X_CORE_WIDTH = 5;
+  var X_GLOW_WIDTH = 11;
+  var X_DISTANCE_PAST_MUZZLE = 200;
+  function drawAimIndicator() {
+    const player = state.player;
+    if (!player || player.mode !== "space" || !player.aimShoulderPos) return;
+    if (player.lockedTarget) return;
+    let markX, markY;
+    if (player.aimTargetPoint) {
+      markX = player.aimTargetPoint.x;
+      markY = player.aimTargetPoint.y;
+    } else {
+      const angle = player.aimWorldAngle + player.blasterAngleOffset;
+      const muzzleDist = player.blasterMuzzleLength * player.bodyScale;
+      const dirX = Math.cos(angle), dirY = Math.sin(angle);
+      const muzzleX = player.aimShoulderPos.x + dirX * muzzleDist;
+      const muzzleY = player.aimShoulderPos.y + dirY * muzzleDist;
+      markX = muzzleX + dirX * X_DISTANCE_PAST_MUZZLE;
+      markY = muzzleY + dirY * X_DISTANCE_PAST_MUZZLE;
+    }
+    const ctx = state.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(markX - X_ARM_LENGTH, markY - X_ARM_LENGTH);
+    ctx.lineTo(markX + X_ARM_LENGTH, markY + X_ARM_LENGTH);
+    ctx.moveTo(markX + X_ARM_LENGTH, markY - X_ARM_LENGTH);
+    ctx.lineTo(markX - X_ARM_LENGTH, markY + X_ARM_LENGTH);
+    ctx.strokeStyle = X_GLOW_COLOR;
+    ctx.lineWidth = X_GLOW_WIDTH;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    ctx.strokeStyle = X_COLOR;
+    ctx.lineWidth = X_CORE_WIDTH;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // js/systems/Raycast.js
+  function getBoundingRadius(obj) {
+    return obj.isRoundedRect ? Math.hypot(obj.halfWidth, obj.halfHeight) : obj.radius;
+  }
+  function isInViewport(obj) {
+    const radius = getBoundingRadius(obj);
+    if (!radius) return false;
+    const cam = state.camera || { x: 0, y: 0 };
+    const vw = state.visibleWidth || 0;
+    const vh = state.visibleHeight || 0;
+    if (obj.pos.x + radius < cam.x || obj.pos.x - radius > cam.x + vw) return false;
+    if (obj.pos.y + radius < cam.y || obj.pos.y - radius > cam.y + vh) return false;
+    return true;
+  }
+  function findNearestOccluder(originX, originY, angle) {
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    let best = null;
+    let bestDist = Infinity;
+    const candidates = [...state.planetoids, ...state.asteroids];
+    for (const obj of candidates) {
+      const radius = getBoundingRadius(obj);
+      if (!radius) continue;
+      if (!isInViewport(obj)) continue;
+      const toCenterX = obj.pos.x - originX;
+      const toCenterY = obj.pos.y - originY;
+      const tca = toCenterX * dirX + toCenterY * dirY;
+      const dSq = toCenterX * toCenterX + toCenterY * toCenterY - tca * tca;
+      const radiusSq = radius * radius;
+      if (dSq > radiusSq) continue;
+      const thc = Math.sqrt(radiusSq - dSq);
+      const t0 = tca - thc;
+      const t1 = tca + thc;
+      const t = t0 >= 0 ? t0 : t1;
+      if (t < 0) continue;
+      if (t < bestDist) {
+        bestDist = t;
+        best = obj;
+      }
+    }
+    if (!best) return { point: null, object: null };
+    return {
+      point: new Vector2(originX + dirX * bestDist, originY + dirY * bestDist),
+      object: best
+    };
+  }
+
+  // js/effects/LockOutline.js
+  var OUTLINE_COLOR2 = "rgba(255, 220, 40, 1)";
+  var OUTLINE_GLOW_COLOR2 = "rgba(255, 220, 40, 0.35)";
+  var OUTLINE_CORE_WIDTH2 = 3;
+  var OUTLINE_GLOW_WIDTH2 = 9;
+  var OUTLINE_PADDING2 = 8;
+  function drawLockOutline() {
+    const player = state.player;
+    if (!player || !player.lockedTarget || player.mode !== "space") return;
+    const target = player.lockedTarget;
+    const ctx = state.ctx;
+    const pulse = (Math.sin(Date.now() * 3e-3) + 1) / 2;
+    ctx.save();
+    if (target.isRoundedRect) {
+      ctx.translate(target.pos.x, target.pos.y);
+      ctx.rotate(target.rotationAngle);
+      const w = target.halfWidth + OUTLINE_PADDING2;
+      const h = target.halfHeight + OUTLINE_PADDING2;
+      ctx.beginPath();
+      ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + OUTLINE_PADDING2);
+    } else {
+      const radius = getBoundingRadius(target);
+      ctx.beginPath();
+      ctx.arc(target.pos.x, target.pos.y, radius + OUTLINE_PADDING2, 0, Math.PI * 2);
+    }
+    ctx.globalAlpha = 0.35 + pulse * 0.25;
+    ctx.strokeStyle = OUTLINE_GLOW_COLOR2;
+    ctx.lineWidth = OUTLINE_GLOW_WIDTH2;
+    ctx.stroke();
+    ctx.globalAlpha = 0.8 + pulse * 0.2;
+    ctx.strokeStyle = OUTLINE_COLOR2;
+    ctx.lineWidth = OUTLINE_CORE_WIDTH2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // js/effects/VatsOverlay.js
+  var OVERLAY_COLOR = "rgba(0, 0, 0, 0.55)";
+  var CUTOUT_PADDING = 14;
+  var overlayCanvas = null;
+  var overlayCtx = null;
+  function getOverlayLayer(width, height) {
+    const w = Math.max(1, Math.ceil(width));
+    const h = Math.max(1, Math.ceil(height));
+    if (!overlayCanvas) {
+      overlayCanvas = document.createElement("canvas");
+      overlayCtx = overlayCanvas.getContext("2d");
+    }
+    if (overlayCanvas.width !== w || overlayCanvas.height !== h) {
+      overlayCanvas.width = w;
+      overlayCanvas.height = h;
+    }
+    return { canvas: overlayCanvas, ctx: overlayCtx };
+  }
+  function drawVatsOverlay() {
+    const denom = 1 - state.vatsTimeScale;
+    const progress = denom > 0 ? (1 - state.timeScale) / denom : 0;
+    if (progress <= 0) return;
+    const mainCtx = state.ctx;
+    const cam = state.camera || { x: 0, y: 0 };
+    const vw = state.visibleWidth || 0;
+    const vh = state.visibleHeight || 0;
+    if (vw <= 0 || vh <= 0) return;
+    const { canvas: layer, ctx } = getOverlayLayer(vw, vh);
+    ctx.clearRect(0, 0, layer.width, layer.height);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = OVERLAY_COLOR;
+    ctx.fillRect(0, 0, layer.width, layer.height);
+    const target = state.player && state.player.lockedTarget;
+    if (target) {
+      const localX = target.pos.x - cam.x;
+      const localY = target.pos.y - cam.y;
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "rgba(0,0,0,1)";
+      if (target.isRoundedRect) {
+        ctx.save();
+        ctx.translate(localX, localY);
+        ctx.rotate(target.rotationAngle);
+        const w = target.halfWidth + CUTOUT_PADDING;
+        const h = target.halfHeight + CUTOUT_PADDING;
+        ctx.beginPath();
+        ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + CUTOUT_PADDING);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        const radius = getBoundingRadius(target) + CUTOUT_PADDING;
+        ctx.beginPath();
+        ctx.arc(localX, localY, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    mainCtx.save();
+    mainCtx.globalAlpha = progress;
+    mainCtx.globalCompositeOperation = "source-over";
+    mainCtx.drawImage(layer, cam.x, cam.y, vw, vh);
+    mainCtx.restore();
+  }
+
   // js/world/SpikeyPlanetoid.js
   var SpikeyPlanetoid = class extends Planetoid {
     constructor(x, y, radius) {
@@ -2345,12 +2533,12 @@
       this.radius = 1.3 + Math.random() * 2;
       this.hue = 18 + Math.random() * 30;
     }
-    update() {
-      this.x += this.vx;
-      this.y += this.vy;
-      this.vx *= 0.97;
-      this.vy *= 0.97;
-      this.life -= this.decay;
+    update(timeScale) {
+      this.x += this.vx * timeScale;
+      this.y += this.vy * timeScale;
+      this.vx *= Math.pow(0.97, timeScale);
+      this.vy *= Math.pow(0.97, timeScale);
+      this.life -= this.decay * timeScale;
     }
   };
   var FireBar = class {
@@ -2359,7 +2547,7 @@
       this.isImmovable = true;
       this.blockRadius = options.blockRadius ?? 25;
       this.radius = this.blockRadius;
-      this.barLength = options.barLength ?? 250;
+      this.barLength = options.barLength ?? 500;
       this.numFireballs = options.numFireballs ?? 10;
       this.fireballRadius = options.fireballRadius ?? 15;
       this.rotationSpeed = options.rotationSpeed ?? 0.05;
@@ -2368,15 +2556,16 @@
       this.embers = [];
     }
     update() {
-      this.angle += this.rotationSpeed;
+      const timeScale = state.timeScale;
+      this.angle += this.rotationSpeed * timeScale;
       const fireballs = this.getFireballPositions();
       for (const f of fireballs) {
-        if (Math.random() < this.emberSpawnChance) {
+        if (Math.random() < this.emberSpawnChance * timeScale) {
           this.embers.push(new FireEmber(f.x, f.y));
         }
       }
       for (let i = this.embers.length - 1; i >= 0; i--) {
-        this.embers[i].update();
+        this.embers[i].update(timeScale);
         if (this.embers[i].life <= 0) {
           this.embers.splice(i, 1);
         }
@@ -3448,7 +3637,17 @@
   var TRAIL_SPAWN_CHANCE = 0.9;
   var TRAIL_PARTICLE_LIFE_MIN = 14;
   var TRAIL_PARTICLE_LIFE_RANGE = 12;
+  var SPARK_SPAWN_CHANCE = 0.35;
+  var SPARK_LIFE_MIN = 8;
+  var SPARK_LIFE_RANGE = 8;
   var OFFSCREEN_MARGIN = 400;
+  function lerpColor(from, to, t) {
+    return [
+      Math.round(from[0] + (to[0] - from[0]) * t),
+      Math.round(from[1] + (to[1] - from[1]) * t),
+      Math.round(from[2] + (to[2] - from[2]) * t)
+    ];
+  }
   var fireballSprite = null;
   function getFireballSprite() {
     if (fireballSprite) return fireballSprite;
@@ -3488,15 +3687,18 @@
       this.vel = new Vector2(Math.cos(angle), Math.sin(angle)).multiply(FIREBALL_SPEED);
       this.life = FIREBALL_LIFE;
       this.trail = [];
+      this.sparks = [];
       this.radius = 8;
+      this.flickerPhase = Math.random() * Math.PI * 2;
     }
     get isDead() {
       return this.life <= 0;
     }
     update() {
-      this.pos.add(this.vel);
-      this.life--;
-      if (Math.random() < TRAIL_SPAWN_CHANCE) {
+      const timeScale = state.timeScale;
+      this.pos.add(this.vel.clone().multiply(timeScale));
+      this.life -= timeScale;
+      if (Math.random() < TRAIL_SPAWN_CHANCE * timeScale) {
         const spread = 10;
         const maxLife = TRAIL_PARTICLE_LIFE_MIN + Math.random() * TRAIL_PARTICLE_LIFE_RANGE;
         this.trail.push({
@@ -3508,8 +3710,28 @@
         });
       }
       for (let i = this.trail.length - 1; i >= 0; i--) {
-        this.trail[i].life--;
+        this.trail[i].life -= timeScale;
         if (this.trail[i].life <= 0) this.trail.splice(i, 1);
+      }
+      if (Math.random() < SPARK_SPAWN_CHANCE * timeScale) {
+        const sparkAngle = Math.random() * Math.PI * 2;
+        const sparkSpeed = 1 + Math.random() * 2.5;
+        const maxLife = SPARK_LIFE_MIN + Math.random() * SPARK_LIFE_RANGE;
+        this.sparks.push({
+          x: this.pos.x,
+          y: this.pos.y,
+          vx: Math.cos(sparkAngle) * sparkSpeed,
+          vy: Math.sin(sparkAngle) * sparkSpeed,
+          life: maxLife,
+          maxLife
+        });
+      }
+      for (let i = this.sparks.length - 1; i >= 0; i--) {
+        const s = this.sparks[i];
+        s.x += s.vx * timeScale;
+        s.y += s.vy * timeScale;
+        s.life -= timeScale;
+        if (s.life <= 0) this.sparks.splice(i, 1);
       }
       if (this.pos.x < -OFFSCREEN_MARGIN || this.pos.x > state.sceneWidth + OFFSCREEN_MARGIN || this.pos.y < -OFFSCREEN_MARGIN || this.pos.y > state.sceneHeight + OFFSCREEN_MARGIN) {
         this.life = 0;
@@ -3520,21 +3742,81 @@
       for (const t of this.trail) {
         const a = t.life / t.maxLife;
         const ts = t.size * a;
+        const outer = lerpColor([255, 85, 0], [70, 68, 72], 1 - a);
+        const inner = lerpColor([255, 204, 68], [110, 108, 112], 1 - a);
         ctx.globalAlpha = a * 0.85;
-        ctx.fillStyle = "#ff5500";
+        ctx.fillStyle = `rgb(${outer[0]}, ${outer[1]}, ${outer[2]})`;
         ctx.beginPath();
         ctx.arc(t.x, t.y, ts * 1.4, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = "#ffcc44";
+        ctx.fillStyle = `rgb(${inner[0]}, ${inner[1]}, ${inner[2]})`;
         ctx.beginPath();
         ctx.arc(t.x, t.y, ts * 0.75, 0, Math.PI * 2);
         ctx.fill();
       }
+      for (const s of this.sparks) {
+        const a = s.life / s.maxLife;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = "#ffe066";
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 1.5 * a + 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.globalAlpha = 1;
+      const flicker = Math.sin(Date.now() * 0.02 + this.flickerPhase);
+      const scale = 1 + flicker * 0.08;
+      const alpha = 1 - Math.abs(flicker) * 0.1;
       const sprite = getFireballSprite();
-      ctx.drawImage(sprite, this.pos.x - sprite.width / 2, this.pos.y - sprite.height / 2);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(this.pos.x, this.pos.y);
+      ctx.scale(scale, scale);
+      ctx.drawImage(sprite, -sprite.width / 2, -sprite.height / 2);
+      ctx.restore();
     }
   };
+
+  // js/systems/TargetLock.js
+  function gatherLockCandidates() {
+    const standingOn = state.player && state.player.onSurface ? state.player.currentPlanet : null;
+    return [...state.planetoids, ...state.asteroids, ...state.goombas].filter((c) => c !== standingOn).filter(isInViewport);
+  }
+  function isValidLockTarget(obj) {
+    if (!obj) return false;
+    const stillExists = state.planetoids.includes(obj) || state.asteroids.includes(obj) || state.goombas.includes(obj);
+    if (!stillExists) return false;
+    if (!isInViewport(obj)) return false;
+    if (state.player && state.player.onSurface && state.player.currentPlanet === obj) return false;
+    return true;
+  }
+  function pickNearestInDirection(candidates, playerPos, referenceAngle, direction) {
+    let best = null;
+    let bestDelta = Infinity;
+    for (const c of candidates) {
+      const angle = Math.atan2(c.pos.y - playerPos.y, c.pos.x - playerPos.x);
+      let delta = (angle - referenceAngle) * direction % (Math.PI * 2);
+      if (delta <= 0) delta += Math.PI * 2;
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = c;
+      }
+    }
+    return best;
+  }
+  function selectNextLockTarget(currentTarget, referenceAngle, playerPos) {
+    const candidates = gatherLockCandidates().filter((c) => c !== currentTarget);
+    if (candidates.length === 0) {
+      return currentTarget || null;
+    }
+    return pickNearestInDirection(candidates, playerPos, referenceAngle, 1);
+  }
+  function selectPreviousLockTarget(currentTarget, referenceAngle, playerPos) {
+    const candidates = gatherLockCandidates().filter((c) => c !== currentTarget);
+    if (candidates.length === 0) {
+      return currentTarget || null;
+    }
+    return pickNearestInDirection(candidates, playerPos, referenceAngle, -1);
+  }
 
   // js/entities/Player.js
   var Player = class extends Entity {
@@ -3608,6 +3890,7 @@
       this.aimShoulderPos = null;
       this.aimWorldAngle = 0;
       this.aimRelativeAngle = 0;
+      this.aimAnchorPos = null;
       this.headLookScale = 0.6;
       this.headPivotFraction = 0.9;
       this.blasterMuzzleLength = 300;
@@ -3615,9 +3898,16 @@
       this.fireCooldown = 150;
       this.jumpHorizontalCarry = 0.6;
       this.lastShotTime = 0;
+      this.runSpeedMultiplier = 1.8;
+      this.runJumpMultiplier = 1.3;
+      this.airControlAccel = 0.3;
+      this.airControlMaxSpeed = 4;
+      this.edgeFallCarryFraction = 0.35;
       this.pullTarget = null;
-      this.pullAccel = 0.6;
+      this.lockedTarget = null;
+      this.pullAccel = 0.85;
       this.pullMaxSpeed = 18;
+      this.pullTangentialDamping = 0.12;
       this.mouseIdleThreshold = 2e3;
       this.mouseIdle = true;
       this.mouseWheelSuppressDuration = 200;
@@ -3694,10 +3984,23 @@
       const wy = offsetX * sinO + offsetY * cosO;
       const shoulderX = originPos.x + wx * s;
       const shoulderY = originPos.y + wy * s;
+      const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
+      if (this.lockedTarget && !isValidLockTarget(this.lockedTarget)) {
+        this.lockedTarget = null;
+      }
       let targetWorldX, targetWorldY;
-      if (this.pullTarget) {
+      if (this.lockedTarget) {
+        targetWorldX = this.lockedTarget.pos.x;
+        targetWorldY = this.lockedTarget.pos.y;
+      } else if (this.pullTarget) {
         targetWorldX = this.pullTarget.pos.x;
         targetWorldY = this.pullTarget.pos.y;
+      } else if (state.gamepadAimActive) {
+        targetWorldX = shoulderX + state.gamepadAimX * 1e3;
+        targetWorldY = shoulderY + state.gamepadAimY * 1e3;
+      } else if (state.gamepadIsActiveDevice) {
+        targetWorldX = shoulderX + Math.cos(forwardAngle) * 1e3;
+        targetWorldY = shoulderY + Math.sin(forwardAngle) * 1e3;
       } else {
         const cam = state.camera || { x: 0, y: 0 };
         const zoom = state.zoom || 1;
@@ -3706,16 +4009,25 @@
         targetWorldY = mouse.y / zoom + cam.y;
       }
       const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
-      const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
       let relative = Math.atan2(
         Math.sin(targetAngle - forwardAngle),
         Math.cos(targetAngle - forwardAngle)
       );
-      relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+      if (!this.lockedTarget) {
+        relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+      }
       const clampedTargetAngle = forwardAngle + relative;
       this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
       this.aimWorldAngle = clampedTargetAngle;
       this.aimRelativeAngle = relative;
+      this.aimAnchorPos = this.pos.clone();
+      const fireAngle = clampedTargetAngle + this.blasterAngleOffset;
+      const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
+      const muzzleX = shoulderX + Math.cos(fireAngle) * muzzleDist;
+      const muzzleY = shoulderY + Math.sin(fireAngle) * muzzleDist;
+      const aimResult = findNearestOccluder(muzzleX, muzzleY, fireAngle);
+      this.aimTargetPoint = aimResult.point;
+      this.aimTargetObject = aimResult.object;
       return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
     }
     // Converts a desired WORLD-space angle into the local rotation
@@ -3759,12 +4071,23 @@
       const now = Date.now();
       if (now - this.lastShotTime < this.fireCooldown) return;
       this.lastShotTime = now;
-      const angle = this.aimWorldAngle + this.blasterAngleOffset;
+      const anchor = this.aimAnchorPos || this.pos;
+      const shoulderX = this.aimShoulderPos.x + (this.pos.x - anchor.x);
+      const shoulderY = this.aimShoulderPos.y + (this.pos.y - anchor.y);
+      let angle;
+      if (this.lockedTarget) {
+        angle = Math.atan2(this.lockedTarget.pos.y - shoulderY, this.lockedTarget.pos.x - shoulderX);
+      } else if (this.pullTarget) {
+        angle = Math.atan2(this.pullTarget.pos.y - shoulderY, this.pullTarget.pos.x - shoulderX) + this.blasterAngleOffset;
+      } else {
+        angle = this.aimWorldAngle + this.blasterAngleOffset;
+      }
       const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
-      const tipX = this.aimShoulderPos.x + Math.cos(angle) * muzzleDist;
-      const tipY = this.aimShoulderPos.y + Math.sin(angle) * muzzleDist;
+      const tipX = shoulderX + Math.cos(angle) * muzzleDist;
+      const tipY = shoulderY + Math.sin(angle) * muzzleDist;
       state.fireballs.push(new Fireball(tipX, tipY, angle));
       state.audioManager.playFireball();
+      state.vatsActive = false;
     }
     // ----------------------------
     // PULL TARGET (right-click "pull star")
@@ -3777,30 +4100,47 @@
     // grounded, launches off the current planet with a real jump-strength
     // kick so the pull can actually take hold immediately (see below for
     // why that launch matters, not just a bare onSurface flip).
-    trySelectPullTarget() {
+    //
+    // explicitTarget, if given, skips the mouse-position lookup entirely
+    // and uses that object instead — this is how gamepadInput.js's L2
+    // handler reuses this same method with the raycast-derived
+    // aimTargetObject rather than duplicating everything below it. Still
+    // validated the same way an explicit target STILL has to actually be
+    // a current, pullable planetoid (in state.planetoids, not
+    // isPullExempt) — the raycast that produced aimTargetObject also
+    // considers asteroids as occluders, which were never valid pull
+    // targets even via mouse, so this guards against pulling one of
+    // those in by mistake.
+    trySelectPullTarget(explicitTarget = null) {
       if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
-      const worldX = mouse.x / zoom + cam.x;
-      const worldY = mouse.y / zoom + cam.y;
       let best = null;
-      let bestDistSq = Infinity;
-      for (const planet of state.planetoids) {
-        if (planet.isPullExempt) continue;
-        let hit;
-        if (planet.isRoundedRect) {
-          hit = typeof planet.containsPoint === "function" && planet.containsPoint(worldX, worldY);
-        } else {
-          const dx = worldX - planet.pos.x;
-          const dy = worldY - planet.pos.y;
-          hit = dx * dx + dy * dy <= planet.radius * planet.radius;
+      if (explicitTarget) {
+        if (state.planetoids.includes(explicitTarget) && !explicitTarget.isPullExempt) {
+          best = explicitTarget;
         }
-        if (!hit) continue;
-        const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
-        if (distSq < bestDistSq) {
-          bestDistSq = distSq;
-          best = planet;
+      } else {
+        const cam = state.camera || { x: 0, y: 0 };
+        const zoom = state.zoom || 1;
+        const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+        const worldX = mouse.x / zoom + cam.x;
+        const worldY = mouse.y / zoom + cam.y;
+        let bestDistSq = Infinity;
+        for (const planet of state.planetoids) {
+          if (planet.isPullExempt) continue;
+          let hit;
+          if (planet.isRoundedRect) {
+            hit = typeof planet.containsPoint === "function" && planet.containsPoint(worldX, worldY);
+          } else {
+            const dx = worldX - planet.pos.x;
+            const dy = worldY - planet.pos.y;
+            hit = dx * dx + dy * dy <= planet.radius * planet.radius;
+          }
+          if (!hit) continue;
+          const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
+          if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            best = planet;
+          }
         }
       }
       if (best) {
@@ -3811,10 +4151,42 @@
         this.pullTarget = best;
         this.onSurface = false;
         this.currentPlanet = null;
+        state.vatsActive = false;
       }
     }
     clearPullTarget() {
       this.pullTarget = null;
+    }
+    // ----------------------------
+    // HARD LOCK (gamepad R1 = next/clockwise, L1 = previous/counter-
+    // clockwise, circle = release)
+    // ----------------------------
+    // Both cycle from wherever the blaster is currently aimed
+    // (this.aimWorldAngle — kept accurate every frame regardless of
+    // source, so this works whether there's no lock yet, per the
+    // first-press case starting from whatever the normal aim system
+    // currently has it pointed at, or an existing lock, since
+    // aimWorldAngle would already equal the angle to the current
+    // lockedTarget by the time either of these runs again). See
+    // TargetLock.js's selectNextLockTarget/selectPreviousLockTarget for
+    // the actual candidate-gathering/sorting logic — the two are mirror
+    // images of each other, so in the common case a single R1 press
+    // followed by a single L1 press (or vice versa) lands back on
+    // whatever was locked before, reading as a genuine undo.
+    tryLockTargetNext() {
+      if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+      const originPos = this.aimShoulderPos || this.pos;
+      const referenceAngle = this.aimWorldAngle ?? 0;
+      this.lockedTarget = selectNextLockTarget(this.lockedTarget, referenceAngle, originPos);
+    }
+    tryLockTargetPrevious() {
+      if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
+      const originPos = this.aimShoulderPos || this.pos;
+      const referenceAngle = this.aimWorldAngle ?? 0;
+      this.lockedTarget = selectPreviousLockTarget(this.lockedTarget, referenceAngle, originPos);
+    }
+    clearLockTarget() {
+      this.lockedTarget = null;
     }
     // Called from gameLoop INSTEAD OF normal gravity while pullTarget is
     // set (see the comment on pullTarget in the constructor for why).
@@ -3836,8 +4208,15 @@
       const dy = this.pullTarget.pos.y - this.pos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < 1e-6) return;
-      this.vel.x += dx / dist * this.pullAccel;
-      this.vel.y += dy / dist * this.pullAccel;
+      const dirX = dx / dist, dirY = dy / dist;
+      const radialSpeed = this.vel.x * dirX + this.vel.y * dirY;
+      const tangentX = this.vel.x - radialSpeed * dirX;
+      const tangentY = this.vel.y - radialSpeed * dirY;
+      const tangentRetention = Math.pow(1 - this.pullTangentialDamping, state.timeScale);
+      this.vel.x -= tangentX * (1 - tangentRetention);
+      this.vel.y -= tangentY * (1 - tangentRetention);
+      this.vel.x += dirX * this.pullAccel * state.timeScale;
+      this.vel.y += dirY * this.pullAccel * state.timeScale;
       const speed = this.vel.length();
       if (speed > this.pullMaxSpeed) {
         this.vel = this.vel.multiply(this.pullMaxSpeed / speed);
@@ -3877,6 +4256,7 @@
         this.deathAlpha = 1;
         createDeathParticles(this.pos, 400);
         state.audioManager.playDeath();
+        state.vatsActive = false;
       }
     }
     applyGravity() {
@@ -3996,7 +4376,8 @@
       }
       const feetPos = this.pos.clone().add(downDir.multiply(this.radius * 0.9));
       const sideDir = new Vector2(-downDir.y, downDir.x);
-      const puffCount = 2 + Math.floor(Math.random() * 2);
+      const running = state.gamepadRunHeld;
+      const puffCount = (running ? 4 : 2) + Math.floor(Math.random() * (running ? 3 : 2));
       for (let i = 0; i < puffCount; i++) {
         const sideSpread = (Math.random() - 0.5) * 2.5;
         const upSpeed = 0.2 + Math.random() * 0.4;
@@ -4111,13 +4492,14 @@
         const planet = this.currentPlanet;
         this.isWalking = false;
         let ds = 0;
+        const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
         if (keys["ArrowLeft"]) {
-          ds = -PLAYER_LINEAR_SPEED;
+          ds = -speed;
           this.facingDirection = -1;
           this.isWalking = true;
         }
         if (keys["ArrowRight"]) {
-          ds = PLAYER_LINEAR_SPEED;
+          ds = speed;
           this.facingDirection = 1;
           this.isWalking = true;
         }
@@ -4129,7 +4511,7 @@
           if (desiredX < minX || desiredX > maxX) {
             this.onSurface = false;
             this.currentPlanet = null;
-            this.vel = new Vector2(ds, 0);
+            this.vel = new Vector2(ds * this.edgeFallCarryFraction, 0);
           } else {
             const topY = planet.pos.y - planet.halfHeight;
             this.pos = new Vector2(desiredX, topY - PLAYER_RADIUS);
@@ -4145,7 +4527,8 @@
         }
       } else if (this.onSurface && this.currentPlanet) {
         const surfaceDist = this.currentPlanet.radius + this.radius;
-        const angularSpeed = PLAYER_LINEAR_SPEED / surfaceDist;
+        const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
+        const angularSpeed = speed / surfaceDist;
         this.isWalking = false;
         const prevAngle = this.angle;
         if (keys["ArrowLeft"]) {
@@ -4164,6 +4547,15 @@
           const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
           this.walkTime += distanceMoved / this.strideLength * Math.PI * 2;
           this.spawnWalkDust();
+        }
+      } else if (!this.onSurface && this.lastInfluencePlanet && this.lastInfluencePlanet.isSkyDome) {
+        if (keys["ArrowLeft"]) {
+          this.vel.x = Math.max(this.vel.x - this.airControlAccel, -this.airControlMaxSpeed);
+          this.facingDirection = -1;
+        }
+        if (keys["ArrowRight"]) {
+          this.vel.x = Math.min(this.vel.x + this.airControlAccel, this.airControlMaxSpeed);
+          this.facingDirection = 1;
         }
       }
     }
@@ -4199,9 +4591,10 @@
       return this.pos.subtract(this.currentPlanet.pos).normalize();
     }
     jump() {
+      const jumpBoost = state.gamepadRunHeld ? this.runJumpMultiplier : 1;
       if (this.mode === "platform") {
         if (this.onGround) {
-          this.platformVel.y = -JUMP_STRENGTH * 0.5;
+          this.platformVel.y = -JUMP_STRENGTH * 0.5 * jumpBoost;
           this.onGround = false;
           state.audioManager.playJump();
         }
@@ -4209,7 +4602,7 @@
       }
       if (this.onSurface && this.currentPlanet) {
         const direction = this.getOutwardLaunchDirection();
-        this.vel = direction.multiply(JUMP_STRENGTH);
+        this.vel = direction.multiply(JUMP_STRENGTH * jumpBoost);
         this.onSurface = false;
         this.currentPlanet = null;
         state.audioManager.playJump();
@@ -4290,8 +4683,8 @@
         return;
       }
       if (!this.onSurface) {
-        this.vel = this.vel.multiply(DRAG);
-        this.pos.add(this.vel);
+        this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
+        this.pos.add(this.vel.clone().multiply(state.timeScale));
         if (this.pos.x - this.radius < 0) {
           this.pos.x = this.radius;
           this.vel.x = -this.vel.x;
@@ -4336,7 +4729,7 @@
       const lastMove = state.lastMouseMoveTime || 0;
       const lastWheel = state.lastWheelTime || 0;
       const recentlyScrolled = Date.now() - lastWheel < this.mouseWheelSuppressDuration;
-      this.mouseIdle = recentlyScrolled || Date.now() - lastMove > this.mouseIdleThreshold;
+      this.mouseIdle = !this.lockedTarget && !state.gamepadAimActive && (recentlyScrolled || Date.now() - lastMove > this.mouseIdleThreshold);
       if (this.mouseIdle) return;
       let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
       let downDir = new Vector2(0, 1);
@@ -4350,16 +4743,25 @@
       }
       const downAngle = Math.atan2(downDir.y, downDir.x);
       const orientation = downAngle - Math.PI / 2;
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
-      const mouseWorldX = mouse.x / zoom + cam.x;
-      const mouseWorldY = mouse.y / zoom + cam.y;
       const tangentX = Math.cos(orientation);
       const tangentY = Math.sin(orientation);
-      const toMouseX = mouseWorldX - this.pos.x;
-      const toMouseY = mouseWorldY - this.pos.y;
-      const projection = toMouseX * tangentX + toMouseY * tangentY;
+      let toTargetX, toTargetY;
+      if (this.lockedTarget) {
+        toTargetX = this.lockedTarget.pos.x - this.pos.x;
+        toTargetY = this.lockedTarget.pos.y - this.pos.y;
+      } else if (state.gamepadAimActive) {
+        toTargetX = state.gamepadAimX;
+        toTargetY = state.gamepadAimY;
+      } else {
+        const cam = state.camera || { x: 0, y: 0 };
+        const zoom = state.zoom || 1;
+        const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+        const mouseWorldX = mouse.x / zoom + cam.x;
+        const mouseWorldY = mouse.y / zoom + cam.y;
+        toTargetX = mouseWorldX - this.pos.x;
+        toTargetY = mouseWorldY - this.pos.y;
+      }
+      const projection = toTargetX * tangentX + toTargetY * tangentY;
       this.facingDirection = projection >= 0 ? 1 : -1;
     }
     // ----------------------------
@@ -4588,7 +4990,7 @@
       const coreHalfWidth = planet.halfWidth - planet.cornerRadius;
       const minX = planet.pos.x - coreHalfWidth + this.radius;
       const maxX = planet.pos.x + coreHalfWidth - this.radius;
-      const desiredX = this.pos.x + this.direction * this.speed;
+      const desiredX = this.pos.x + this.direction * this.speed * state.timeScale;
       if (desiredX < minX || desiredX > maxX) {
         this.direction *= -1;
       } else {
@@ -4596,7 +4998,7 @@
       }
       const topY = planet.pos.y - planet.halfHeight;
       this.pos.y = topY - this.radius;
-      this.walkCyclePhase += this.walkCycleSpeed;
+      this.walkCyclePhase += this.walkCycleSpeed * state.timeScale;
     }
     draw() {
       const img = state.goombaTexture;
@@ -4858,7 +5260,7 @@
         }
         let grav = entity.GRAVITY_STRENGTH || 0.35;
         if (entity.isGroundPounding) grav *= entity.GROUND_POUND_GRAV_MULTIPLIER || 3;
-        entity.vel.add(dir.multiply(grav));
+        entity.vel.add(dir.multiply(grav * state.timeScale));
       }
     }
     // For rect planets, "distance" is measured to the nearest SURFACE
@@ -5209,6 +5611,147 @@
     });
   }
 
+  // js/setup/gamepadInput.js
+  var BUTTON_X_CROSS = 0;
+  var BUTTON_CIRCLE = 1;
+  var BUTTON_SQUARE = 2;
+  var BUTTON_TRIANGLE = 3;
+  var BUTTON_R2 = 7;
+  var BUTTON_L2 = 6;
+  var BUTTON_R1 = 5;
+  var BUTTON_L1 = 4;
+  var BUTTON_DPAD_UP = 12;
+  var BUTTON_DPAD_DOWN = 13;
+  var STICK_DEADZONE = 0.2;
+  var lastXPressed = false;
+  var lastL2Pressed = false;
+  var lastR1Pressed = false;
+  var lastL1Pressed = false;
+  var lastCirclePressed = false;
+  var lastTrianglePressed = false;
+  var gamepadHeldLeft = false;
+  var gamepadHeldRight = false;
+  var gamepadHeldZoomIn = false;
+  var gamepadHeldZoomOut = false;
+  function pollGamepad() {
+    const gamepads = navigator.getGamepads();
+    const gp = Array.from(gamepads).find((g) => g);
+    if (!gp) {
+      state.gamepadAimActive = false;
+      state.gamepadFireHeld = false;
+      state.gamepadRunHeld = false;
+      state.gamepadIsActiveDevice = false;
+      return;
+    }
+    if (state.gameOver || state.levelComplete) {
+      const xPressed2 = gp.buttons[BUTTON_X_CROSS]?.pressed || false;
+      if (xPressed2 && !lastXPressed) {
+        tryRestartOrAdvance();
+      }
+      lastXPressed = xPressed2;
+      return;
+    }
+    const leftX = gp.axes[0] || 0;
+    if (leftX < -STICK_DEADZONE) {
+      state.keys["ArrowLeft"] = true;
+      gamepadHeldLeft = true;
+      if (gamepadHeldRight) {
+        state.keys["ArrowRight"] = false;
+        gamepadHeldRight = false;
+      }
+    } else if (leftX > STICK_DEADZONE) {
+      state.keys["ArrowRight"] = true;
+      gamepadHeldRight = true;
+      if (gamepadHeldLeft) {
+        state.keys["ArrowLeft"] = false;
+        gamepadHeldLeft = false;
+      }
+    } else {
+      if (gamepadHeldLeft) {
+        state.keys["ArrowLeft"] = false;
+        gamepadHeldLeft = false;
+      }
+      if (gamepadHeldRight) {
+        state.keys["ArrowRight"] = false;
+        gamepadHeldRight = false;
+      }
+    }
+    const dpadUpPressed = gp.buttons[BUTTON_DPAD_UP]?.pressed || false;
+    const dpadDownPressed = gp.buttons[BUTTON_DPAD_DOWN]?.pressed || false;
+    if (dpadUpPressed) {
+      state.keys["+"] = true;
+      gamepadHeldZoomIn = true;
+    } else if (gamepadHeldZoomIn) {
+      state.keys["+"] = false;
+      gamepadHeldZoomIn = false;
+    }
+    if (dpadDownPressed) {
+      state.keys["-"] = true;
+      gamepadHeldZoomOut = true;
+    } else if (gamepadHeldZoomOut) {
+      state.keys["-"] = false;
+      gamepadHeldZoomOut = false;
+    }
+    const xPressed = gp.buttons[BUTTON_X_CROSS]?.pressed || false;
+    if (xPressed && !lastXPressed && state.player && state.player.mode !== "maze") {
+      if (state.player.onSurface) state.player.jump();
+      else state.player.tryGroundPound();
+    }
+    lastXPressed = xPressed;
+    state.gamepadFireHeld = gp.buttons[BUTTON_R2]?.pressed || false;
+    const trianglePressed = gp.buttons[BUTTON_TRIANGLE]?.pressed || false;
+    if (state.player && state.player.mode === "space") {
+      if (trianglePressed && !lastTrianglePressed) {
+        state.vatsActive = !state.vatsActive;
+      }
+    } else if (state.vatsActive) {
+      state.vatsActive = false;
+    }
+    lastTrianglePressed = trianglePressed;
+    state.gamepadRunHeld = gp.buttons[BUTTON_SQUARE]?.pressed || false;
+    const r1Pressed = gp.buttons[BUTTON_R1]?.pressed || false;
+    if (r1Pressed && !lastR1Pressed && state.player) {
+      state.player.tryLockTargetNext();
+    }
+    lastR1Pressed = r1Pressed;
+    const l1Pressed = gp.buttons[BUTTON_L1]?.pressed || false;
+    if (l1Pressed && !lastL1Pressed && state.player) {
+      state.player.tryLockTargetPrevious();
+    }
+    lastL1Pressed = l1Pressed;
+    const circlePressed = gp.buttons[BUTTON_CIRCLE]?.pressed || false;
+    if (circlePressed && !lastCirclePressed && state.player) {
+      state.player.clearLockTarget();
+      state.vatsActive = false;
+    }
+    lastCirclePressed = circlePressed;
+    const l2Pressed = gp.buttons[BUTTON_L2]?.pressed || false;
+    if (state.player) {
+      if (l2Pressed && !lastL2Pressed) {
+        state.player.trySelectPullTarget(state.player.lockedTarget || state.player.aimTargetObject);
+      } else if (!l2Pressed && lastL2Pressed) {
+        state.player.clearPullTarget();
+      }
+    }
+    lastL2Pressed = l2Pressed;
+    const rightX = gp.axes[2] || 0;
+    const rightY = gp.axes[3] || 0;
+    const rightMag = Math.hypot(rightX, rightY);
+    if (rightMag > STICK_DEADZONE) {
+      state.gamepadAimActive = true;
+      state.gamepadAimX = rightX / rightMag;
+      state.gamepadAimY = rightY / rightMag;
+    } else {
+      state.gamepadAimActive = false;
+    }
+    const anyButtonPressed = gp.buttons.some((b) => b.pressed);
+    const anyStickActive = Math.abs(leftX) > STICK_DEADZONE || rightMag > STICK_DEADZONE;
+    if (anyButtonPressed || anyStickActive) {
+      state.lastGamepadInputTime = Date.now();
+    }
+    state.gamepadIsActiveDevice = (state.lastGamepadInputTime || 0) > (state.lastMouseMoveTime || 0);
+  }
+
   // js/game.js
   state.canvas = document.getElementById("gameCanvas");
   state.ctx = state.canvas.getContext("2d");
@@ -5227,6 +5770,13 @@
   var previousPlayerMode = null;
   var ZOOM_EASE_RATE = 0.06;
   var ZOOM_EASE_SNAP_THRESHOLD = 0.01;
+  state.timeScale = 1;
+  state.timeScaleTarget = 1;
+  state.vatsActive = false;
+  var VATS_TIME_SCALE = 0.05;
+  state.vatsTimeScale = VATS_TIME_SCALE;
+  var VATS_EASE_RATE = 0.12;
+  var VATS_EASE_SNAP_THRESHOLD = 5e-3;
   var FIREBALL_PLANET_PUSH_STRENGTH = 0.05;
   var STAR_TILE_SIZE = 2e3;
   state.starTileSize = STAR_TILE_SIZE;
@@ -5261,7 +5811,7 @@
         p.vel.y = 0;
         continue;
       }
-      p.pos.add(p.vel);
+      p.pos.add(p.vel.clone().multiply(state.timeScale));
       if (!p.isBeltPlanetoid) {
         if (p.pos.x - p.radius < 0) {
           p.pos.x = p.radius;
@@ -5281,7 +5831,7 @@
         }
       }
       if (p.isRoundedRect) {
-        p.rotationAngle += p.rotationSpeed;
+        p.rotationAngle += p.rotationSpeed * state.timeScale;
       }
     }
   }
@@ -5322,6 +5872,7 @@
     }
     state.lastFrameTime = timestamp;
     state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+    pollGamepad();
     if (state.gameOver) {
       state.ctx.fillStyle = "white";
       state.ctx.font = "48px Arial";
@@ -5330,7 +5881,7 @@
       state.ctx.font = "32px Arial";
       state.ctx.fillText(`Final Score: ${state.score}`, state.canvas.width / 2, state.canvas.height / 2 + 30);
       state.ctx.font = "24px Arial";
-      state.ctx.fillText("Press Enter to Restart", state.canvas.width / 2, state.canvas.height / 2 + 70);
+      state.ctx.fillText("Press Enter or X to Restart", state.canvas.width / 2, state.canvas.height / 2 + 70);
       state.player.isDying = "false";
       requestAnimationFrame(gameLoop);
       return;
@@ -5342,9 +5893,16 @@
       state.ctx.font = "32px Arial";
       state.ctx.fillText(`Score: ${state.score}`, state.canvas.width / 2, state.canvas.height / 2 + 30);
       state.ctx.font = "24px Arial";
-      state.ctx.fillText("Press Enter to start next level", state.canvas.width / 2, state.canvas.height / 2 + 70);
+      state.ctx.fillText("Press Enter or X to start next level", state.canvas.width / 2, state.canvas.height / 2 + 70);
       requestAnimationFrame(gameLoop);
       return;
+    }
+    state.timeScaleTarget = state.vatsActive ? VATS_TIME_SCALE : 1;
+    const timeScaleDiff = state.timeScaleTarget - state.timeScale;
+    if (Math.abs(timeScaleDiff) < VATS_EASE_SNAP_THRESHOLD) {
+      state.timeScale = state.timeScaleTarget;
+    } else {
+      state.timeScale += timeScaleDiff * VATS_EASE_RATE;
     }
     updatePlanetoids();
     if (state.player.mode == "maze") state.player.updateMazePosition();
@@ -5373,7 +5931,7 @@
       }
       state.player.update();
       if (state.player.mode != "maze") collisionSystem.handlePlayerPlanetCollisions(state.player);
-      if (state.mouseDown) state.player.shootFireball();
+      if (state.mouseDown || state.gamepadFireHeld) state.player.shootFireball();
     } else {
       state.player.update();
     }
@@ -5471,6 +6029,8 @@
     camera.x = maxCameraX > 0 ? Math.min(Math.max(camera.x, 0), maxCameraX) : maxCameraX / 2;
     camera.y = maxCameraY > 0 ? Math.min(Math.max(camera.y, 0), maxCameraY) : maxCameraY / 2;
     state.camera = camera;
+    state.visibleWidth = visibleWidth;
+    state.visibleHeight = visibleHeight;
     state.ctx.save();
     state.ctx.scale(zoom, zoom);
     state.ctx.translate(-camera.x, -camera.y);
@@ -5493,6 +6053,9 @@
     state.goombas.forEach((g) => g.draw());
     state.player.draw();
     drawPullIndicator();
+    drawVatsOverlay();
+    drawLockOutline();
+    drawAimIndicator();
     state.coins.forEach((c) => c.draw());
     state.fireballs.forEach((f) => f.draw());
     state.particles.forEach((p) => p.draw());
