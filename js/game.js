@@ -18,15 +18,16 @@ import { AISystem } from './systems/AISystem.js';
 import { createParticles } from './utils.js';
 import { Minimap } from './ui/Minimap.js';
 import { getCellKindLabel, getBeltPlanetoidCount } from './world/CellManifest.js';
-import { drawPullIndicator } from './effects/PullBeam.js';
+import { drawPullIndicator, updatePullIndicator } from './effects/PullBeam.js';
 import { drawAimIndicator } from './effects/AimIndicator.js';
 import { drawLockOutline } from './effects/LockOutline.js';
 import { drawVatsOverlay } from './effects/VatsOverlay.js';
-import { cellCoordFor, updateActiveCells, CELL_CHECK_INTERVAL } from './setup/worldGen.js';
+import { cellCoordFor, updateActiveCells, processPendingCellGeneration, CELL_CHECK_INTERVAL } from './setup/worldGen.js';
 import { initGame } from './setup/levelSetup.js';
 import { loadAssets } from './setup/assetLoading.js';
 import { attachInputHandlers } from './setup/inputHandlers.js';
 import { pollGamepad } from './setup/gamepadInput.js';
+import { initPixiStage, updatePixiStage, syncPlanetoidSprites, syncAsteroidSprites, syncFireballSprites, syncExplosionSprites, syncCoinSprites, getPlayerLayer, getPullBeamLayer, getDomeForegroundLayer } from './render/PixiStage.js';
 
 // Setup canvas and ctx
 state.canvas = document.getElementById('gameCanvas');
@@ -68,7 +69,8 @@ const ZOOM_STEP_PER_FRAME = 0.02;
 // (sets it back to null), so auto-zoom never fights manual input.
 state.zoomTarget = null;
 state.preMazeZoom = state.zoom;
-let previousPlayerMode = null; // tracked frame-to-frame in gameLoop to detect maze entry/exit
+state.prePlatformZoom = state.zoom;
+let previousPlayerMode = null; // tracked frame-to-frame in gameLoop to detect maze/platform entry/exit
 const ZOOM_EASE_RATE = 0.06; // fraction of remaining distance closed per frame — higher = snappier, lower = more gradual
 const ZOOM_EASE_SNAP_THRESHOLD = 0.01; // once this close to the target, just snap to it and stop easing
 
@@ -101,7 +103,7 @@ state.vatsActive = false;
 // first, the original behavior. Doesn't change what Triangle itself
 // does either way — it's still always available to slow things down
 // and look around before committing to a lock.
-state.vatsAutoEnterOnLock = false;
+state.vatsAutoEnterOnLock = true;
 const VATS_TIME_SCALE = 0.05; // world speed while V.A.T.S. is active — near-freeze, not a dramatic-but-still-moving slowdown
 state.vatsTimeScale = VATS_TIME_SCALE; // exposed so VatsOverlay.js can compute a fade progress that matches the easing curve below, rather than snapping on/off out of sync with it
 const VATS_EASE_RATE = 0.12;
@@ -146,10 +148,24 @@ let aiSystem = new AISystem();
 const minimap = new Minimap();
 let cellCheckCounter = 0;
 attachInputHandlers();
-loadAssets(() => {
-  initGame();
-  gameLoop();
-});
+// Pixi setup and asset loading are independent of each other, so they
+// run in parallel rather than one waiting on the other — the game loop
+// only starts once BOTH are ready. initPixiStage() is async (Pixi v8
+// requires awaiting app.init()); this stays a regular .then() rather
+// than top-level await, since the actual build command
+// (`npx esbuild js/game.js --bundle --outfile=dist/bundle.js`, no
+// --format flag) defaults to esbuild's IIFE output, which hard-errors
+// on any top-level await anywhere in the bundle.
+let pixiReady = false;
+let assetsReady = false;
+function tryStartGame() {
+  if (pixiReady && assetsReady) {
+    initGame();
+    gameLoop();
+  }
+}
+initPixiStage().then(() => { pixiReady = true; tryStartGame(); });
+loadAssets(() => { assetsReady = true; tryStartGame(); });
 
 function updatePlanetoids() {
   for (const p of state.planetoids) {
@@ -342,6 +358,7 @@ function gameLoop(timestamp) {
   }
   if (state.player.mode === "platform" && state.platformPlanet?.interior?.blobs) {
     state.platformPlanet.interior.blobs.forEach(b => b.update());
+    collisionSystem.handlePlayerBlobCollisions(state.player, state.platformPlanet.interior.blobs);
   }
   state.coins.forEach(c => c.update());
   state.fireballs.forEach(f => f.update());
@@ -366,7 +383,24 @@ function gameLoop(timestamp) {
     state.audioManager.playFireball();
   }
   state.goombas = state.goombas.filter(g => !goombaFireballResults.killedGoombas.has(g));
-  state.fireballs = state.fireballs.filter(f => !f.isDead && !fireballResults.hitFireballs.has(f) && !goombaFireballResults.hitFireballs.has(f));
+
+  // Blobs only exist within an active platform interior, so this stays
+  // gated the same way the blob update/player-collision block above is
+  // — running it unconditionally could act on stale blob data left
+  // over in state.platformPlanet from a previously-visited interior.
+  let blobFireballResults = { hitFireballs: new Set(), killedBlobs: new Set() };
+  if (state.player.mode === "platform" && state.platformPlanet?.interior?.blobs) {
+    const blobs = state.platformPlanet.interior.blobs;
+    blobFireballResults = collisionSystem.handleFireballBlobCollisions(state.fireballs, blobs);
+    for (const b of blobFireballResults.killedBlobs) {
+      const worldPos = b.getWorldPos();
+      state.explosions.push(new Explosion(worldPos.x, worldPos.y));
+      state.audioManager.playFireball();
+    }
+    state.platformPlanet.interior.blobs = blobs.filter(b => !blobFireballResults.killedBlobs.has(b));
+  }
+
+  state.fireballs = state.fireballs.filter(f => !f.isDead && !fireballResults.hitFireballs.has(f) && !goombaFireballResults.hitFireballs.has(f) && !blobFireballResults.hitFireballs.has(f));
 
   state.explosions.forEach(e => e.update());
   state.explosions = state.explosions.filter(e => !e.isDead);
@@ -415,14 +449,26 @@ function gameLoop(timestamp) {
     cellCheckCounter = 0;
     updateActiveCells();
   }
+  // Every frame, NOT gated behind CELL_CHECK_INTERVAL like
+  // updateActiveCells() above — see this function's own comment in
+  // worldGen.js for why spreading a cell's planetoid creation across
+  // consecutive frames only works if this actually runs every one of
+  // them, not just occasionally.
+  processPendingCellGeneration();
 
-  // Detect maze entry/exit and set an auto-zoom target accordingly.
-  // Checked every frame, cheap (two string comparisons).
+  // Detect maze/platform entry/exit and set an auto-zoom target
+  // accordingly. Checked every frame, cheap (a handful of string
+  // comparisons).
   if (state.player.mode === "maze" && previousPlayerMode !== "maze") {
     state.preMazeZoom = state.zoom; // remember wherever they were zoomed to, to restore on exit
     state.zoomTarget = ZOOM_MAX;
   } else if (previousPlayerMode === "maze" && state.player.mode !== "maze") {
     state.zoomTarget = state.preMazeZoom;
+  } else if (state.player.mode === "platform" && previousPlayerMode !== "platform") {
+    state.prePlatformZoom = state.zoom;
+    state.zoomTarget = ZOOM_MAX;
+  } else if (previousPlayerMode === "platform" && state.player.mode !== "platform") {
+    state.zoomTarget = state.prePlatformZoom;
   }
   previousPlayerMode = state.player.mode;
 
@@ -475,45 +521,109 @@ function gameLoop(timestamp) {
   // viewport, without needing its own separate way to derive this.
   state.visibleWidth = visibleWidth;
   state.visibleHeight = visibleHeight;
+
+  // Circular planetoids only for this phase — rounded-rect types
+  // (SkyDomePlanetoid, belt platforms) don't have updatePixiSprites at
+  // all yet, deliberately deferred to a later phase (see
+  // Planetoid.js's own comment on createPixiSprites/updatePixiSprites
+  // for the full reasoning). Also handles tearing down any planetoid's
+  // Pixi sprites if it's no longer in state.planetoids at all (pruned
+  // by cell streaming, destroyed, etc.) — see syncPlanetoidSprites'
+  // own comment in PixiStage.js for why that cleanup is necessary and
+  // what a bare per-frame create/update loop alone was missing.
+  // Called before updatePixiStage's own app.render() below, so every
+  // sprite's position/alpha/rotation is current before that frame
+  // actually renders.
+  syncPlanetoidSprites(state.planetoids);
+  syncAsteroidSprites(state.asteroids);
+  syncFireballSprites(state.fireballs);
+  syncExplosionSprites(state.explosions);
+  syncCoinSprites(state.coins);
+  updatePullIndicator(getPullBeamLayer());
+  // SkyDomePlanetoid's own separate "near glass" pass — was
+  // drawForegroundGlass(), called after the player in the old
+  // Canvas2D draw order for z-order reasons that don't carry over to
+  // Pixi (its own z-order is fixed by scene-graph insertion order, not
+  // by when this update happens relative to other sync calls) — the
+  // only real requirement now is running before updatePixiStage's own
+  // render call below, same as every other sync call here.
+  if (state.skyDomePlanet) state.skyDomePlanet.updateForegroundGlassPixi(getDomeForegroundLayer());
+  state.player.updatePixiRig(getPlayerLayer());
+  updatePixiStage();
+
   state.ctx.save();
   state.ctx.scale(zoom, zoom);
   state.ctx.translate(-camera.x, -camera.y);
 
-  // Tiled starfield: repeat the small pre-rendered tile across whatever
-  // is currently visible, rather than one canvas sized to the world
-  // (see the STARFIELD comment near the top of this file for why).
-  {
-    const ts = state.starTileSize;
-    const startX = Math.floor(camera.x / ts) * ts;
-    const startY = Math.floor(camera.y / ts) * ts;
-    const endX = camera.x + visibleWidth;
-    const endY = camera.y + visibleHeight;
-    for (let ty = startY; ty < endY; ty += ts) {
-      for (let tx = startX; tx < endX; tx += ts) {
-        state.ctx.drawImage(state.starCanvas, tx, ty);
-      }
-    }
-  }
+  // Tiled starfield: now rendered via Pixi's starfieldSprite
+  // (TilingSprite) instead — see PixiStage.js's own updatePixiStage.
+  // This was the ACTUAL bug behind "stars render above everything":
+  // state.ctx (#gameCanvas) is deliberately layered ABOVE the Pixi
+  // canvas so the HUD/overlay effects still drawn on it stay visually
+  // on top — which meant this old loop was painting stars directly
+  // over every Pixi-rendered planet/asteroid/player, every single
+  // frame, completely independently of anything in PixiStage.js. Not
+  // a Pixi-internal z-order problem at all, despite an earlier fix
+  // attempting to treat it as one.
+  // {
+  //   const ts = state.starTileSize;
+  //   const startX = Math.floor(camera.x / ts) * ts;
+  //   const startY = Math.floor(camera.y / ts) * ts;
+  //   const endX = camera.x + visibleWidth;
+  //   const endY = camera.y + visibleHeight;
+  //   for (let ty = startY; ty < endY; ty += ts) {
+  //     for (let tx = startX; tx < endX; tx += ts) {
+  //       state.ctx.drawImage(state.starCanvas, tx, ty);
+  //     }
+  //   }
+  // }
 
-  state.planetoids.forEach(p => p.draw());
-  state.asteroids.forEach(a => a.draw());
-  state.fireBars.forEach(b => b.draw());
-  state.enemies.forEach(e => e.draw());
-  state.goombas.forEach(g => g.draw());
-  state.player.draw();
-  drawPullIndicator();
+  // Rendering only disabled below — update()/collision/physics for
+  // every one of these keeps running exactly as before, untouched,
+  // elsewhere in this same loop; only the draw() calls are skipped.
+  // Planetoids (circular), asteroids, and fireballs now render via
+  // Pixi instead, see syncPlanetoidSprites/syncAsteroidSprites/
+  // syncFireballSprites/updatePixiStage above. Everything else here is
+  // simply not rendered at all yet, per this migration phase's scope —
+  // to be restored file-by-file as each is ported later.
+  // state.planetoids.forEach(p => p.draw());
+  // state.asteroids.forEach(a => a.draw());
+  // state.fireBars.forEach(b => b.draw());
+  // state.enemies.forEach(e => e.draw());
+  // state.goombas.forEach(g => g.draw());
+  // state.player.draw() — now handled by Pixi (updatePixiRig above).
+  // Left active, this would double-call computeLeftArmAimAngle() every
+  // frame (drawFullBody's own call to it), which has real side effects
+  // — aimShoulderPos/aimAnchorPos — shootFireball() depends on.
+  // state.player.draw();
+  // drawPullIndicator() — now handled by Pixi (updatePullIndicator
+  // above). Left active, this would double-draw the pull beam: the
+  // Canvas2D layer (#gameCanvas) sits ON TOP of the Pixi canvas in the
+  // DOM, so the old Canvas2D beam would visually mask the new Pixi
+  // one, not just draw redundantly underneath it.
+  // drawPullIndicator();
   drawVatsOverlay();
   drawLockOutline();
   drawAimIndicator();
-  state.coins.forEach(c => c.draw());
-  state.fireballs.forEach(f => f.draw());
-  state.particles.forEach(p => p.draw());
-  state.explosions.forEach(e => e.draw());
+  // state.coins.forEach(c => c.draw());
+  // state.fireballs.forEach(f => f.draw()); — now handled by Pixi (syncFireballSprites above)
+  // state.particles.forEach(p => p.draw());
+  // state.explosions.forEach(e => e.draw());
   // Drawn last, after the player and everything else — see
   // drawForegroundGlass's own comment for why this needs to be a
   // separate, later pass rather than part of the normal planetoid
-  // draw loop above.
-  if (state.skyDomePlanet) state.skyDomePlanet.drawForegroundGlass();
+  // draw loop above. SkyDomePlanetoid is a rounded-rect type, out of
+  // this phase's scope along with the rest of state.planetoids.draw()
+  // above — commented out alongside it rather than left as a partial,
+  // body-less glass foreground with nothing underneath it.
+  // if (state.skyDomePlanet) state.skyDomePlanet.drawForegroundGlass();
+  // Now handled by Pixi — see the sync-call block below (near
+  // updatePixiStage) for where this actually runs. Z-order concerns
+  // from the original comment above no longer apply the same way:
+  // Pixi's own z-order is fixed by scene-graph insertion order, not by
+  // when a property update happens relative to some other Canvas2D
+  // draw call, so this doesn't need to stay pinned to this exact
+  // position in the frame the way the original did.
   state.ctx.restore();
   // HUD
   state.ctx.fillStyle = 'white';

@@ -6,13 +6,13 @@ import {
   GROUND_POUND_GRAV_MULTIPLIER,
   GROUND_POUND_PUSH_STRENGTH,
   JUMP_STRENGTH,
-  MOVE_SPEED,
   PLAYER_LINEAR_SPEED,
   PLAYER_RADIUS,
   SURFACE_TOLERANCE,
   DRAG
 } from '../constants.js';
 import { Vector2 } from '../vector2.js';
+import { Container, Sprite, Texture, Matrix } from 'pixi.js';
 import {
   createDeathParticles,
   createParticles
@@ -27,7 +27,17 @@ export class Player extends Entity {
     super();
     this.pos = new Vector2(x, y);
     this.vel = new Vector2(0, 0);
-    this.radius = PLAYER_RADIUS;
+    // Overall size multiplier for the astronaut — scales BOTH the
+    // visual rig (via bodyScale below) and the collision circle
+    // (this.radius) together, so this one number is a genuine "make
+    // him bigger/smaller" knob rather than needing to keep two
+    // separately-tracked scale properties in sync by hand. 1 = current/
+    // default size. To preview him at 55% smaller: this.sizeMultiplier
+    // = 0.45 (that's "smaller BY 55%", i.e. 45% of the original size —
+    // if you actually meant "scaled TO 55% of original," use 0.55
+    // instead; tell me which you meant if this guess is wrong).
+    this.sizeMultiplier = 1;
+    this.radius = PLAYER_RADIUS * this.sizeMultiplier;
     this.onSurface = false;
     this.onGround = false;
     this.currentPlanet = null;
@@ -80,7 +90,7 @@ export class Player extends Entity {
     // directly from the standalone astronaut prototype, since those
     // values are what make the limbs line up anatomically.
     // ----------------------------
-    this.bodyScale = 0.1;
+    this.bodyScale = 0.1 * this.sizeMultiplier;
     this.bodyPartsConfig = {
       bodyY: 115, headY: -150,//-400,
       leftArmX: 136, leftArmY: 9, leftArmJointX: 73, leftArmJointY: 199,
@@ -298,6 +308,43 @@ export class Player extends Entity {
     // interior versus the main planet-surface/space mode. Tune to
     // taste — 0.1 is roughly "fits in one tile."
     this.mazeBodyScale = 0.1;
+
+    // Platform interior's own version of the above — deliberately a
+    // Platform interior's own version of the above — deliberately a
+    // SEPARATE tunable, not reusing mazeBodyScale. Platform mode does
+    // now get the same auto-zoom-on-entry treatment maze mode has (see
+    // game.js's own auto-zoom, gated on mode === "maze" OR "platform"),
+    // so this isn't compensating for a MISSING zoom the way it was
+    // before that was added — it's just its own separately-tuned value,
+    // since the two interior types don't need to look the same size
+    // relative to their own content. 0.3 (40% smaller than the first
+    // guess of 0.5) is still a starting guess, not verified-correct —
+    // tune further once you see it against the interior's actual tile
+    // size and the new zoom together.
+    this.platformBodyScale = 0.3;
+
+    // Platform interior walking/ladder speed, replacing the previous
+    // MOVE_SPEED*60 (30 px/frame) used there — roughly 6x
+    // PLAYER_LINEAR_SPEED's own space-mode walking speed, tuned for a
+    // small boot-only sprite and looking absurdly fast once scaled up
+    // to the full rig. This is closer to space-mode's own walking feel.
+    this.platformMoveSpeed = 6;
+
+    // Platform-mode tile-collision half-width/half-height — DECOUPLED
+    // from this.radius (space-mode's own collision size, which the old
+    // boot-only version of this reused via this.radius * 0.4, coupling
+    // the platform collision box to a completely unrelated mode's own
+    // scale). Kept at the same starting magnitude as that old value
+    // (30 * 0.4 = 12) rather than deriving a new one proportional to
+    // platformBodyScale above — I can't verify a "correct" derived size
+    // against the interior's actual tile size from here, and getting it
+    // wrong risks making collision feel too loose/imprecise, which
+    // seemed like the worse failure mode than a possible visual/
+    // collision size mismatch (worth checking once you see it — this
+    // is a genuine, deliberately separate tunable specifically so
+    // visual and collision size CAN be adjusted independently if they
+    // end up not matching).
+    this.platformHalfExtent = 12;
 
     // How long (ms) without a successful tile-hop before the maze legs/
     // head settle back to a neutral standing pose, instead of freezing
@@ -596,11 +643,35 @@ export class Player extends Entity {
   // cooldown, and does nothing while dying/teleporting or before the
   // first aim has been computed.
   shootFireball() {
-    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
-    if (!this.aimShoulderPos) return;
+    if (this.isDying || this.isTeleporting) return;
+    if (this.mode !== "space" && this.mode !== "platform") return;
 
     const now = Date.now();
     if (now - this.lastShotTime < this.fireCooldown) return;
+
+    if (this.mode === "platform") {
+      // No free-aim concept exists in a tile-based interior (no
+      // established mouse/stick-look mechanism here at all, unlike
+      // space mode) — fires straight in whichever direction he's
+      // currently facing instead, the simplest, most natural fit for a
+      // side-view platformer. This is a genuinely NEW capability
+      // (shooting was previously blocked outright in this mode via the
+      // mode guard above), so it's a reasonable starting design, not
+      // something verified against actual platform-interior content —
+      // I haven't confirmed fireball-vs-blob-monster collision is wired
+      // up in CollisionSystem.js, so a shot may currently just pass
+      // through them harmlessly until that's checked.
+      this.lastShotTime = now;
+      const angle = this.facingDirection < 0 ? Math.PI : 0;
+      const muzzleDist = this.blasterMuzzleLength * this.platformBodyScale;
+      const tipX = this.pos.x + Math.cos(angle) * muzzleDist;
+      const tipY = this.pos.y;
+      state.fireballs.push(new Fireball(tipX, tipY, angle));
+      state.audioManager.playFireball();
+      return;
+    }
+
+    if (!this.aimShoulderPos) return;
     this.lastShotTime = now;
 
     // aimShoulderPos/aimWorldAngle were computed during the PREVIOUS
@@ -941,7 +1012,7 @@ export class Player extends Entity {
     this.mode = "space";
     this.currentInterior = null;
     if (this.currentPlanet) { // Assuming set before entering, or set to mazePlanet
-      const surfaceDist = this.currentPlanet.radius + PLAYER_RADIUS;
+      const surfaceDist = this.currentPlanet.radius + this.radius;
       this.pos.x = this.currentPlanet.pos.x + Math.cos(this.currentPlanet.beamAngle) * surfaceDist;
       this.pos.y = this.currentPlanet.pos.y + Math.sin(this.currentPlanet.beamAngle) * surfaceDist;
       this.angle = this.currentPlanet.beamAngle;
@@ -1110,15 +1181,21 @@ export class Player extends Entity {
       const tiles = interior.tiles;
 
       // Horizontal input
-      if (keys['ArrowLeft']) this.platformVel.x = -MOVE_SPEED * 60;
-      else if (keys['ArrowRight']) this.platformVel.x = MOVE_SPEED * 60;
+      // Scaled by state.timeScale for consistency with every other
+      // walking branch and world entity, which already slow down
+      // during V.A.T.S. — missed here since this branch was built in a
+      // later turn than the original V.A.T.S. walking-speed fix, before
+      // this file had platform-mode visibility at all.
+      this.isWalking = false;
+      if (keys['ArrowLeft']) { this.platformVel.x = -this.platformMoveSpeed * state.timeScale; this.facingDirection = -1; this.isWalking = true; }
+      else if (keys['ArrowRight']) { this.platformVel.x = this.platformMoveSpeed * state.timeScale; this.facingDirection = 1; this.isWalking = true; }
       else this.platformVel.x = 0;
 
       // Vertical input/checks (ladders)
       const centerX = this.platformPos.x;
       const centerY = this.platformPos.y;
-      const halfWidth = this.radius * 0.4;
-      const halfHeight = this.radius * 0.4;
+      const halfWidth = this.platformHalfExtent;
+      const halfHeight = this.platformHalfExtent;
       const tileX = Math.floor(centerX / tileSize);
       const tileY = Math.floor(centerY / tileSize);
       const onLadder = tiles[tileY]?.[tileX] === 'H';
@@ -1128,16 +1205,18 @@ export class Player extends Entity {
         // allow dropping through platform onto ladder
         if (this.onGround && keys['ArrowDown'] && ladderBelow) {
         this.onGround = false;
-        this.platformVel.y = MOVE_SPEED * 60;
+        this.platformVel.y = this.platformMoveSpeed * state.timeScale;
         }
 
+        // All scaled by state.timeScale, same reasoning as the horizontal
+        // input above.
         if (onLadder) {
-        if (keys['ArrowUp']) this.platformVel.y = -MOVE_SPEED * 60;
-        else if (keys['ArrowDown']) this.platformVel.y = MOVE_SPEED * 60;
+        if (keys['ArrowUp']) this.platformVel.y = -this.platformMoveSpeed * state.timeScale;
+        else if (keys['ArrowDown']) this.platformVel.y = this.platformMoveSpeed * state.timeScale;
         else this.platformVel.y = 0;
         }
         else if (!this.onGround) {
-        this.platformVel.y += GRAVITY_STRENGTH;
+        this.platformVel.y += GRAVITY_STRENGTH * state.timeScale;
         }
 
       // Separate horizontal/vertical movement for better collision
@@ -1155,6 +1234,22 @@ export class Player extends Entity {
         this.platformVel.x = 0;
       }
       this.platformPos.x = newX;
+
+      // Advance the same walk-cycle phase used everywhere else, by
+      // actual horizontal distance moved THIS frame — placed after the
+      // wall-collision check above (not in the input section), using
+      // the FINAL platformVel.x, so standing blocked against a wall
+      // reads as standing still rather than animating as if still
+      // walking. This — plus this.isWalking itself, set above — was
+      // the actual missing piece behind the walk animation never
+      // playing in platform mode: this branch was adapted from tile-
+      // collision code that only ever drove a static, non-animated
+      // boot sprite, so it never had any reason to maintain these
+      // before the full rig's shared drawFullBody pipeline (which
+      // reads them) was wired up for this mode.
+      if (this.isWalking) {
+        this.walkTime += (Math.abs(this.platformVel.x) / this.strideLength) * Math.PI * 2;
+      }
 
       // Vertical — ONE-WAY PLATFORMS (this is the fix!)
       let newY = this.platformPos.y + this.platformVel.y;
@@ -1185,7 +1280,7 @@ export class Player extends Entity {
 
         // allow dropping through platform if ladder below
         if (wantsDrop) {
-            this.platformVel.y = MOVE_SPEED * 60;
+            this.platformVel.y = this.platformMoveSpeed * state.timeScale;
         }
      }
 
@@ -1209,7 +1304,15 @@ export class Player extends Entity {
       const planet = this.currentPlanet;
       this.isWalking = false;
       let ds = 0;
-      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
+      // Scaled by state.timeScale so walking (and everything ds itself
+      // drives downstream — footstep timing, dust spawn frequency, the
+      // edge-fall carried velocity) slows to a crawl right along with
+      // the rest of the world during V.A.T.S., for consistency with
+      // gravity/drag/pull-force and every world entity, which already
+      // do. Deliberately scoped to ground walking only, not the
+      // airborne-steering nudge further below in this same method —
+      // that's a separate mechanic and wasn't part of what was asked.
+      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1) * state.timeScale;
 
       if (keys['ArrowLeft']) { ds = -speed; this.facingDirection = -1; this.isWalking = true; }
       if (keys['ArrowRight']) { ds = speed; this.facingDirection = 1; this.isWalking = true; }
@@ -1245,7 +1348,7 @@ export class Player extends Entity {
           this.vel = new Vector2(ds * this.edgeFallCarryFraction, 0);
         } else {
           const topY = planet.pos.y - planet.halfHeight;
-          this.pos = new Vector2(desiredX, topY - PLAYER_RADIUS);
+          this.pos = new Vector2(desiredX, topY - this.radius);
         }
       } else {
         // Recomputed every frame (not just when ds !== 0) so the
@@ -1253,7 +1356,7 @@ export class Player extends Entity {
         // same way circular-planet walking already recomputes pos from
         // the planet's current pos every frame regardless of input.
         this.surfaceArcPos += ds;
-        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, PLAYER_RADIUS);
+        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, this.radius);
         this.pos = worldSurface.point;
       }
 
@@ -1263,7 +1366,9 @@ export class Player extends Entity {
       }
     } else if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
-      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
+      // See the isRoundedRect branch above for why this is scaled by
+      // state.timeScale.
+      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1) * state.timeScale;
       const angularSpeed = speed / surfaceDist;
 
       this.isWalking = false;
@@ -1661,7 +1766,17 @@ export class Player extends Entity {
     // to neutral if he's just standing still rather than freezing
     // mid-stride forever.
     const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
-    const walkAngle = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
+    // Platform mode's own equivalent of the onSurface check below —
+    // this.onSurface is specifically space/planet mode's ground-
+    // contact flag, so it's always false in platform mode regardless
+    // of whether he's actually standing on a tile there; this.onGround
+    // is platform mode's own separate tracking for that. Without this,
+    // none of the four walk-animation reads below (this one included)
+    // would ever trigger in platform mode even with isWalking/walkTime
+    // correctly maintained, since this.onSurface alone would never be
+    // true there.
+    const platformWalking = this.mode === "platform" && this.onGround && this.isWalking;
+    const walkAngle = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
 
     // sin(walkTime)^2 is 0 exactly when walkAngle itself is 0 (legs
     // neutral, one passing through vertical — body at its highest) and
@@ -1673,7 +1788,7 @@ export class Player extends Entity {
     // direction (toward whatever surface they're standing on) after
     // the orientation rotation, not always world-+Y, since "down" can
     // point any direction on a curved planet.
-    const walkBobT = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
+    const walkBobT = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
     const walkBobAmount = walkBobT * this.walkBobStrength;
     originPos = new Vector2(
       originPos.x + -sinO * walkBobAmount,
@@ -1705,7 +1820,7 @@ export class Player extends Entity {
       // a slow gentle idle sway if just standing still.
       const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
       if (this.mouseIdle && !this.pullTarget) {
-        const swayAngle = (this.onSurface && this.isWalking)
+        const swayAngle = (platformWalking || (this.onSurface && this.isWalking))
           ? walkAngle * this.armSwingScale
           : Math.sin(Date.now() * 0.0015) * 0.15;
         leftArmAngle = swayAngle;
@@ -1760,7 +1875,7 @@ export class Player extends Entity {
       ctx.save();
       const headWX = -cfg.headY * sinO;
       const headWY = cfg.headY * cosO;
-      const headBob = (mazeRecentlyMoved || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+      const headBob = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
       // Look toward the aim target (up if aiming up, down if aiming
       // down), same idea as the arm. Not applicable in the maze (no
       // aim concept there) or while the mouse is idle — both just stay
@@ -1817,32 +1932,20 @@ export class Player extends Entity {
       ctx.globalAlpha = blink ? 1 : 0.3;
     }
 
-  // ----------------------------
-   // PLATFORM MODE
-   // ----------------------------
-   if (this.mode === "platform") {
-     const platformScale = 0.4;  // ← ADD: Match maze scale for small size
-     ctx.save();
-     ctx.translate(this.pos.x, this.pos.y);  // Use global pos
-     ctx.scale(platformScale, platformScale);  // ← ADD: Scale down like maze
-     if (this.platformVel.x < 0) ctx.scale(-1,1);
-     this.drawBoot(ctx);
-     ctx.restore();
-     ctx.restore(); // matches the outer invincibility-flicker save above
-     return;
-   }
-
     // ----------------------------
-    // MAZE MODE and PLANET MODE (full body) share the same drawing
-    // pipeline. The only differences are how `orientation`/`visualPos`
-    // are derived, and an extra uniform scale for the maze's smaller
-    // size — the mirror math below (which reflects about the axis at
-    // angle `orientation` through this.pos) reduces to a plain
-    // left/right flip when orientation = 0, which is exactly the
-    // "always face left or right, up/down never rotates him" behavior
-    // wanted in the maze. facingDirection itself is only ever changed
-    // by horizontal movement (see move()), so vertical-only movement
-    // naturally keeps whichever way he was last facing.
+    // MAZE MODE, PLATFORM MODE, and PLANET/SPACE MODE (full body) share
+    // the same drawing pipeline. The only differences are how
+    // `orientation`/`visualPos` are derived, and an extra uniform scale
+    // for the maze's/platform interior's smaller size — the mirror math
+    // below (which reflects about the axis at angle `orientation`
+    // through this.pos) reduces to a plain left/right flip when
+    // orientation = 0, which is exactly the "always face left or right,
+    // up/down never rotates him" behavior wanted in both the maze and
+    // platform interiors (neither has a gravity-direction/surface-
+    // normal concept the way planet surfaces do). facingDirection
+    // itself is only ever changed by horizontal movement (see move()),
+    // so vertical-only movement (climbing a ladder, say) naturally
+    // keeps whichever way he was last facing.
     // ----------------------------
     let orientation;
     let visualPos;
@@ -1852,6 +1955,10 @@ export class Player extends Entity {
       orientation = 0; // always upright; no gravity/surface concept here
       visualPos = this.pos; // no ground-offset concept in the maze
       modeScale = this.mazeBodyScale;
+    } else if (this.mode === "platform") {
+      orientation = 0; // same reasoning as maze — no rotation concept in a tile-based interior
+      visualPos = this.pos;
+      modeScale = this.platformBodyScale;
     } else {
       let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
       let downDir = new Vector2(0, 1);
@@ -1904,5 +2011,283 @@ export class Player extends Entity {
     ctx.shadowBlur=0;
     ctx.restore();
     ctx.restore(); // matches the outer invincibility-flicker save above
+  }
+
+  // ----------------------------
+  // PIXI RENDERING (player rig — see js/render/PixiStage.js for the
+  // full context on why this is a separate render path, and
+  // Planetoid.js's own createPixiSprites/updatePixiSprites for the
+  // same pattern applied there first). draw()/drawFullBody()/
+  // drawLimb() above are completely untouched — every value computed
+  // below mirrors their exact math, just applied to Pixi sprite
+  // properties instead of ctx calls, so this stays directly auditable
+  // against the original.
+  //
+  // Known, deliberate gaps for this first pass — flagged rather than
+  // silently dropped: the death animation's own drop-shadow glow and
+  // the teleport pulse's shadow-blur glow both use Canvas2D's
+  // shadowBlur, which has no direct Container equivalent — doing this
+  // properly needs a Pixi filter (e.g. a glow/blur filter), real added
+  // complexity for what's a comparatively minor polish detail on top
+  // of everything else here. The death animation itself currently just
+  // hides the rig rather than reproducing drawBoot()'s own spinning-
+  // scale-down effect. Both worth a follow-up pass.
+  // ----------------------------
+
+  // Lazily builds the six body-part sprites (leftboot, leftarm, body,
+  // rightboot, rightarm, head — same six keys as scaledParts, same
+  // z-order as drawFullBody's own sequence of draw calls) as children
+  // of a single mirrorContainer. anchor is set ONCE here, not every
+  // frame — it's a scale-invariant fraction (see the per-part math
+  // below), so it never needs recomputing after creation.
+  createPixiRig(playerLayer) {
+    if (this.pixiRig) return;
+    // Actually TRIGGERS the bake, matching drawFullBody()'s own
+    // `if (!this.scaledPartsReady) this.initScaledAssets();` — this
+    // used to only CHECK the flag and bail, which was the actual bug
+    // behind the player never rendering at all: nothing else calls
+    // initScaledAssets() now that draw()/drawFullBody() are disabled
+    // (see game.js's own commented-out state.player.draw()), so the
+    // flag was never getting set by anything, and this returned early
+    // every single frame, forever, with no error to show for it.
+    if (!this.scaledPartsReady) this.initScaledAssets();
+    if (!this.scaledPartsReady) return; // still not ready somehow (e.g. character images themselves not yet loaded) — try again next frame
+
+    const mirrorContainer = new Container();
+    playerLayer.addChild(mirrorContainer);
+
+    const cfg = this.bodyPartsConfig;
+    const s = this.bodyScale;
+    const parts = {};
+
+    // jointX/jointY (bodyPartsConfig) are in the SOURCE IMAGE's own
+    // native pixel space — drawLimb's own drawImage call places the
+    // sprite so that point lands exactly at the origin
+    // (drawImage(canvas, -jointX*s, -jointY*s, displayWidth,
+    // displayHeight)), which is precisely what Pixi's anchor (a 0-1
+    // fraction of the sprite's own size) describes: anchor =
+    // (jointX*s)/displayWidth. The bodyScale (s) cancels out of this
+    // fraction algebraically (displayWidth is itself
+    // naturalWidth*bodyScale), so it's genuinely scale-invariant, not
+    // just "doesn't change much" — safe to compute once here rather
+    // than in the per-frame update below.
+    const limbConfigs = {
+      leftboot: { jx: cfg.leftBootJointX, jy: cfg.leftBootJointY },
+      rightboot: { jx: cfg.rightBootJointX, jy: cfg.rightBootJointY },
+      leftarm: { jx: cfg.leftArmJointX, jy: cfg.leftArmJointY },
+      rightarm: { jx: cfg.rightArmJointX, jy: cfg.rightArmJointY },
+    };
+
+    for (const key of ['leftboot', 'leftarm', 'body', 'rightboot', 'rightarm', 'head']) {
+      const cached = this.scaledParts[key];
+      if (!cached) continue;
+      const sprite = new Sprite(Texture.from(cached.canvas));
+      // Explicit width/height, not the texture's own native pixel
+      // size — the baked canvas is deliberately higher-resolution than
+      // "zoom=1" needs (see initScaledAssets/makeScaledSprite's own
+      // comments), so it stays crisp when Pixi's own GPU scaling zooms
+      // in, same reasoning as the existing Canvas2D drawImage calls
+      // already passing displayWidth/Height explicitly rather than
+      // relying on the canvas's own pixel size.
+      sprite.width = cached.displayWidth;
+      sprite.height = cached.displayHeight;
+
+      if (limbConfigs[key]) {
+        const { jx, jy } = limbConfigs[key];
+        sprite.anchor.set((jx * s) / cached.displayWidth, (jy * s) / cached.displayHeight);
+      } else if (key === 'body') {
+        sprite.anchor.set(0.5, 0.5);
+      } else if (key === 'head') {
+        // pivotY = displayHeight * headPivotFraction in drawFullBody,
+        // so the fraction IS headPivotFraction directly — no further
+        // division needed.
+        sprite.anchor.set(0.5, this.headPivotFraction);
+      }
+
+      mirrorContainer.addChild(sprite);
+      parts[key] = sprite;
+    }
+
+    this.pixiRig = { mirrorContainer, parts };
+  }
+
+  // Called every frame in place of draw() once migrated. playerLayer
+  // is the Pixi Container this rig's mirrorContainer should live in
+  // (passed through to createPixiRig on first call).
+  updatePixiRig(playerLayer) {
+    if (!this.pixiRig) {
+      this.createPixiRig(playerLayer);
+      if (!this.pixiRig) return; // still not ready
+    }
+
+    const { mirrorContainer, parts } = this.pixiRig;
+
+    // Death animation: hidden for now rather than reproducing
+    // drawBoot()'s own spinning-scale-down-with-glow effect — see this
+    // section's own header comment on known, deliberate gaps.
+    if (this.isDying) {
+      mirrorContainer.visible = false;
+      return;
+    }
+    mirrorContainer.visible = true;
+
+    let scale = 1;
+    // teleportGlow (the shadowBlur glow itself) deliberately not
+    // reproduced here yet — see this section's own header comment.
+    if (this.isTeleporting) {
+      scale = this.teleportScale;
+    }
+
+    mirrorContainer.alpha = this.isInvincible()
+      ? (Math.floor(Date.now() / 100) % 2 === 0 ? 1 : 0.3)
+      : 1;
+
+    // ----------------------------
+    // Mode/orientation/visualPos — identical branching to draw()'s own
+    // copy of this logic.
+    // ----------------------------
+    let orientation;
+    let visualPos;
+    let modeScale = 1;
+
+    if (this.mode === "maze") {
+      orientation = 0;
+      visualPos = this.pos;
+      modeScale = this.mazeBodyScale;
+    } else if (this.mode === "platform") {
+      orientation = 0;
+      visualPos = this.pos;
+      modeScale = this.platformBodyScale;
+    } else {
+      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
+      let downDir = new Vector2(0, 1);
+      if (planet) {
+        if (planet.isRoundedRect) {
+          const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+          downDir = surface.normal.clone().multiply(-1);
+        } else {
+          downDir = planet.pos.subtract(this.pos).normalize();
+        }
+      }
+      const downAngle = Math.atan2(downDir.y, downDir.x);
+      orientation = downAngle - Math.PI / 2;
+      const outwardDir = downDir.multiply(-1);
+      visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+    }
+
+    // ----------------------------
+    // Mirror transform — reflects everything drawn below about the
+    // axis through this.pos at angle `orientation`, exactly matching
+    // draw()'s own translate→rotate→scale→rotate→translate sequence.
+    // Built in REVERSE call order compared to that Canvas2D sequence —
+    // verified numerically (not assumed) that Pixi's Matrix composes
+    // sequential translate/rotate/scale calls in the OPPOSITE order
+    // ctx.translate/rotate/scale calls do, before writing this.
+    // ----------------------------
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+    const totalScale = scale * modeScale;
+    const mirrorMatrix = new Matrix();
+    mirrorMatrix.translate(-this.pos.x, -this.pos.y);
+    mirrorMatrix.rotate(-orientation);
+    mirrorMatrix.scale(dirSign * totalScale, totalScale);
+    mirrorMatrix.rotate(orientation);
+    mirrorMatrix.translate(this.pos.x, this.pos.y);
+    mirrorContainer.setFromMatrix(mirrorMatrix);
+
+    // ----------------------------
+    // drawFullBody's own logic, identical branching/math, from here on.
+    // ----------------------------
+    const cfg = this.bodyPartsConfig;
+    const s = this.bodyScale;
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+    const inMaze = this.mode === "maze";
+
+    const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
+    const platformWalking = this.mode === "platform" && this.onGround && this.isWalking;
+    const walkAngle = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
+    const walkBobT = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
+    const walkBobAmount = walkBobT * this.walkBobStrength;
+    const originPos = new Vector2(
+      visualPos.x + -sinO * walkBobAmount,
+      visualPos.y + cosO * walkBobAmount
+    );
+
+    let leftBootAngle = walkAngle;
+    let rightBootAngle = -walkAngle;
+    let leftArmAngle, rightArmAngle;
+    let rightArmFlipped = false;
+
+    if (inMaze) {
+      const swayAngle = walkAngle * this.armSwingScale;
+      leftArmAngle = swayAngle;
+      rightArmAngle = swayAngle;
+    } else {
+      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+      if (this.mouseIdle && !this.pullTarget) {
+        const swayAngle = (platformWalking || (this.onSurface && this.isWalking))
+          ? walkAngle * this.armSwingScale
+          : Math.sin(Date.now() * 0.0015) * 0.15;
+        leftArmAngle = swayAngle;
+        rightArmAngle = swayAngle;
+      } else {
+        leftArmAngle = aimAngle;
+        rightArmAngle = walkAngle * this.armSwingScale;
+      }
+    }
+
+    if (!inMaze && !this.onSurface) {
+      leftBootAngle = -0.7;
+      rightBootAngle = 0.7;
+      const raisedWorldAngle = -Math.PI / 2 - (Math.PI * 0.75) * dirSign;
+      rightArmAngle = this.worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign);
+      rightArmFlipped = true;
+    }
+
+    // Limb sprites: position/rotation follow drawLimb's own wx/wy
+    // rotation-of-a-raw-offset formula exactly. flipHorizontal (right
+    // arm only, in the airborne pose above) negates scale.x — anchor
+    // was already set at creation time and doesn't need touching here,
+    // since flipping around an anchor point that's already correctly
+    // placed mirrors the art in place rather than shifting it.
+    const limbAngles = {
+      leftboot: { offsetX: cfg.leftBootX, offsetY: cfg.leftBootY, angle: leftBootAngle, flip: false },
+      leftarm: { offsetX: cfg.leftArmX, offsetY: cfg.leftArmY, angle: leftArmAngle, flip: false },
+      rightboot: { offsetX: cfg.rightBootX, offsetY: cfg.rightBootY, angle: rightBootAngle, flip: false },
+      rightarm: { offsetX: cfg.rightArmX, offsetY: cfg.rightArmY, angle: rightArmAngle, flip: rightArmFlipped },
+    };
+    for (const key of ['leftboot', 'leftarm', 'rightboot', 'rightarm']) {
+      const sprite = parts[key];
+      if (!sprite) continue;
+      const { offsetX, offsetY, angle, flip } = limbAngles[key];
+      const wx = offsetX * cosO - offsetY * sinO;
+      const wy = offsetX * sinO + offsetY * cosO;
+      sprite.position.set(originPos.x + wx * s, originPos.y + wy * s);
+      sprite.rotation = orientation + angle;
+      sprite.scale.x = flip ? -Math.abs(sprite.scale.x) : Math.abs(sprite.scale.x);
+    }
+
+    const bodySprite = parts.body;
+    if (bodySprite) {
+      // Body's own offset is (0, cfg.bodyY) in the same raw-offset
+      // space drawLimb's offsetX/offsetY parameters use — reuses the
+      // identical wx/wy rotation formula rather than needing a
+      // separate derivation.
+      const bodyWX = -cfg.bodyY * sinO;
+      const bodyWY = cfg.bodyY * cosO;
+      bodySprite.position.set(originPos.x + bodyWX * s, originPos.y + bodyWY * s);
+      bodySprite.rotation = orientation;
+    }
+
+    const headSprite = parts.head;
+    if (headSprite) {
+      const headWX = -cfg.headY * sinO;
+      const headWY = cfg.headY * cosO;
+      const headBob = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
+      const headLookTilt = (inMaze || this.mouseIdle) ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+      const headTilt = headBob + headLookTilt;
+      headSprite.position.set(originPos.x + headWX * s, originPos.y + headWY * s);
+      headSprite.rotation = orientation + headTilt;
+    }
   }
 }

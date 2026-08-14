@@ -3,6 +3,7 @@ import { state } from '../state.js';
 import { INFLUENCE_PADDING, PLANET_SPEED } from '../constants.js';
 import { Vector2 } from '../vector2.js';
 import { Planetoid } from './Planetoid.js';
+import { Sprite, Texture, Graphics, FillGradient } from 'pixi.js';
 
 // A rounded rectangle = a smaller "core" rectangle (half-extents
 // halfWidth-cornerRadius, halfHeight-cornerRadius) inflated by a circle
@@ -408,5 +409,164 @@ export class RoundedRectPlanetoid {
     }
 
     ctx.restore();
+  }
+
+  // ----------------------------
+  // PIXI RENDERING — reuses createOffscreen()'s EXISTING Canvas2D bake
+  // wholesale, wrapped as Sprites, rather than rebuilding a GPU-native
+  // bake the way circular Planetoid needed. That optimization existed
+  // specifically because circular planetoids get created 50+ at a
+  // time, repeatedly, every time a new world cell activates — nothing
+  // here shares that problem. At most a handful of RoundedRectPlanetoid
+  // instances ever exist (rectPlanet, SkyDomePlanetoid, whatever else
+  // extends this), all created once at game start and permanent
+  // thereafter, so a plain Canvas2D bake — the exact same technique
+  // this class's own createOffscreen() already uses, completely
+  // unmodified — is the right level of complexity here, not a
+  // shortfall relative to circular Planetoid's own approach.
+  // ----------------------------
+  createPixiSprites(layer) {
+    if (this.pixiSprites) return;
+    if (!this.offscreen) return; // createOffscreen() hasn't run yet — try again next frame
+
+    // ring is genuinely optional, not just "not ready yet" —
+    // SkyDomePlanetoid's own createOffscreen() deliberately sets
+    // this.ringCanvas = null after calling super.createOffscreen()
+    // (suppressing the influence ring, since a generic circular-
+    // influence implication is actively misleading for something
+    // whose gravity only ever works in a rectangular window directly
+    // above it — see that class's own comment). Gating the WHOLE
+    // method on ringCanvas being present, the way an earlier version
+    // of this did, would have meant createPixiSprites() could never
+    // succeed at all for SkyDomePlanetoid — not just skipping the
+    // ring, silently breaking every other part of its rendering too,
+    // since ringCanvas would never become truthy to satisfy the guard.
+    let ring = null;
+    if (this.ringCanvas) {
+      ring = new Sprite(Texture.from(this.ringCanvas));
+      ring.anchor.set(0.5);
+    }
+
+    const body = new Sprite(Texture.from(this.offscreen));
+    body.anchor.set(0.5);
+
+    // Sun-shading + overall-darkness are live Graphics, redrawn every
+    // frame — same reasoning as draw()'s own version: the gradient's
+    // direction changes continuously (this planet's own spin, plus the
+    // sun's slowly-shifting angle as everything drifts), so there's
+    // nothing here to bake once the way ring/body are. Both stay null
+    // when noSunShading is set (SkyDomePlanetoid) — no Graphics objects
+    // built at all for something that will never be shown, rather than
+    // building them and just leaving them invisible.
+    const sunShading = this.noSunShading ? null : new Graphics();
+    const darkness = this.noSunShading ? null : new Graphics();
+
+    if (ring) layer.addChild(ring);
+    layer.addChild(body);
+    if (sunShading) layer.addChild(sunShading);
+    if (darkness) layer.addChild(darkness);
+
+    this.pixiSprites = { ring, body, sunShading, darkness };
+  }
+
+  // Called every frame in place of draw() once migrated.
+  updatePixiSprites(layer) {
+    if (!this.pixiSprites) this.createPixiSprites(layer);
+    if (!this.pixiSprites) return;
+
+    const now = Date.now();
+    if (now - this.lastAlphaUpdate > 500) {
+      const dist = this.pos.subtract(state.player.pos).length();
+      this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
+      this.lastAlphaUpdate = now;
+    }
+
+    const { ring, body, sunShading, darkness } = this.pixiSprites;
+
+    if (ring) {
+      ring.position.set(this.pos.x, this.pos.y);
+      ring.rotation = this.rotationAngle;
+      ring.alpha = this.cachedAlpha;
+    }
+
+    body.position.set(this.pos.x, this.pos.y);
+    body.rotation = this.rotationAngle;
+
+    if (!this.noSunShading) {
+      this.updateSunShadingPixi(sunShading, darkness);
+    }
+  }
+
+  // Reproduces draw()'s own live sun-shading + overall-darkness passes,
+  // redrawn fresh every frame — same math, translated from Canvas2D
+  // gradient/clip/multiply-composite calls into Pixi's own
+  // FillGradient + roundRect + blendMode equivalents. Verified against
+  // Pixi's actual FillGradient type signature before writing this
+  // (constructor accepts start/end/colorStops/textureSpace directly;
+  // textureSpace:'global' specifically confirmed to mean "use these
+  // coordinates as-given," not normalized 0-1, which is the
+  // constructor's own default and would have been wrong here) — not
+  // runtime-tested the way some other math this session was checked
+  // numerically, since there's no way to execute the real render
+  // pipeline outside the browser itself.
+  updateSunShadingPixi(sunShading, darkness) {
+    const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
+    const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
+    const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+    const worldAngleToSun = Math.atan2(toSunY, toSunX);
+    const localAngle = worldAngleToSun - this.rotationAngle;
+    const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
+
+    const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
+    const distT = Math.min(distToSun / maxDist, 1);
+    const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
+
+    const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
+
+    const gradient = new FillGradient({
+      type: 'linear',
+      start: { x: -hx * extent, y: -hy * extent },
+      end: { x: hx * extent, y: hy * extent },
+      textureSpace: 'global',
+      colorStops: [
+        { offset: 0, color: 'black' },
+        { offset: 1, color: 'white' }
+      ]
+    });
+
+    sunShading.position.set(this.pos.x, this.pos.y);
+    sunShading.rotation = this.rotationAngle;
+    sunShading.blendMode = 'multiply';
+    sunShading.alpha = overlayAlpha;
+    sunShading.clear();
+    sunShading.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius).fill(gradient);
+
+    const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
+    darkness.position.set(this.pos.x, this.pos.y);
+    darkness.rotation = this.rotationAngle;
+    darkness.blendMode = 'multiply';
+    darkness.visible = overallDarkness > 0;
+    if (overallDarkness > 0) {
+      darkness.alpha = overallDarkness;
+      darkness.clear();
+      darkness.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius).fill(0x000000);
+    }
+  }
+
+  // NOTE: not currently wired to anything for rectPlanet specifically
+  // — never culled (isPermanent, see levelSetup.js) — but implemented
+  // for correctness rather than leaving a silent gap, same reasoning
+  // as BeamPlanetoid's own destroyPixiSprite.
+  destroyPixiSprite() {
+    if (!this.pixiSprites) return;
+    const { ring, body, sunShading, darkness } = this.pixiSprites;
+    // Unique to this one planet, unlike circular Planetoid's shared
+    // sunOverlay/darkness textures — texture:true here is correct and
+    // doesn't risk breaking anything else.
+    ring?.destroy({ texture: true, textureSource: true });
+    body.destroy({ texture: true, textureSource: true });
+    sunShading?.destroy();
+    darkness?.destroy();
+    this.pixiSprites = null;
   }
 }

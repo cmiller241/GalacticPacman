@@ -31,7 +31,7 @@ import { initCellManifest, getCellManifest, generateSpecialCell, updateBeltSpawn
 export const CELL_SIZE = 3000; // world units per cell, both axes
 export const GRID_SIZE = 20;   // 20x20 cells total
 export const CENTER_CELL = { col: 10, row: 10 }; // where the permanent planets + player start live
-export const CELL_CHECK_INTERVAL = 15; // frames between generation/cull passes — doesn't need to run every frame
+export const CELL_CHECK_INTERVAL = 120; // frames between generation/cull passes — doesn't need to run every frame
 
 state.sceneWidth = CELL_SIZE * GRID_SIZE;
 state.sceneHeight = CELL_SIZE * GRID_SIZE;
@@ -48,10 +48,10 @@ initCellManifest(CELL_SIZE);
 // neighborhood size, so the worst case (all 9 cells populated) lands
 // back near the original totals instead of ~9x them. Tune independently
 // once you've seen it in play — no need to match the old numbers exactly.
-const PLANETOIDS_PER_CELL = 10;
-const SPIKEY_PER_CELL = 10;
-const ASTEROIDS_PER_CELL = 20;
-const MAX_ENEMIES_PER_CELL = 5;
+const PLANETOIDS_PER_CELL = 20;
+const SPIKEY_PER_CELL = 0;
+const ASTEROIDS_PER_CELL = 0;
+const MAX_ENEMIES_PER_CELL = 0;
 
 // ----------------------------
 // CELL HELPERS
@@ -72,29 +72,62 @@ export function cellKey(col, row) {
 // and up to MAX_ENEMIES_PER_CELL enemies. No-ops (returns []) if this
 // cell is already active. Returns the regular planetoids it created —
 // only used by initGame() to pick a starting planet for the player.
-// Phase 1: just the regular (non-hazardous) planetoids for a cell.
-// Split out from hazard generation below specifically so initGame() can
-// generate these FIRST, pick a starting planet from them, and only then
-// generate hazards for that same cell — now knowing exactly what to
-// steer them away from. Every other cell just runs both phases back to
-// back via generateCell() with no avoidance, same as before.
-export function generateRegularPlanetoidsInCell(col, row) {
+// Creates exactly `count` regular planetoids within the given cell,
+// positioned randomly within it exactly as before. Factored out of
+// generateRegularPlanetoidsInCell so BOTH that function (which always
+// wants the full PLANETOIDS_PER_CELL, used by initGame() for the
+// player's starting cell, where staggering would only delay giving the
+// player somewhere to stand at game start) AND the staggered
+// generation path below (which wants a few at a time, spread across
+// frames, for every OTHER cell) share the same underlying per-
+// planetoid creation logic rather than duplicating it.
+function createPlanetoidsInCell(col, row, count) {
   const originX = col * CELL_SIZE;
   const originY = row * CELL_SIZE;
-  const regularPlanetoids = [];
+  const created = [];
 
-  for (let i = 0; i < PLANETOIDS_PER_CELL; i++) {
+  for (let i = 0; i < count; i++) {
     const radius = 30 + Math.random() * 40; // 30-70
     const x = originX + radius + Math.random() * (CELL_SIZE - 2 * radius);
     const y = originY + radius + Math.random() * (CELL_SIZE - 2 * radius);
     const color = planetColors[Math.floor(Math.random() * planetColors.length)];
     const p = new Planetoid(x, y, radius, color);
-    p.createOffscreen();
+    // Was p.createOffscreen() — the actual root cause of the pull-
+    // performance spike. That baked BOTH the ring AND a Canvas2D
+    // shadowBlur-based body+glow, the latter being a genuinely slow,
+    // CPU-bound operation, run PLANETOIDS_PER_CELL (50) times
+    // synchronously every time a new cell activates. createOffscreen()
+    // itself is untouched (Planetoid.js) — this just calls its new,
+    // lightweight sibling instead, which only builds the cheap ring
+    // (no gradient, no blur). The body+glow itself now bakes lazily,
+    // GPU-native, the first time this planetoid's Pixi sprites are
+    // actually built (see Planetoid.js's own createGpuBodyTexture) —
+    // not here, and not synchronously for all `count` at once. Calling
+    // this with a small count (see processPendingCellGeneration below)
+    // naturally staggers BOTH this ring bake AND that lazy GPU bake
+    // together, without either needing separate throttling logic of
+    // its own — planetoids simply don't exist yet to bake for until
+    // this loop actually creates them.
+    p.createRingCanvas();
     state.planetoids.push(p);
-    regularPlanetoids.push(p);
+    created.push(p);
   }
 
-  return regularPlanetoids;
+  return created;
+}
+
+// Phase 1: just the regular (non-hazardous) planetoids for a cell, all
+// PLANETOIDS_PER_CELL of them at once. Split out from hazard
+// generation below specifically so initGame() can generate these
+// FIRST, pick a starting planet from them, and only then generate
+// hazards for that same cell — now knowing exactly what to steer them
+// away from. Used ONLY by initGame(), for the player's own starting
+// cell — every other cell goes through the staggered path below
+// instead (see queueCellGeneration/processPendingCellGeneration),
+// since unlike the player's starting cell, there's no reason those
+// need to finish in a single frame.
+export function generateRegularPlanetoidsInCell(col, row) {
+  return createPlanetoidsInCell(col, row, PLANETOIDS_PER_CELL);
 }
 
 // Phase 2: spikey planetoids, asteroids, coins, and enemies for a cell.
@@ -160,30 +193,109 @@ export function generateHazardsAndExtrasInCell(col, row, regularPlanetoids, avoi
   }
 }
 
-// Normal (no-avoidance) full generation for a cell — both phases back
-// to back. Used for every cell EXCEPT the player's starting one, which
-// initGame() generates in two separate steps instead (see there).
+// ----------------------------
+// STAGGERED CELL GENERATION
+// ----------------------------
+// Spreads a new cell's PLANETOIDS_PER_CELL regular planetoids across
+// several frames instead of creating them all synchronously in a
+// single one — even with the GPU-native bake (Planetoid.js's own
+// createGpuBodyTexture), each planetoid still costs a real render-
+// target switch, and PLANETOIDS_PER_CELL (50) of those — LET ALONE
+// however many MORE a fast diagonal pull can rack up by activating
+// several cells in a single updateActiveCells() tick's 3x3-neighborhood
+// check — is still enough to add up to a visible hitch. Hazards/coins
+// (generateHazardsAndExtrasInCell) stay fully synchronous once a
+// cell's planetoids finish — no GPU baking involved there at all,
+// cheap regardless of count, nothing to stagger.
+const MAX_PLANETOID_CREATIONS_PER_FRAME = 5; // tunable — lower = smoother during a pull, but a newly-entered cell takes longer to fully populate; higher = the reverse
+
+// One entry per cell currently being incrementally populated. remaining
+// counts down as planetoids get created; regularPlanetoids accumulates
+// the actual created objects, so generateHazardsAndExtrasInCell can run
+// against the complete list once remaining hits 0 — the same list
+// generateCell's own old synchronous version already built, just
+// assembled a few pieces at a time instead of all at once.
+const pendingCells = [];
+
+function queueCellGeneration(col, row) {
+  pendingCells.push({ col, row, remaining: PLANETOIDS_PER_CELL, regularPlanetoids: [] });
+}
+
+// Called every frame from game.js's gameLoop — NOT gated behind the
+// same CELL_CHECK_INTERVAL updateActiveCells() itself runs on, since
+// the whole point is spreading work across many CONSECUTIVE frames,
+// not occasionally doing a smaller chunk of it. Processes up to
+// MAX_PLANETOID_CREATIONS_PER_FRAME individual planetoid creations per
+// call, drawn from whichever pending cells still have some remaining
+// (oldest-queued first), completing a cell's hazards/coins pass the
+// moment its own planetoids finish.
+// budgetOverride lets drainPendingCellGeneration below reuse this exact
+// same loop for a full, synchronous drain (Infinity) instead of the
+// normal per-frame budget — see that function's own comment for why.
+export function processPendingCellGeneration(budgetOverride) {
+  let budget = budgetOverride ?? MAX_PLANETOID_CREATIONS_PER_FRAME;
+  let i = 0;
+  while (budget > 0 && i < pendingCells.length) {
+    const cell = pendingCells[i];
+    const toCreate = Math.min(budget, cell.remaining);
+    const created = createPlanetoidsInCell(cell.col, cell.row, toCreate);
+    cell.regularPlanetoids.push(...created);
+    cell.remaining -= toCreate;
+    budget -= toCreate;
+
+    if (cell.remaining <= 0) {
+      generateHazardsAndExtrasInCell(cell.col, cell.row, cell.regularPlanetoids);
+      pendingCells.splice(i, 1);
+      // Deliberately no i++ here — the next pending cell has shifted
+      // into this same index after the splice.
+    } else {
+      i++;
+    }
+  }
+}
+
+// Fully synchronous drain of the ENTIRE staggered-generation queue,
+// ignoring MAX_PLANETOID_CREATIONS_PER_FRAME entirely — used only by
+// initGame(), for the player's own starting 3x3 neighborhood. Staggering
+// exists to avoid a visible hitch while the player is already actively
+// moving through the world — but at game start, before anything has
+// been shown yet, spreading that same work across several real seconds
+// just means planets visibly popping into view well after the game has
+// already begun, which reads as worse, not better, than a single
+// one-time loading pause before there's anything on screen to judge
+// smoothness against. Every OTHER cell entered during actual gameplay
+// still goes through the normal, budgeted processPendingCellGeneration
+// above — this bypass is deliberately scoped to game start only.
+export function drainPendingCellGeneration() {
+  processPendingCellGeneration(Infinity);
+}
+
+// Normal (no-avoidance) generation for a cell. Used for every cell
+// EXCEPT the player's starting one, which initGame() generates
+// synchronously in two separate steps instead (see there) — that one
+// case still needs to finish within a single frame, since the player
+// needs somewhere to stand immediately at game start; every other
+// cell has no such requirement, so it goes through the staggered path
+// above instead of generating all PLANETOIDS_PER_CELL synchronously
+// here the way this function used to.
 //
 // Checks CellManifest first — a non-null result means this cell is
 // hand-authored (e.g. part of the asteroid belt), and normal
-// procedural generation is skipped entirely for it. Special cells
-// return an empty regularPlanetoids list, since nothing currently
-// picks a player-starting-spawn from a special cell (CENTER_CELL is
-// nowhere near the belt) — worth revisiting if that ever changes.
+// procedural generation is skipped entirely for it — these stay fully
+// synchronous (generateSpecialCell), since they're not the
+// PLANETOIDS_PER_CELL-driven bottleneck this staggering exists for.
 function generateCell(col, row) {
   const key = cellKey(col, row);
-  if (state.activeCells.has(key)) return [];
+  if (state.activeCells.has(key)) return;
   state.activeCells.add(key);
 
   const manifest = getCellManifest(col, row);
   if (manifest) {
     generateSpecialCell(col, row, manifest);
-    return [];
+    return;
   }
 
-  const regularPlanetoids = generateRegularPlanetoidsInCell(col, row);
-  generateHazardsAndExtrasInCell(col, row, regularPlanetoids);
-  return regularPlanetoids;
+  queueCellGeneration(col, row);
 }
 
 // Removes anything whose CURRENT position (not spawn origin — objects
@@ -336,6 +448,13 @@ export function updateActiveCells() {
   for (const key of Array.from(state.activeCells)) {
     if (!activeCellKeys.has(key)) {
       state.activeCells.delete(key);
+      // Also drop it from the staggered-generation queue if it's still
+      // pending — no point spending per-frame budget creating
+      // planetoids for a cell the player has already moved away from;
+      // anything already created for it before this point gets cleaned
+      // up normally by cullDistantObjects below regardless.
+      const pendingIndex = pendingCells.findIndex(c => cellKey(c.col, c.row) === key);
+      if (pendingIndex !== -1) pendingCells.splice(pendingIndex, 1);
     }
   }
 

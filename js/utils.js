@@ -1,6 +1,5 @@
 // js/utils.js
 import { state } from './state.js';
-import { PLAYER_RADIUS } from './constants.js';
 import { Vector2 } from './vector2.js';
 import { Particle } from './entities/Particle.js';
 

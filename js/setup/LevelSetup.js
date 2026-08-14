@@ -32,7 +32,7 @@ import { BlobMonster } from '../entities/interior/BlobMonster.js';
 import { MazeGhost } from '../entities/interior/MazeGhost.js';
 import { GravitySystem } from '../systems/GravitySystem.js';
 import { resetBeltState, BELT_START, BELT_END } from '../world/CellManifest.js';
-import { CELL_SIZE, CENTER_CELL, cellKey, generateRegularPlanetoidsInCell, generateHazardsAndExtrasInCell, updateActiveCells } from './worldGen.js';
+import { CELL_SIZE, CENTER_CELL, cellKey, generateRegularPlanetoidsInCell, generateHazardsAndExtrasInCell, updateActiveCells, drainPendingCellGeneration } from './worldGen.js';
 
 export function initGame() {
   state.planetoids = [];
@@ -147,6 +147,16 @@ export function initGame() {
   state.mazePlanet.createOffscreen();
   state.platformPlanet.createOffscreen();
   state.rectPlanet.createOffscreen();
+  // Was commented out — harmless under the old Canvas2D rendering
+  // path, since drawScrollingHexTile() already tolerated a missing
+  // hexGridCanvas/hexGridForegroundCanvas silently (`if (!tileCanvas)
+  // return;`), so skipping this call just meant the hex grid quietly
+  // never appeared, with the rest of the dome rendering normally. The
+  // new Pixi rendering has no equivalent silent-skip for this
+  // specifically — it genuinely needs these two baked canvases to
+  // exist — so leaving this commented out crashed on
+  // Texture.from(null) instead of just quietly doing without a hex
+  // grid the way the old path did.
   state.skyDomePlanet.createOffscreen();
   state.jumpPlatforms.forEach(platform => platform.createOffscreen());
 
@@ -238,6 +248,11 @@ export function initGame() {
   generateHazardsAndExtrasInCell(CENTER_CELL.col, CENTER_CELL.row, centerRegulars, state.player.pos, SAFE_SPAWN_RADIUS);
 
   updateActiveCells(); // fills in the other 8 cells around the player's starting position
+  // Drains that queued work synchronously, right now, rather than
+  // leaving it for the ongoing gameLoop to spread across many frames —
+  // see drainPendingCellGeneration's own comment in worldGen.js for
+  // why that distinction matters specifically at game start.
+  drainPendingCellGeneration();
 
   state.particles = [];
   state.fireballs = [];
