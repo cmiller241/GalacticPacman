@@ -2,6 +2,7 @@
 import { Entity } from '../Entity.js';
 import { state } from '../../state.js';
 import { Vector2 } from '../../vector2.js';
+import { Sprite, Texture } from 'pixi.js';
 
 const FIREBALL_SPEED = 14;
 const FIREBALL_LIFE = 70; // frames
@@ -71,6 +72,52 @@ function getFireballSprite() {
 
   fireballSprite = canvas;
   return canvas;
+}
+
+// ----------------------------
+// PIXI RENDERING (fireballs — see js/render/PixiStage.js for the full
+// migration context, and Planetoid.js/Asteroid.js's own createPixi*
+// methods for the same overall pattern applied there first). draw()
+// above is completely untouched.
+// ----------------------------
+// Unlike a planetoid or asteroid, a fireball's trail/sparks are
+// genuinely dynamic every frame — particles spawn, age, and die
+// continuously (see update() above) — so there's no static shape to
+// bake once the way those two could. Each trail/spark particle gets
+// its own small pool of reusable Pixi sprites instead (grown/shrunk
+// each frame to match this.trail.length/this.sparks.length — see
+// Fireball's own syncTrailSprites/syncSparkSprites below), all sharing
+// ONE plain white circle texture (getCircleTexture, right below) tinted
+// per-particle via the cheap GPU tint property — baking a separate
+// texture per color would be wasteful given colors here change
+// continuously, every particle, every frame.
+let fireballTexture = null; // shared, wraps the existing baked glow canvas above
+function getFireballTexture() {
+  if (fireballTexture) return fireballTexture;
+  fireballTexture = Texture.from(getFireballSprite());
+  return fireballTexture;
+}
+
+let circleTexture = null; // shared plain white circle, tinted per-instance for trail/spark particles
+function getCircleTexture() {
+  if (circleTexture) return circleTexture;
+  const size = 64; // arbitrary reference resolution — trail/spark particles are small and short-lived, fine detail from upscaling isn't a concern the way it is for the player rig or planet glow
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.fill();
+  circleTexture = Texture.from(canvas);
+  return circleTexture;
+}
+
+// Converts lerpColor's own [r,g,b] (0-255 each) output into the hex
+// number Pixi's own sprite.tint expects.
+function rgbToHex([r, g, b]) {
+  return (r << 16) | (g << 8) | b;
 }
 
 export class Fireball extends Entity {
@@ -210,5 +257,124 @@ export class Fireball extends Entity {
     ctx.scale(scale, scale);
     ctx.drawImage(sprite, -sprite.width / 2, -sprite.height / 2);
     ctx.restore();
+  }
+
+  // Lazily builds the main glow sprite. Trail/spark sprite pools start
+  // empty — syncTrailSprites/syncSparkSprites (called every frame from
+  // updatePixiSprite below) grow and shrink them to match
+  // this.trail/this.sparks as those arrays themselves change, rather
+  // than needing anything built upfront here.
+  createPixiSprite(fireballLayer) {
+    if (this.pixiGlow) return;
+    this.pixiGlow = new Sprite(getFireballTexture());
+    this.pixiGlow.anchor.set(0.5, 0.5);
+    fireballLayer.addChild(this.pixiGlow);
+    this.trailSprites = []; // array of { outer, inner } pairs, one per this.trail[] entry
+    this.sparkSprites = []; // one sprite per this.sparks[] entry
+    this.fireballLayer = fireballLayer; // needed by the pool-growing helpers below, called every frame
+  }
+
+  // Grows/shrinks this.trailSprites to match this.trail.length exactly,
+  // reusing existing pooled sprites where possible rather than
+  // destroying and recreating every frame — same reasoning as any
+  // object pool: creating/destroying GPU-backed sprites every single
+  // frame for particles that already churn this fast would be wasteful
+  // in a way simply repositioning/re-tinting existing ones isn't.
+  syncTrailSprites() {
+    while (this.trailSprites.length < this.trail.length) {
+      const outer = new Sprite(getCircleTexture());
+      const inner = new Sprite(getCircleTexture());
+      outer.anchor.set(0.5, 0.5);
+      inner.anchor.set(0.5, 0.5);
+      this.fireballLayer.addChild(outer, inner);
+      this.trailSprites.push({ outer, inner });
+    }
+    while (this.trailSprites.length > this.trail.length) {
+      const { outer, inner } = this.trailSprites.pop();
+      outer.destroy();
+      inner.destroy();
+    }
+    for (let i = 0; i < this.trail.length; i++) {
+      const t = this.trail[i];
+      const { outer, inner } = this.trailSprites[i];
+      const a = t.life / t.maxLife;
+      const ts = t.size * a;
+      const outerColor = lerpColor([255, 85, 0], [70, 68, 72], 1 - a);
+      const innerColor = lerpColor([255, 204, 68], [110, 108, 112], 1 - a);
+      outer.position.set(t.x, t.y);
+      outer.width = outer.height = ts * 1.4 * 2; // *2: width/height are diameters, ts*1.4 in draw()'s own arc() call is a radius
+      outer.tint = rgbToHex(outerColor);
+      outer.alpha = a * 0.85;
+      inner.position.set(t.x, t.y);
+      inner.width = inner.height = ts * 0.75 * 2;
+      inner.tint = rgbToHex(innerColor);
+      inner.alpha = a * 0.85;
+    }
+  }
+
+  // Same pooling approach as syncTrailSprites, one sprite per spark
+  // rather than two — sparks are a single flat color (#ffe066, no
+  // cooling-color transition), only size/alpha vary.
+  syncSparkSprites() {
+    while (this.sparkSprites.length < this.sparks.length) {
+      const sprite = new Sprite(getCircleTexture());
+      sprite.anchor.set(0.5, 0.5);
+      sprite.tint = 0xffe066;
+      this.fireballLayer.addChild(sprite);
+      this.sparkSprites.push(sprite);
+    }
+    while (this.sparkSprites.length > this.sparks.length) {
+      this.sparkSprites.pop().destroy();
+    }
+    for (let i = 0; i < this.sparks.length; i++) {
+      const s = this.sparks[i];
+      const sprite = this.sparkSprites[i];
+      const a = s.life / s.maxLife;
+      sprite.position.set(s.x, s.y);
+      sprite.width = sprite.height = (1.5 * a + 0.5) * 2;
+      sprite.alpha = a;
+    }
+  }
+
+  // Called every frame in place of draw() once migrated.
+  updatePixiSprite(fireballLayer) {
+    if (!this.pixiGlow) this.createPixiSprite(fireballLayer);
+
+    this.syncTrailSprites();
+    this.syncSparkSprites();
+
+    // Same live flicker as draw() above, applied to the Pixi sprite's
+    // own scale/alpha instead of a ctx transform.
+    const flicker = Math.sin(Date.now() * 0.02 + this.flickerPhase);
+    const scale = 1 + flicker * 0.08;
+    const alpha = 1 - Math.abs(flicker) * 0.1;
+    this.pixiGlow.position.set(this.pos.x, this.pos.y);
+    this.pixiGlow.scale.set(scale, scale);
+    this.pixiGlow.alpha = alpha;
+  }
+
+  // Called from PixiStage.js's own sync function when this fireball is
+  // removed (hit something, or its own life ran out) — tears down the
+  // main glow sprite plus every currently-pooled trail/spark sprite.
+  // None of these wrap a texture unique to this fireball (the glow and
+  // circle textures are both shared across every fireball, tinted per-
+  // instance rather than baked per-instance), so a plain destroy() with
+  // no options — leaving texture/textureSource at their default false —
+  // is correct here: destroying the shared texture itself would break
+  // every OTHER still-alive fireball's own sprites.
+  destroyPixiSprite() {
+    if (this.pixiGlow) {
+      this.pixiGlow.destroy();
+      this.pixiGlow = null;
+    }
+    for (const { outer, inner } of this.trailSprites || []) {
+      outer.destroy();
+      inner.destroy();
+    }
+    this.trailSprites = [];
+    for (const sprite of this.sparkSprites || []) {
+      sprite.destroy();
+    }
+    this.sparkSprites = [];
   }
 }

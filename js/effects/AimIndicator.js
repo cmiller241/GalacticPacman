@@ -12,10 +12,11 @@ const X_DISTANCE_PAST_MUZZLE = 200; // px past the muzzle when the aim ray doesn
 // aim ray (see Player.js's computeLeftArmAimAngle, which caches this
 // each frame via Raycast.js's findNearestOccluder), or a fixed
 // distance past the blaster's muzzle tip when the ray doesn't hit
-// anything — mouse, gamepad right stick, or a pull target all already
-// funnel through the same aimShoulderPos/aimWorldAngle/aimTargetPoint
-// that computeLeftArmAimAngle caches every frame, so this doesn't need
-// to know or care which input source is currently driving aim.
+// anything. Only shown while state.gamepadAimActive is true — i.e. the
+// right stick is actively being pushed this frame — since the whole
+// point is showing where a shot would land while actively steering
+// aim with the stick; it isn't needed for mouse aim (the cursor itself
+// already shows that) or while the stick is simply centered.
 // Deliberately axis-aligned (not rotated to match the aim angle) — an
 // "X marks the spot" style marker reads more clearly upright than
 // rotated, the same way a map marker or crosshair usually would.
@@ -26,6 +27,7 @@ const X_DISTANCE_PAST_MUZZLE = 200; // px past the muzzle when the aim ray doesn
 export function drawAimIndicator() {
   const player = state.player;
   if (!player || player.mode !== "space" || !player.aimShoulderPos) return;
+  if (!state.gamepadAimActive) return;
   // Suppressed while hard-locked (see Player.js's lockedTarget /
   // LockOutline.js) — the yellow lock outline already unambiguously
   // shows the target, and aim is forced onto it anyway, so the X would

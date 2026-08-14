@@ -1,6 +1,6 @@
 // js/systems/CollisionSystem.js
 import { state } from '../state.js';
-import { SURFACE_TOLERANCE, PLAYER_RADIUS, ENEMY_RADIUS, COIN_RADIUS, GROUND_POUND_PUSH_STRENGTH } from '../constants.js';
+import { SURFACE_TOLERANCE, ENEMY_RADIUS, COIN_RADIUS, GROUND_POUND_PUSH_STRENGTH } from '../constants.js';
 import { Vector2 } from '../vector2.js';
 import { createParticles } from '../utils.js';
 
@@ -104,14 +104,14 @@ export class CollisionSystem {
   handlePlayerFireBarCollisions(player, fireBars) {
     for (const bar of fireBars) {
       const blockDist = player.pos.subtract(bar.pos).length();
-      if (blockDist <= bar.blockRadius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+      if (blockDist <= bar.blockRadius + player.radius + SURFACE_TOLERANCE) {
         player.startDeath();
         return;
       }
       for (const f of bar.getFireballPositions()) {
         const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= f.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+        if (dist <= f.radius + player.radius + SURFACE_TOLERANCE) {
           player.startDeath();
           return;
         }
@@ -119,37 +119,121 @@ export class CollisionSystem {
     }
   }
 
+  // entities1/entities2 checked to be genuinely quadratic in a
+  // DevTools Performance capture (Bottom-up view: highest single
+  // self-time entry in the whole profile) — with up to ~180 planetoids
+  // active across a full 3x3 cell neighborhood, that's up to ~16,000
+  // pairwise checks every single frame, unconditionally, regardless of
+  // whether any two planets are anywhere near each other. Fixed with a
+  // spatial-hash broad-phase below: entities2 gets bucketed by grid
+  // cell, and each entity from entities1 only ever gets compared
+  // against others in its own or an immediately-adjacent bucket,
+  // instead of every other entity in the array. All of the actual
+  // collision math (the block below the broad-phase loop) is
+  // byte-for-byte identical to what this method always did — only HOW
+  // pairs get selected for checking changed, not what happens once a
+  // pair is found to actually overlap.
   handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = 'radius', radiusProp2 = 'radius', massProp1 = 'mass', massProp2 = 'mass') {
+    const sameArray = entities1 === entities2;
+
+    // Grid cell size computed from the ACTUAL max radius present in
+    // this call, not a fixed guess — deliberately NOT reusing
+    // worldGen.js's own CELL_SIZE (3000, used for world streaming):
+    // state.planetoids/asteroids already only ever contain the active
+    // 3x3 streaming neighborhood's worth of entities, so bucketing at
+    // that same coarse granularity would put nearly the whole active
+    // set into just 9 buckets — no real improvement over the O(n^2)
+    // check this replaces. This needs a MUCH finer granularity, sized
+    // to the actual collision distances involved instead. Computed
+    // dynamically rather than hardcoded specifically because
+    // state.planetoids mixes small, uniform worldGen.js planets
+    // (radius 30-70) with much larger permanent ones (mazePlanet/
+    // platformPlanet at radius 250) — a fixed size tuned only to the
+    // small ones could let two large planets overlap without ever
+    // landing in the same or an adjacent bucket, silently missing a
+    // real collision (objects passing through each other) rather than
+    // just costing more than necessary. This way the grid is always
+    // sized correctly for whatever's actually present, regardless of
+    // which specific planetoid subclasses do or don't end up tagged
+    // isImmovable — genuinely verified, not assumed, since I don't
+    // have visibility into every planetoid subclass this session.
+    let maxRadius = 0;
+    for (const e of entities1) {
+      const r = e[radiusProp1];
+      if (r > maxRadius) maxRadius = r;
+    }
+    if (!sameArray) {
+      for (const e of entities2) {
+        const r = e[radiusProp2];
+        if (r > maxRadius) maxRadius = r;
+      }
+    }
+    // Two entities can only ever collide within (their two radii
+    // summed) of each other — at most 2x the single largest radius
+    // present. A grid cell at least that large guarantees any real
+    // collision lands in the same or an immediately-adjacent cell;
+    // the 50 floor just avoids a degenerate near-zero grid if
+    // everything passed in happens to be tiny.
+    const gridSize = Math.max(maxRadius * 2, 50);
+
+    const grid = new Map();
+    for (let j = 0; j < entities2.length; j++) {
+      const e = entities2[j];
+      const col = Math.floor(e.pos.x / gridSize);
+      const row = Math.floor(e.pos.y / gridSize);
+      const key = `${col},${row}`;
+      let bucket = grid.get(key);
+      if (!bucket) { bucket = []; grid.set(key, bucket); }
+      bucket.push(j);
+    }
+
     for (let i = 0; i < entities1.length; i++) {
-      for (let j = (entities1 === entities2 ? i + 1 : 0); j < entities2.length; j++) {
-        const p1 = entities1[i];
-        const p2 = entities2[j];
-        // Immovable objects are handled exclusively by
-        // handleImmovableCollisions, which uses true surface distance
-        // for rect-type shapes instead of this method's bounding-
-        // circle-based check — critical for anything long/thin, where
-        // that circle badly overshoots the true surface.
-        if (p1.isImmovable || p2.isImmovable) continue;
-        const offset = p1.pos.subtract(p2.pos);
-        const distSq = offset.lengthSq();
-        const sumR = p1[radiusProp1] + p2[radiusProp2];
-        const sumRSq = sumR * sumR;
-        if (distSq < sumRSq) {
-          const dist = Math.sqrt(distSq);
-          const overlap = sumR - dist;
-          const normal = offset.normalize();
-          const tangent = new Vector2(-normal.y, normal.x);
-          const m1 = p1[massProp1], m2 = p2[massProp2], totalMass = m1 + m2;
-          const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
-          p1.pos.add(normal.multiply(sep1));
-          p2.pos.add(normal.multiply(-sep2));
-          const v1 = p1.vel.clone(), v2 = p2.vel.clone();
-          const v1n = normal.dot(v1), v2n = normal.dot(v2);
-          const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
-          const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
-          const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
-          p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
-          p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+      const p1 = entities1[i];
+      const col = Math.floor(p1.pos.x / gridSize);
+      const row = Math.floor(p1.pos.y / gridSize);
+
+      for (let dRow = -1; dRow <= 1; dRow++) {
+        for (let dCol = -1; dCol <= 1; dCol++) {
+          const bucket = grid.get(`${col + dCol},${row + dRow}`);
+          if (!bucket) continue;
+
+          for (const j of bucket) {
+            // Same dedup guarantee the original i+1 loop-bound gave —
+            // each unordered pair checked exactly once, no self-pairs
+            // — just expressed as a condition instead of a loop bound,
+            // since j no longer walks a fixed, ordered range here.
+            if (sameArray && j <= i) continue;
+
+            const p2 = entities2[j];
+            // Immovable objects are handled exclusively by
+            // handleImmovableCollisions, which uses true surface
+            // distance for rect-type shapes instead of this method's
+            // bounding-circle-based check — critical for anything
+            // long/thin, where that circle badly overshoots the true
+            // surface.
+            if (p1.isImmovable || p2.isImmovable) continue;
+            const offset = p1.pos.subtract(p2.pos);
+            const distSq = offset.lengthSq();
+            const sumR = p1[radiusProp1] + p2[radiusProp2];
+            const sumRSq = sumR * sumR;
+            if (distSq < sumRSq) {
+              const dist = Math.sqrt(distSq);
+              const overlap = sumR - dist;
+              const normal = offset.normalize();
+              const tangent = new Vector2(-normal.y, normal.x);
+              const m1 = p1[massProp1], m2 = p2[massProp2], totalMass = m1 + m2;
+              const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+              p1.pos.add(normal.multiply(sep1));
+              p2.pos.add(normal.multiply(-sep2));
+              const v1 = p1.vel.clone(), v2 = p2.vel.clone();
+              const v1n = normal.dot(v1), v2n = normal.dot(v2);
+              const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+              const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+              const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+              p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
+              p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+            }
+          }
         }
       }
     }
@@ -158,7 +242,7 @@ export class CollisionSystem {
   handlePlayerPlanetCollisions(player) {
     for (const planet of state.planetoids.filter(p => p.isSpikey)) {
       const dist = player.pos.subtract(planet.pos).length();
-      if (dist <= planet.radius + PLAYER_RADIUS + SURFACE_TOLERANCE) {
+      if (dist <= planet.radius + player.radius + SURFACE_TOLERANCE) {
         player.startDeath();
         return;
       }
@@ -227,8 +311,8 @@ export class CollisionSystem {
         return false;
       }
       const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
-      if (surface.distance <= PLAYER_RADIUS + SURFACE_TOLERANCE) {
-        player.pos = surface.point.clone().add(surface.normal.clone().multiply(PLAYER_RADIUS));
+      if (surface.distance <= player.radius + SURFACE_TOLERANCE) {
+        player.pos = surface.point.clone().add(surface.normal.clone().multiply(player.radius));
         player.onSurface = true;
         player.currentPlanet = planet;
         player.lastInfluencePlanet = planet;
@@ -248,7 +332,7 @@ export class CollisionSystem {
 
     const offset = player.pos.subtract(planet.pos);
     const dist = offset.length();
-    const surfaceDist = planet.radius + PLAYER_RADIUS;
+    const surfaceDist = planet.radius + player.radius;
     if (dist <= surfaceDist + SURFACE_TOLERANCE) {
       const normal = offset.normalize();
       player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
@@ -272,7 +356,7 @@ export class CollisionSystem {
   handlePlayerAsteroidCollisions(player, asteroids) {
     for (const a of asteroids) {
       const dist = player.pos.subtract(a.pos).length();
-      if (dist <= PLAYER_RADIUS + a.radius) {
+      if (dist <= player.radius + a.radius) {
         player.startDeath();
         return;
       }
@@ -282,7 +366,7 @@ export class CollisionSystem {
   handlePlayerEnemyCollisions(player, enemies) {
     for (const e of enemies) {
       const dist = player.pos.subtract(e.pos).length();
-      if (dist <= PLAYER_RADIUS + ENEMY_RADIUS) {
+      if (dist <= player.radius + ENEMY_RADIUS) {
         player.startDeath();
         return;
       }
@@ -303,7 +387,7 @@ export class CollisionSystem {
     const stomped = [];
     for (const g of goombas) {
       const dist = player.pos.subtract(g.pos).length();
-      if (dist > PLAYER_RADIUS + g.radius) continue;
+      if (dist > player.radius + g.radius) continue;
 
       const isStomp = (g.pos.y - player.pos.y) > g.radius * 0.3 && player.vel.y >= 0;
       if (isStomp) {
@@ -339,11 +423,62 @@ export class CollisionSystem {
     return { hitFireballs, killedGoombas };
   }
 
+  // Always-lethal-on-touch, mirroring handlePlayerEnemyCollisions'
+  // pattern above rather than handlePlayerGoombaCollisions' stomp
+  // mechanic — stomping is a more deliberate, specific design choice
+  // (also needs a bounce-response wired up wherever it's called from,
+  // same as goombas), not assumed here without being asked for it
+  // specifically for blobs.
+  //
+  // b.getWorldPos() is doing real work here, not just following
+  // convention: BlobMonster's own .pos is LOCAL to its interior's tile
+  // grid (0,0 = top-left corner, only ever converted to world space at
+  // draw time), while player.pos is already world-space — comparing
+  // them directly would silently measure distance between two
+  // different coordinate systems, not a crash, just meaningless
+  // collision detection.
+  //
+  // Uses player.platformHalfExtent, NOT player.radius — the latter is
+  // space-mode's own, unrelated collision size; reusing it here would
+  // reintroduce the exact same visual/collision coupling bug already
+  // found and fixed once for platform-mode tile collision.
+  handlePlayerBlobCollisions(player, blobs) {
+    for (const b of blobs) {
+      const dist = player.pos.subtract(b.getWorldPos()).length();
+      if (dist <= player.platformHalfExtent + b.radius) {
+        player.startDeath();
+        return;
+      }
+    }
+  }
+
+  // Same shape as handleFireballGoombaCollisions above, mirrored for
+  // blob monsters — same getWorldPos() reasoning as
+  // handlePlayerBlobCollisions above applies here too.
+  handleFireballBlobCollisions(fireballs, blobs) {
+    const hitFireballs = new Set();
+    const killedBlobs = new Set();
+
+    for (const f of fireballs) {
+      for (const b of blobs) {
+        if (killedBlobs.has(b)) continue; // already killed by an earlier fireball this same frame
+        const dist = f.pos.subtract(b.getWorldPos()).length();
+        if (dist < f.radius + b.radius) {
+          hitFireballs.add(f);
+          killedBlobs.add(b);
+          break;
+        }
+      }
+    }
+
+    return { hitFireballs, killedBlobs };
+  }
+
   handleCoinCollisions(player, coins) {
     for (let i = coins.length - 1; i >= 0; i--) {
       const c = coins[i];
       const dist = player.pos.subtract(c.pos).length();
-      if (dist <= PLAYER_RADIUS + COIN_RADIUS) {
+      if (dist <= player.radius + COIN_RADIUS) {
         state.audioManager.playEatDot();
         coins.splice(i, 1);
         state.score++;

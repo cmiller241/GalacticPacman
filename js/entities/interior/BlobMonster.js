@@ -33,6 +33,22 @@ export class BlobMonster {
     return this.interior.tiles[row]?.[col] === 'H';
   }
 
+  // this.pos is LOCAL to the interior's own tile grid (0,0 = top-left
+  // corner) — only ever converted to world space at draw time, via
+  // offsetX/offsetY derived from the interior's own planetoid position.
+  // External code (collision checks against the player, whose own
+  // .pos is already world-space) needs the WORLD position to compare
+  // against — this centralizes that one conversion here, rather than
+  // duplicating the offset formula wherever it's needed (draw() below
+  // and PlatformInterior.js's own getPortalPosition() both compute the
+  // same offsetX/offsetY independently; this is that same formula, just
+  // reused for a different purpose).
+  getWorldPos() {
+    const offsetX = this.interior.planetoid.pos.x - (this.interior.cols * this.interior.tileSize / 2);
+    const offsetY = this.interior.planetoid.pos.y - (this.interior.rows * this.interior.tileSize / 2);
+    return new Vector2(offsetX + this.pos.x, offsetY + this.pos.y);
+  }
+
 update() {
   const ts = this.interior.tileSize;
 

@@ -5,6 +5,45 @@ import { getBoundingRadius } from '../systems/Raycast.js';
 const OVERLAY_COLOR = 'rgba(0, 0, 0, 0.55)'; // max darkness, reached once fully into V.A.T.S.
 const CUTOUT_PADDING = 14; // slightly beyond LockOutline.js's own OUTLINE_PADDING (8), so the cutout comfortably surrounds the yellow outline rather than clipping it
 
+// VHS/CRT-style scan lines drawn on top of the base dark fill — see
+// drawVatsOverlay's own comment for where these get applied and why
+// the cutout removes them from the locked target's own area too.
+//
+// Real, ALTERNATING light/dark bands, baked directly into the tile —
+// not a single faint line relying on absolute brightness, which is
+// what the first version of this did and why it was invisible: a
+// space scene is already mostly dark, with a dark overlay on top of
+// THAT, so a ~5%-alpha white line had nothing to contrast against.
+// What actually reads as "scan lines" is the CONTRAST between an
+// explicit lighter band and an explicit darker band sitting right next
+// to each other, not how bright either one is in isolation.
+const SCANLINE_SPACING = 5; // px per full light+dark cycle
+const SCANLINE_LIGHT_ALPHA = 0.15; // the lighter band — strong enough to read clearly against a dark scene
+const SCANLINE_DARK_ALPHA = 0; // the darker band — extra black ON TOP of the base overlay, for contrast against the light band right next to it
+const SCANLINE_FLICKER_MIN = 0.8; // flicker only ever dims the WHOLE pattern down to this fraction of its baked-in alpha, never further — keeps it consistently visible rather than fading in and out to nothing
+const SCANLINE_DRIFT_SPEED = 0.015; // px/ms — a slow vertical roll, like an old tape's vertical hold drifting, not a fast scroll
+
+// Built once and reused across frames — a 1px-wide, SCANLINE_SPACING-
+// tall tile with its own top half baked as the light band and bottom
+// half as the dark band, repeated via CanvasRenderingContext2D's own
+// pattern-fill (cheaper and simpler than manually looping drawImage
+// calls for something this small).
+let scanlinePattern = null;
+function getScanlinePattern(ctx) {
+  if (scanlinePattern) return scanlinePattern;
+  const tile = document.createElement('canvas');
+  tile.width = 1;
+  tile.height = SCANLINE_SPACING;
+  const tileCtx = tile.getContext('2d');
+  const half = SCANLINE_SPACING / 2;
+  tileCtx.fillStyle = `rgba(255, 255, 255, ${SCANLINE_LIGHT_ALPHA})`;
+  tileCtx.fillRect(0, 0, 1, half);
+  tileCtx.fillStyle = `rgba(0, 0, 0, ${SCANLINE_DARK_ALPHA})`;
+  tileCtx.fillRect(0, half, 1, half);
+  scanlinePattern = ctx.createPattern(tile, 'repeat');
+  return scanlinePattern;
+}
+
 // Built once and reused across frames (resized only when the needed
 // dimensions actually change, not recreated every single frame) — see
 // drawVatsOverlay's own comment for why this has to be a SEPARATE
@@ -89,6 +128,29 @@ export function drawVatsOverlay() {
   ctx.globalAlpha = 1;
   ctx.fillStyle = OVERLAY_COLOR;
   ctx.fillRect(0, 0, layer.width, layer.height);
+
+  // VHS-style scan lines — drawn on top of the base dark fill but
+  // still BEFORE the cutout below, so the cutout removes them from the
+  // locked target's own area too, same as the base darkening. A slow
+  // vertical drift (via translate, before the pattern fill — patterns
+  // tile relative to wherever the canvas origin currently is) plus a
+  // gentle alpha flicker sells the "old tape" feel without being
+  // distracting; the fillRect deliberately overshoots the layer's own
+  // bounds on both ends so the translated pattern still fully covers
+  // it regardless of the current drift offset. The flicker only ever
+  // scales the WHOLE pattern (both bands together, preserving their
+  // contrast with each other) between SCANLINE_FLICKER_MIN and 1 — a
+  // floor, not a fade to nothing, since the goal is a lively texture
+  // that's always clearly there, not one that periodically vanishes.
+  const flickerT = (Math.sin(Date.now() * 0.01) + 1) / 2; // 0..1
+  const flicker = SCANLINE_FLICKER_MIN + (1 - SCANLINE_FLICKER_MIN) * flickerT;
+  ctx.save();
+  const driftY = (Date.now() * SCANLINE_DRIFT_SPEED) % SCANLINE_SPACING;
+  ctx.translate(0, driftY);
+  ctx.globalAlpha = flicker;
+  ctx.fillStyle = getScanlinePattern(ctx);
+  ctx.fillRect(0, -SCANLINE_SPACING - driftY, layer.width, layer.height + SCANLINE_SPACING * 2);
+  ctx.restore();
 
   const target = state.player && state.player.lockedTarget;
   if (target) {

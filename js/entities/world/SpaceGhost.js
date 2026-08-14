@@ -35,18 +35,35 @@ export class SpaceGhost extends Entity {
   }
 
   update() {
-    // advance ghost cloth animation
-    this.wavePhase += 0.15;
+    // advance ghost cloth animation - a per-call increment (not
+    // wall-clock based like Fireball's flicker), so it needs scaling
+    // the same way Goomba's own walkCyclePhase does, or the cloth
+    // would keep wiggling at full speed even while the ghost's actual
+    // movement is slowed, looking visually inconsistent.
+    this.wavePhase += 0.15 * state.timeScale;
 
     // Normal rotation on current planet
     if (this.onSurface) {
-      this.angle += this.angularSpeed;
+      this.angle += this.angularSpeed * state.timeScale;
       this.updatePosition();
 
       // chance to jump to a nearby planet
-      if (Math.random() < ENEMY_JUMP_PROB) {
+      if (Math.random() < ENEMY_JUMP_PROB * state.timeScale) {
         for (const p of state.planetoids) {
-          if (p !== this.planet && !p.isSpikey) {
+          // isSkyDome excluded: SpaceGhost's whole orbit/landing model
+          // treats every planet as a true circle (this.planet.radius,
+          // Math.cos(this.angle)*surfaceDist, etc.) — for a rect-type
+          // planet, .radius is a circumscribing-circle approximation
+          // (see RoundedRectPlanetoid's own radius = diagonal of
+          // halfWidth/halfHeight), which for SkyDomePlanetoid
+          // specifically (a long, thin strip) is dominated by its
+          // halfWidth — a ghost "orbiting" at that radius would circle
+          // roughly 2000 units out from the platform's own center,
+          // nowhere near its actual visible shape. This class was never
+          // built with rect-type planets in mind at all, so excluding
+          // it here isn't just preference — it avoids genuinely
+          // undefined-looking behavior.
+          if (p !== this.planet && !p.isSpikey && !p.isSkyDome) {
             const dist = this.pos.subtract(p.pos).length();
 
             if (dist < p.influenceRadius) {
@@ -72,11 +89,17 @@ export class SpaceGhost extends Entity {
         this.lastInfluencePlanet = dominant;
 
         const dir = dominant.pos.subtract(this.pos).normalize();
-        this.vel.add(dir.multiply(GRAVITY_STRENGTH));
+        this.vel.add(dir.multiply(GRAVITY_STRENGTH * state.timeScale));
       }
 
-      this.vel = this.vel.multiply(DRAG);
-      this.pos.add(this.vel);
+      // Math.pow for the drag decay - see Asteroid.js's identical
+      // reasoning: an exponential per-frame rate has to be
+      // exponentiated by timeScale, not just multiplied, or velocity
+      // would decay at its normal, un-slowed rate even while visible
+      // movement is slowed, and wouldn't resume at the same speed once
+      // V.A.T.S. ends.
+      this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
+      this.pos.add(this.vel.clone().multiply(state.timeScale));
 
       // Bound to scene
       if (this.pos.x - this.radius < 0) {
@@ -149,6 +172,14 @@ export class SpaceGhost extends Entity {
     let minDist = Infinity;
 
     for (const planet of state.planetoids) {
+      // isSkyDome excluded here too, and it's the more important of the
+      // two exclusions in this file: this is what governs BOTH gravity
+      // attraction while airborne AND the landing check further down
+      // (dominant.isSpikey is checked there, but nothing previously
+      // excluded the dome) — a ghost that's never gravitationally drawn
+      // toward the dome can never reach that landing check with it as
+      // the target in the first place, so this one change covers both.
+      if (planet.isSkyDome) continue;
 
       const dist = this.pos.subtract(planet.pos).length();
 

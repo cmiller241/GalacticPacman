@@ -2,6 +2,7 @@
 import { state } from '../state.js';
 import { Vector2 } from '../vector2.js';
 import { RoundedRectPlanetoid } from './RoundedRectPlanetoid.js';
+import { Sprite, Texture, Graphics, Container } from 'pixi.js';
 
 // A fixed, non-rotating flat platform strip whose gravity only works
 // from directly above it — approach from the side or below and this
@@ -860,6 +861,626 @@ export class SkyDomePlanetoid extends RoundedRectPlanetoid {
     this.drawMetalBase();
     this.drawGrassCap();
     super.draw();
+  }
+
+  // ----------------------------
+  // PIXI RENDERING — STAGE 1 of 2. This class has roughly a dozen
+  // distinct visual sub-systems; everything genuinely STATIC once
+  // built (this section) is done now: the empty body override
+  // (inherited from super, harmless), the metal base, the grass cap,
+  // and the dome's own glass fill + destination-out fade + inner glow
+  // + outer glow + outline, all baked ONCE via Canvas2D — the exact
+  // same gradient/clip/composite-mode code drawDome()/drawMetalBase()
+  // already use, live, just retargeted at an offscreen canvas in LOCAL
+  // space instead of state.ctx in world space, minimizing transcription
+  // risk by reusing the already-correct sequence of calls rather than
+  // re-deriving the same visual from scratch in a different API. Only
+  // one SkyDomePlanetoid instance ever exists, so — same reasoning as
+  // BeamPlanetoid's own beam bake — a plain, one-time Canvas2D bake is
+  // the right level of complexity, not the GPU-native RenderTexture
+  // approach circular Planetoid needed specifically for its own
+  // repeated-50-times-per-cell problem.
+  //
+  // Deliberately NOT included here, deferred to a follow-up: the two
+  // independently-scrolling hex grid overlays (background + foreground
+  // — genuinely animated, can't be baked once) and the shield-impact
+  // particle system (pulse/ripples/sparks — genuinely dynamic, spawned
+  // and pruned from live game events). drawForegroundGlass() itself is
+  // also deferred as a whole, since its own hex grid depends on the
+  // same technique.
+  // ----------------------------
+
+  // Shared sizing/anchor math for BOTH dome sub-bakes below — MUST
+  // stay identical between them, or the back texture, the live
+  // scrolling hex grid, and the front texture (sandwiched in that
+  // z-order, matching drawDome()'s own fill→fade→inner-glow→HEX-GRID→
+  // outer-glow→outline sequence) would drift out of pixel alignment
+  // with each other. Originally this was ONE single baked texture
+  // (createDomeTexture), which is why the hex grid was left out of
+  // Stage 1 entirely — a single flat bake has no way to sandwich a
+  // live layer in the MIDDLE of it. Splitting into two bakes plus a
+  // real Pixi object between them is what makes that possible.
+  domeBakeGeometry() {
+    const padding = this.domeGlowReach + 10;
+    const width = this.domeRadiusX * 2 + padding * 2;
+    const height = this.domeRadiusY + padding * 2;
+    const cx = width / 2;
+    const cy = height - padding; // the dome's own flat base line
+    return { padding, width, height, cx, cy };
+  }
+
+  // Fill + destination-out fade + inner glow ONLY — the part of
+  // drawDome() that renders BEHIND the scrolling hex grid.
+  createDomeBackTexture() {
+    const { width, height, cx, cy } = this.domeBakeGeometry();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+
+    const boxX = cx - this.domeRadiusX, boxY = cy - this.domeRadiusY;
+    const boxW = this.domeRadiusX * 2, boxH = this.domeRadiusY * 2;
+
+    const highlightX = cx - this.domeRadiusX * 0.25;
+    const highlightY = cy - this.domeRadiusY * 0.55;
+    const outerRadius = Math.max(this.domeRadiusX, this.domeRadiusY) * 1.1;
+    const glassGrad = ctx.createRadialGradient(highlightX, highlightY, 0, cx, cy, outerRadius);
+    glassGrad.addColorStop(0, 'rgba(255,255,255,0.9)');
+    glassGrad.addColorStop(0.25, this.domeFillColor);
+    glassGrad.addColorStop(1, this.domeRimColor);
+    ctx.fillStyle = glassGrad;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+
+    ctx.globalCompositeOperation = 'destination-out';
+    const fadeGrad = ctx.createLinearGradient(cx, boxY, cx, cy);
+    fadeGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    fadeGrad.addColorStop(1, `rgba(0,0,0,${this.domeBottomFade})`);
+    ctx.fillStyle = fadeGrad;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    const innerLayers = [
+      { inset: 0, alpha: 0.10 },
+      { inset: this.domeInnerGlowReach * 0.5, alpha: 0.07 },
+      { inset: this.domeInnerGlowReach, alpha: 0.04 }
+    ];
+    for (const layer of innerLayers) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, this.domeRadiusX - layer.inset, this.domeRadiusY - layer.inset, 0, Math.PI, Math.PI * 2);
+      ctx.lineWidth = this.domeInnerGlowReach;
+      ctx.strokeStyle = `rgba(${this.domeGlowColor}, ${layer.alpha * this.domeGlowIntensity})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    return { canvas, anchorX: cx / width, anchorY: cy / height };
+  }
+
+  // Outer glow + outline ONLY — the part of drawDome() that renders IN
+  // FRONT of the scrolling hex grid. Same canvas size/anchor math as
+  // createDomeBackTexture (via domeBakeGeometry) so the two align
+  // pixel-for-pixel once composited with the live hex grid between them.
+  createDomeFrontTexture() {
+    const { width, height, cx, cy } = this.domeBakeGeometry();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    const reach = this.domeGlowReach;
+    const glowLayers = [
+      { width: this.domeOutlineWidth + reach, alpha: 0.06 },
+      { width: this.domeOutlineWidth + reach * 0.6, alpha: 0.10 },
+      { width: this.domeOutlineWidth + reach * 0.3, alpha: 0.16 }
+    ];
+    for (const layer of glowLayers) {
+      ctx.lineWidth = layer.width;
+      ctx.strokeStyle = `rgba(${this.domeGlowColor}, ${layer.alpha * this.domeGlowIntensity})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.lineWidth = this.domeOutlineWidth;
+    ctx.strokeStyle = this.domeOutlineColor;
+    ctx.stroke();
+    ctx.restore();
+
+    return { canvas, anchorX: cx / width, anchorY: cy / height };
+  }
+
+  // A hex-grid overlay, clipped to the dome's own upper half-ellipse
+  // silhouette. Pixi's Graphics.ellipse() has no start/end-angle
+  // parameters the way Canvas2D's ctx.ellipse() does (verified
+  // directly against the real type signature before writing this —
+  // arc() supports an angle range, ellipse() does not), so a true
+  // half-ellipse mask isn't directly expressible the same way the
+  // original's own ctx.ellipse(...,Math.PI,Math.PI*2) clip was. Worked
+  // around here instead: the sprite's own rectangle is sized to ONLY
+  // the upper-half bounding box (bottom-anchored at the flat base
+  // line), so there's simply no hex-grid content below that line for a
+  // mask to even need to clip away — combined with a plain FULL-ellipse
+  // mask (bounding that same rectangle), the visible result is
+  // identical to a true half-ellipse clip, without needing to
+  // approximate an arc as a manually-sampled polygon.
+  //
+  // hexCanvas/tileW/tileH come from bakeHexGridTile (already baked in
+  // createOffscreen, unchanged — this method only wraps that existing
+  // canvas as a live, scrolling Pixi object, not re-baking anything).
+  //
+  // Sprite and mask are both children of a shared wrapping Container,
+  // with the MASK's own local position fixed at (0,0) forever — the
+  // container itself is what actually moves each frame (see
+  // updateHexGridSprite below), not the mask independently. This
+  // matters: Pixi's own StencilMask.init() sets includeInBuild=false
+  // and measurable=false on whatever object becomes a mask (confirmed
+  // directly in Pixi's real source, not assumed), meaning a mask is
+  // deliberately excluded from the normal per-object render/build path
+  // — the exact path a mask would need to be part of for its own
+  // position.set() calls to reliably take effect the way an ordinary
+  // sprite's do. This codebase's own EARLIER, already-proven mask
+  // usage (Planetoid.js's GPU-native body bake) never repositioned its
+  // mask after creation either — built once, at a fixed local
+  // position, only the CONTAINER holding it ever moved. This mirrors
+  // that same precedent exactly, rather than repeating the one
+  // structural difference (independently repositioning a mask every
+  // frame) that precedent never actually tested.
+  createHexGridSprite(hexCanvas) {
+    const container = new Container();
+
+    // Bakes the small, repeating hex tile across a FULL-size canvas
+    // via a plain drawImage loop — a static, ONE-TIME version of what
+    // drawScrollingHexTile() used to do live every frame, using the
+    // exact same tiling technique (this codebase's own already-proven
+    // one, not a new one). Switched to this after TilingSprite's own
+    // GPU-level tiling repeatedly failed to actually repeat the
+    // texture, despite verifying — against Pixi's real source, not
+    // assumed — both the UV math (correctly produces a wide,
+    // multi-repeat range) and the texture's own addressMode (set to
+    // 'repeat', the actual documented mechanism for wrapping
+    // out-of-[0,1] UVs) directly. Whatever the remaining gap actually
+    // is, a plain, pre-tiled Sprite sidesteps that whole mechanism —
+    // no UVs beyond [0,1], no addressMode, nothing left to get wrong
+    // there — at the cost of the live scrolling animation this used
+    // to have (deferred, not abandoned; the pattern itself being
+    // genuinely visible again is the immediate priority).
+    const fullWidth = this.domeRadiusX * 2;
+    const fullHeight = this.domeRadiusY;
+    const tileW = hexCanvas.width;
+    const tileH = hexCanvas.height;
+    const bakedCanvas = document.createElement('canvas');
+    bakedCanvas.width = fullWidth;
+    bakedCanvas.height = fullHeight;
+    const bakedCtx = bakedCanvas.getContext('2d');
+    for (let y = 0; y < fullHeight; y += tileH) {
+      for (let x = 0; x < fullWidth; x += tileW) {
+        bakedCtx.drawImage(hexCanvas, x, y);
+      }
+    }
+
+    const sprite = new Sprite(Texture.from(bakedCanvas));
+    sprite.anchor.set(0.5, 1); // horizontally centered, bottom edge at the flat base line
+
+    const mask = new Graphics().ellipse(0, 0, this.domeRadiusX, this.domeRadiusY).fill(0xffffff);
+    sprite.mask = mask;
+    container.addChild(sprite, mask);
+
+    return { container, sprite };
+  }
+
+  // Repositions a hex-grid container (built by createHexGridSprite
+  // above) to the dome's current anchor point. Shared by both the
+  // background grid (called from updatePixiSprites below) and the
+  // foreground grid (called from updateForegroundGlassPixi further
+  // down). Only the CONTAINER's own position gets set here — the mask
+  // inside it stays at its fixed local (0,0), carried along
+  // automatically as the container moves, never touched independently
+  // (see createHexGridSprite's own comment for why that specifically
+  // matters). No scroll offset anymore — the hex pattern is now a
+  // static bake (see createHexGridSprite's own comment on why), so
+  // there's nothing left to animate here; the scrollSpeed parameter
+  // this method used to take is gone along with it.
+  updateHexGridSprite(entry, anchorX, anchorY) {
+    entry.container.position.set(anchorX, anchorY);
+  }
+
+  // Same technique as createDomeTexture above, applied to
+  // drawMetalBase()'s own visuals — gradient fill, inner glow, seam
+  // lines, outline — baked once into LOCAL-space coordinates.
+  createMetalBaseTexture() {
+    const padding = 4;
+    const baseRadiusX = this.halfWidth;
+    const baseRadiusY = this.baseRadiusY;
+    const width = baseRadiusX * 2 + padding * 2;
+    const height = baseRadiusY + padding * 2;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    const cx = width / 2;
+    const cy = padding; // the base's own flat top line
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(cx, cy, cx, cy + baseRadiusY);
+    grad.addColorStop(0, '#8a8a92');
+    grad.addColorStop(0.5, '#333338');
+    grad.addColorStop(1, '#050506');
+
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.closePath();
+    ctx.clip();
+    const glowLayers = [
+      { inset: 0, alpha: 0.12 },
+      { inset: baseRadiusY * 0.15, alpha: 0.08 },
+      { inset: baseRadiusY * 0.3, alpha: 0.04 }
+    ];
+    for (const layer of glowLayers) {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, baseRadiusX - layer.inset, baseRadiusY - layer.inset, 0, 0, Math.PI);
+      ctx.lineWidth = baseRadiusY * 0.2;
+      ctx.strokeStyle = `rgba(${this.baseGlowColor}, ${layer.alpha})`;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.closePath();
+    ctx.clip();
+    const highlightOffset = 2;
+    ctx.lineWidth = 2;
+    for (let i = 1; i <= this.baseHorizontalLineCount; i++) {
+      const t = i / (this.baseHorizontalLineCount + 1);
+      const lineY = cy + baseRadiusY * t;
+
+      ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.15)`;
+      ctx.beginPath();
+      ctx.moveTo(cx - baseRadiusX, lineY - highlightOffset);
+      ctx.lineTo(cx + baseRadiusX, lineY - highlightOffset);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.5)`;
+      ctx.beginPath();
+      ctx.moveTo(cx - baseRadiusX, lineY);
+      ctx.lineTo(cx + baseRadiusX, lineY);
+      ctx.stroke();
+    }
+
+    const bottomY = cy + baseRadiusY;
+    for (let i = 1; i < this.baseSeamCount; i++) {
+      const t = i / this.baseSeamCount;
+      const startX = cx - baseRadiusX + t * (baseRadiusX * 2);
+      const endX = cx + (startX - cx) * (1 - this.baseSeamConvergence);
+      const controlY = cy + baseRadiusY * 0.6;
+
+      ctx.strokeStyle = `rgba(${this.baseHighlightColor}, 0.12)`;
+      ctx.beginPath();
+      ctx.moveTo(startX + highlightOffset, cy);
+      ctx.quadraticCurveTo(startX + highlightOffset, controlY, endX + highlightOffset, bottomY);
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(${this.baseLineColor}, 0.4)`;
+      ctx.beginPath();
+      ctx.moveTo(startX, cy);
+      ctx.quadraticCurveTo(startX, controlY, endX, bottomY);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, baseRadiusX, baseRadiusY, 0, 0, Math.PI);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#1e1e20';
+    ctx.stroke();
+    ctx.restore();
+
+    return { canvas, anchorX: cx / width, anchorY: cy / height };
+  }
+
+  // Same tiled-drawImage logic as drawGrassCap() above, baked once
+  // into a single canvas rather than re-blitted every frame — unlike
+  // the dome/base bakes above, this one can genuinely fail on the
+  // FIRST attempt (state.grassTexture may still be loading), so it
+  // returns null rather than a bake in that case, and the caller
+  // (updatePixiSprites below) retries every frame until it succeeds —
+  // same asset-not-ready-yet tolerance pattern used throughout this
+  // migration.
+  createGrassTexture() {
+    const grassImg = state.grassTexture;
+    if (!grassImg || !grassImg.complete) return null;
+
+    const scale = 2;
+    const tileW = 32 * scale;
+    const fullWidth = this.halfWidth * 2;
+    const seamOverlap = 2;
+    const drawHeight = this.grassHeight + seamOverlap;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = fullWidth;
+    canvas.height = drawHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    for (let x = 0; x < fullWidth; x += tileW) {
+      ctx.drawImage(grassImg, x, 0, tileW, drawHeight);
+    }
+    return canvas;
+  }
+
+  // Builds dome + metal base immediately (both always ready — neither
+  // depends on an external asset load); grass is attempted here too
+  // but may not succeed yet, handled by the same retry in
+  // updatePixiSprites. Inserted BEFORE calling super.createPixiSprites
+  // — matches draw()'s own order (dome, base, grass, THEN super.draw())
+  // exactly, even though the inherited body itself renders nothing
+  // visible for this class (drawBodyTexture is an empty override).
+  createPixiSprites(layer) {
+    if (this.pixiDomeBackSprite) return;
+    // hexGridCanvas/hexGridForegroundCanvas are only ever set by
+    // createOffscreen() — if that hasn't run yet (or, as it turned
+    // out, was never called for this instance at all — see
+    // levelSetup.js's own history), both stay at their constructor
+    // default of null forever. The OLD Canvas2D path tolerated this
+    // silently (drawScrollingHexTile's own `if (!tileCanvas) return;`
+    // guard), which is exactly why this went unnoticed for so long —
+    // nothing here had an equivalent guard until now. Retried every
+    // frame via the same lazy-init pattern every other not-yet-ready
+    // asset uses throughout this migration, not a one-time check.
+    if (!this.hexGridCanvas || !this.hexGridForegroundCanvas) return;
+
+    const backBaked = this.createDomeBackTexture();
+    this.pixiDomeBackSprite = new Sprite(Texture.from(backBaked.canvas));
+    this.pixiDomeBackSprite.anchor.set(backBaked.anchorX, backBaked.anchorY);
+
+    // Background hex grid — sandwiched between the back and front dome
+    // textures, matching drawDome()'s own fill→fade→inner-glow→HEX-
+    // GRID→outer-glow→outline sequence. hexGridCanvas itself was
+    // already baked in createOffscreen() (unchanged, still Canvas2D,
+    // still cheap — only ONE small repeating tile, not re-stroked
+    // every frame) — this just wraps it as a live, scrolling Pixi
+    // object.
+    const hexEntry = this.createHexGridSprite(this.hexGridCanvas);
+    this.pixiHexGridBg = hexEntry.container;
+    this.pixiHexGridBgSprite = hexEntry.sprite;
+
+    const frontBaked = this.createDomeFrontTexture();
+    this.pixiDomeFrontSprite = new Sprite(Texture.from(frontBaked.canvas));
+    this.pixiDomeFrontSprite.anchor.set(frontBaked.anchorX, frontBaked.anchorY);
+
+    const baseBaked = this.createMetalBaseTexture();
+    this.pixiMetalBaseSprite = new Sprite(Texture.from(baseBaked.canvas));
+    this.pixiMetalBaseSprite.anchor.set(baseBaked.anchorX, baseBaked.anchorY);
+
+    layer.addChild(
+      this.pixiDomeBackSprite,
+      this.pixiHexGridBg,
+      this.pixiDomeFrontSprite,
+      this.pixiMetalBaseSprite
+    );
+
+    super.createPixiSprites(layer);
+  }
+
+  // Called every frame in place of draw() once migrated.
+  updatePixiSprites(layer) {
+    if (!this.pixiDomeBackSprite) this.createPixiSprites(layer);
+    if (!this.pixiDomeBackSprite) return;
+
+    super.updatePixiSprites(layer);
+
+    // Dome/base share this.pos.x directly, but their own vertical
+    // anchor (domeAnchorY, baked into each texture's own anchorY
+    // fraction) stays at the ORIGINAL pre-grass position — same
+    // reasoning as nearestDomeSurfacePoint/nearestBaseSurfacePoint —
+    // so position.set uses domeAnchorY here, not this.pos.y directly;
+    // the vertical offset between the two is already baked into each
+    // sprite's own anchor fraction.
+    this.pixiDomeBackSprite.position.set(this.pos.x, this.domeAnchorY);
+    this.pixiDomeFrontSprite.position.set(this.pos.x, this.domeAnchorY);
+    this.pixiMetalBaseSprite.position.set(this.pos.x, this.domeAnchorY);
+
+    this.updateHexGridSprite(
+      { container: this.pixiHexGridBg, sprite: this.pixiHexGridBgSprite },
+      this.pos.x, this.domeAnchorY
+    );
+
+    if (!this.pixiGrassSprite) {
+      const grassCanvas = this.createGrassTexture();
+      if (grassCanvas) {
+        this.pixiGrassSprite = new Sprite(Texture.from(grassCanvas));
+        this.pixiGrassSprite.anchor.set(0, 0); // top-left, matching drawGrassCap's own drawImage(img, startX, grassTopY, ...) semantics
+        layer.addChild(this.pixiGrassSprite);
+      }
+    }
+    if (this.pixiGrassSprite) {
+      this.pixiGrassSprite.position.set(this.pos.x - this.halfWidth, this.trueSurfaceY);
+    }
+  }
+
+  // NOTE: not currently wired to anything — isPermanent, never culled
+  // (see levelSetup.js) — implemented for correctness rather than
+  // leaving a silent gap, same reasoning as every other permanent
+  // planet's own destroyPixiSprite this session.
+  destroyPixiSprite() {
+    this.pixiDomeBackSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiDomeBackSprite = null;
+    this.pixiDomeFrontSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiDomeFrontSprite = null;
+    // pixiHexGridBg is now the wrapping Container (see
+    // createHexGridSprite's own comment on why sprite+mask live inside
+    // one), not a bare Sprite — children:true cascades this same
+    // destroy call to both the Sprite (unique texture, wrapping the
+    // full-size baked canvas — texture:true correctly destroys it
+    // too) and the mask Graphics (no texture of its own, texture:true
+    // is a harmless no-op for it).
+    this.pixiHexGridBg?.destroy({ children: true, texture: true, textureSource: true });
+    this.pixiHexGridBg = null;
+    this.pixiHexGridBgSprite = null;
+    this.pixiMetalBaseSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiMetalBaseSprite = null;
+    this.pixiGrassSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiGrassSprite = null;
+    // Foreground pass — same shared-geometry, same reasoning as above.
+    this.pixiForegroundTintSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiForegroundTintSprite = null;
+    this.pixiHexGridFg?.destroy({ children: true, texture: true, textureSource: true });
+    this.pixiHexGridFg = null;
+    this.pixiHexGridFgSprite = null;
+    this.pixiForegroundOutlineSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiForegroundOutlineSprite = null;
+    super.destroyPixiSprite();
+  }
+
+  // Bakes the foreground tint fill shape ONCE (full color, including
+  // domeFillColor's own baked-in alpha) — only the SPRITE's own
+  // .alpha changes frame to frame (zoom-dependent, see
+  // updateForegroundGlassPixi below), not the shape or color, so
+  // there's nothing here worth redrawing live the way the main dome's
+  // own hex grid needed to be. Sprite alpha multiplies with whatever
+  // alpha is already baked into the texture's own pixels, so this
+  // naturally reproduces the original's own
+  // domeFillColor-alpha-times-globalAlpha multiplicative behavior
+  // without needing to separately parse the color string the way
+  // PullBeam's own live strokes did — the baked texture already
+  // carries that alpha, Pixi's own alpha multiplication handles the
+  // rest.
+  createForegroundTintTexture() {
+    const { width, height, cx, cy } = this.domeBakeGeometry();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = this.domeFillColor;
+    ctx.fillRect(cx - this.domeRadiusX, cy - this.domeRadiusY, this.domeRadiusX * 2, this.domeRadiusY * 2);
+    ctx.restore();
+
+    return { canvas, anchorX: cx / width, anchorY: cy / height };
+  }
+
+  // Bakes JUST the outline stroke, same shape/technique as
+  // createDomeFrontTexture's own outline portion — this pass's own
+  // outline has a SEPARATE opacity (domeForegroundOutlineOpacity, not
+  // the main dome's own outline), so it needs its own sprite rather
+  // than reusing that one directly.
+  createForegroundOutlineTexture() {
+    const { width, height, cx, cy } = this.domeBakeGeometry();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, this.domeRadiusX, this.domeRadiusY, 0, Math.PI, Math.PI * 2);
+    ctx.lineWidth = this.domeOutlineWidth;
+    ctx.strokeStyle = this.domeOutlineColor;
+    ctx.stroke();
+    ctx.restore();
+
+    return { canvas, anchorX: cx / width, anchorY: cy / height };
+  }
+
+  createForegroundPixiSprites(layer) {
+    if (this.pixiForegroundTintSprite) return;
+    // Same reasoning as createPixiSprites' own identical guard above —
+    // retried every frame until createOffscreen() has actually run.
+    if (!this.hexGridForegroundCanvas) return;
+
+    const tintBaked = this.createForegroundTintTexture();
+    this.pixiForegroundTintSprite = new Sprite(Texture.from(tintBaked.canvas));
+    this.pixiForegroundTintSprite.anchor.set(tintBaked.anchorX, tintBaked.anchorY);
+
+    // Larger hexagons than the background grid (domeForegroundHexSize
+    // defaults to 1.8x domeHexSize — see the constructor), scrolling
+    // the opposite direction (domeForegroundHexScrollSpeed defaults
+    // negative) — same createHexGridSprite helper as the background
+    // grid, just wrapping hexGridForegroundCanvas instead.
+    const hexEntry = this.createHexGridSprite(this.hexGridForegroundCanvas);
+    this.pixiHexGridFg = hexEntry.container;
+    this.pixiHexGridFgSprite = hexEntry.sprite;
+
+    const outlineBaked = this.createForegroundOutlineTexture();
+    this.pixiForegroundOutlineSprite = new Sprite(Texture.from(outlineBaked.canvas));
+    this.pixiForegroundOutlineSprite.anchor.set(outlineBaked.anchorX, outlineBaked.anchorY);
+
+    // Insertion order matches drawForegroundGlass()'s own sequence:
+    // tint, then hex grid, then outline.
+    layer.addChild(
+      this.pixiForegroundTintSprite,
+      this.pixiHexGridFg,
+      this.pixiForegroundOutlineSprite
+    );
+  }
+
+  // Called separately from game.js, in place of drawForegroundGlass()
+  // once migrated — same "must run AFTER the player and everything
+  // else that might be standing inside the dome" timing requirement
+  // the original had (see drawForegroundGlass's own comment below for
+  // why), so this stays its OWN, separately-called method rather than
+  // folding into updatePixiSprites above, matching how the original
+  // kept drawForegroundGlass() as its own separate method too.
+  updateForegroundGlassPixi(layer) {
+    if (!this.pixiForegroundTintSprite) this.createForegroundPixiSprites(layer);
+    if (!this.pixiForegroundTintSprite) return;
+
+    const zoom = state.zoom || 1;
+    const zoomMin = state.zoomMin ?? 0.5;
+    const zoomRef = this.domeForegroundZoomReference;
+    const zoomT = zoomRef > zoomMin ? (zoom - zoomMin) / (zoomRef - zoomMin) : 0;
+    const clampedT = Math.max(0, Math.min(1, zoomT));
+    const zoomFactor = this.domeForegroundZoomFloor + (1 - this.domeForegroundZoomFloor) * (1 - clampedT);
+
+    this.pixiForegroundTintSprite.position.set(this.pos.x, this.domeAnchorY);
+    this.pixiForegroundTintSprite.alpha = this.domeForegroundTintOpacity * zoomFactor;
+
+    this.updateHexGridSprite(
+      { container: this.pixiHexGridFg, sprite: this.pixiHexGridFgSprite },
+      this.pos.x, this.domeAnchorY
+    );
+    // Setting alpha on the CONTAINER (not the sprite inside it)
+    // correctly scales the whole thing's effective rendered alpha,
+    // same as any other Pixi display object — no change needed here
+    // beyond pixiHexGridFg now referring to that container.
+    this.pixiHexGridFg.alpha = zoomFactor;
+
+    this.pixiForegroundOutlineSprite.position.set(this.pos.x, this.domeAnchorY);
+    this.pixiForegroundOutlineSprite.alpha = this.domeForegroundOutlineOpacity * zoomFactor;
   }
 
   // A deliberately SUBTLE second pass — NOT called from draw() above,
