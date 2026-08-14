@@ -2,6 +2,39 @@
 import { Interior } from './Interior.js';
 import { state } from '../state.js';
 import { Vector2 } from '../vector2.js';
+import { Sprite, Texture, Graphics } from 'pixi.js';
+
+let dotTexture = null;
+function getDotTexture() {
+  if (dotTexture) return dotTexture;
+  const r = 4;
+  const canvas = document.createElement('canvas');
+  canvas.width = r * 2;
+  canvas.height = r * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  dotTexture = Texture.from(canvas);
+  return dotTexture;
+}
+
+let powerPelletTexture = null;
+function getPowerPelletTexture() {
+  if (powerPelletTexture) return powerPelletTexture;
+  const r = 8;
+  const canvas = document.createElement('canvas');
+  canvas.width = r * 2;
+  canvas.height = r * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffff00';
+  ctx.fill();
+  powerPelletTexture = Texture.from(canvas);
+  return powerPelletTexture;
+}
 
 export class MazeInterior extends Interior {
   constructor(planetoid) {
@@ -97,6 +130,124 @@ export class MazeInterior extends Interior {
         }
       }
     }
+  }
+
+  // ----------------------------
+  // PIXI RENDERING (MazeInterior — the semi-transparent exterior/
+  // space-view overlay drawn ON the maze planet from outside, NOT the
+  // walkable interior-mode rendering itself, which lives elsewhere).
+  // Deliberately scoped to NOT include ghosts.forEach(g => g.draw()) —
+  // MazeGhost's own rendering wasn't available to port against this
+  // session, so ghosts stay unrendered here, same as it already was
+  // (draw() itself is dead code in the actual game now, same as
+  // everywhere else in this migration).
+  //
+  // Dots are tracked dynamically (a Map from each dot object to its
+  // own Sprite, diffed against this.dots every frame) rather than
+  // baked into a static texture the way the walls are — deliberately:
+  // there's no visibility into whether some maze pellet-eating
+  // mechanic elsewhere in the game mutates this.dots at runtime, and
+  // baking them once would silently keep showing an eaten dot forever
+  // if that assumption turned out wrong. Power pellets get the exact
+  // same treatment for consistency, even though the array is
+  // currently always empty in this codebase.
+  // ----------------------------
+  createPixiSprites(layer) {
+    if (this.pixiWallSprite) return;
+
+    this.pixiWallSprite = new Sprite(Texture.from(this.offscreen));
+    this.pixiWallSprite.anchor.set(0, 0); // top-left, matching the original's own drawImage(img, offsetX, offsetY) semantics
+    this.pixiWallSprite.alpha = 0.5;
+    layer.addChild(this.pixiWallSprite);
+
+    this.pixiDotSprites = new Map(); // dot object -> Sprite
+    this.pixiPelletSprites = new Map(); // pellet object -> Sprite
+
+    // Added after the wall sprite but before any dot/pellet sprites
+    // exist yet (those get added lazily as syncPointSprites creates
+    // them) — Graphics added here, though, so its insertion position
+    // in the layer is locked in ahead of any dot/pellet sprite,
+    // guaranteeing the portal renders on top of them once both exist,
+    // matching draw()'s own layer order (walls, dots/pellets, portal
+    // last).
+    this.pixiPortalGraphics = new Graphics();
+    layer.addChild(this.pixiPortalGraphics);
+  }
+
+  // Called every frame in place of draw() once migrated.
+  updatePixiSprites(layer) {
+    if (!this.pixiWallSprite) this.createPixiSprites(layer);
+    if (!this.pixiWallSprite) return;
+
+    const offsetX = this.planetoid.pos.x - (this.cols * this.tileSize / 2);
+    const offsetY = this.planetoid.pos.y - (this.rows * this.tileSize / 2);
+    this.pixiWallSprite.position.set(offsetX, offsetY);
+
+    this.syncPointSprites(this.dots, this.pixiDotSprites, getDotTexture(), offsetX, offsetY, layer);
+    this.syncPointSprites(this.powerPellets, this.pixiPelletSprites, getPowerPelletTexture(), offsetX, offsetY, layer);
+
+    const portalX = offsetX + (this.exitColLeft + 0.5) * this.tileSize + this.tileSize / 2;
+    const portalY = offsetY + this.exitRow * this.tileSize + this.tileSize / 2;
+    const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
+    // Cleared and redrawn every frame — radius and alpha both change
+    // continuously, same reasoning as Explosion's own ring: cheap and
+    // short work for a single, permanent instance, nothing worth
+    // baking once here.
+    this.pixiPortalGraphics.clear();
+    this.pixiPortalGraphics
+      .circle(portalX, portalY, 10 + pulse * 4)
+      .fill({ color: 0xff00ff, alpha: 0.7 + pulse * 0.3 })
+      .stroke({ width: 3, color: 0xffaaff });
+  }
+
+  // Shared diffing helper for dots/power pellets — both are plain
+  // arrays of {x,y} TILE-coordinate literals, not full entity classes
+  // with their own createPixiSprite/destroyPixiSprite methods the way
+  // Coin or Fireball are, so the sync logic lives here instead,
+  // applied to whichever array/tracked-Map/texture is passed in.
+  syncPointSprites(points, tracked, texture, offsetX, offsetY, layer) {
+    const currentSet = new Set(points);
+    for (const [point, sprite] of tracked) {
+      if (currentSet.has(point)) continue;
+      sprite.destroy();
+      tracked.delete(point);
+    }
+    for (const point of points) {
+      let sprite = tracked.get(point);
+      if (!sprite) {
+        sprite = new Sprite(texture);
+        sprite.anchor.set(0.5, 0.5);
+        layer.addChild(sprite);
+        tracked.set(point, sprite);
+      }
+      sprite.position.set(
+        offsetX + point.x * this.tileSize + this.tileSize / 2,
+        offsetY + point.y * this.tileSize + this.tileSize / 2
+      );
+    }
+  }
+
+  // NOTE: not currently wired to anything — mazePlanet is
+  // isPermanent, so this can never actually run in the current game
+  // (same situation as BeamPlanetoid's own destroyPixiSprite).
+  // Implemented anyway for correctness rather than leaving a silent
+  // gap.
+  destroyPixiSprite() {
+    // Unique to this one maze, unlike the shared dot/pellet textures
+    // below — texture:true here is correct and doesn't risk breaking
+    // anything else.
+    this.pixiWallSprite?.destroy({ texture: true, textureSource: true });
+    this.pixiWallSprite = null;
+    if (this.pixiDotSprites) {
+      for (const sprite of this.pixiDotSprites.values()) sprite.destroy();
+      this.pixiDotSprites.clear();
+    }
+    if (this.pixiPelletSprites) {
+      for (const sprite of this.pixiPelletSprites.values()) sprite.destroy();
+      this.pixiPelletSprites.clear();
+    }
+    this.pixiPortalGraphics?.destroy();
+    this.pixiPortalGraphics = null;
   }
 
   draw() {
