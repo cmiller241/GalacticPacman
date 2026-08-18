@@ -1,0 +1,623 @@
+-- lua/entities/Player.lua
+--
+-- Scoped port of js/entities/Player.js focusing on:
+--   - Existing physics / movement / landing / pull
+--   - Full-body astronaut rig (body, head, arms, boots)
+--   - Planet-surface orientation + walk cycle
+--   - Basic left-arm aim toward mouse / pull target
+--
+-- Not yet ported (deliberately): maze/platform modes, death/teleport
+-- animations, Pixi path, fireballs, invincibility flicker, etc.
+
+local state = require("lua.state")
+local Vector2 = require("lua.vector2")
+local constants = require("lua.constants")
+
+local Player = {}
+Player.__index = Player
+
+function Player.new(x, y)
+  local self = setmetatable({}, Player)
+
+  self.pos = Vector2.new(x, y)
+  self.vel = Vector2.new(0, 0)
+  self.sizeMultiplier = 1
+  self.radius = constants.PLAYER_RADIUS * self.sizeMultiplier
+
+  self.onSurface = false
+  self.currentPlanet = nil
+  self.lastInfluencePlanet = nil
+  self.angle = 0
+  self.surfaceArcPos = 0
+  self.facingDirection = 1
+  self.isGroundPounding = false
+  self.mode = "space"
+
+  self.isWalking = false
+  self.walkTime = 0
+  self.strideLength = 90
+  self.lastWalkBobT = 0
+  self.walkBobStrength = 3
+
+  self.jumpHorizontalCarry = 0.6
+  self.runSpeedMultiplier = 1.8
+  self.runJumpMultiplier = 1.3
+  self.airControlAccel = 0.3
+  self.airControlMaxSpeed = 4
+  self.edgeFallCarryFraction = 0.35
+
+  -- Time values are in SECONDS (love.timer.getTime()), matching inputHandlers.lua
+  self.mouseIdle = true
+  self.mouseIdleThreshold = 2.0          -- seconds
+  self.mouseWheelSuppressDuration = 0.2  -- seconds
+
+  self.pullTarget = nil
+  self.lockedTarget = nil
+  self.pullAccel = 0.85
+  self.pullMaxSpeed = 18
+  self.pullTangentialDamping = 0.12
+
+  -- Visual rig
+  self.bodyScale = 0.1 * self.sizeMultiplier
+  self.groundOffset = 250
+  self.armSwingScale = 0.5
+  self.maxAimFromForward = (90 + 5) * math.pi / 180
+  self.headLookScale = 0.6
+  self.headPivotFraction = 0.9
+  self.blasterMuzzleLength = 300
+  self.blasterAngleOffset = -5 * math.pi / 180
+
+  self.bodyPartsConfig = {
+    bodyY = 115,
+    headY = -150,
+    leftArmX = 136, leftArmY = 9, leftArmJointX = 73, leftArmJointY = 199,
+    rightArmX = -186, rightArmY = -14, rightArmJointX = 119, rightArmJointY = 40,
+    leftBootX = 111, leftBootY = 241, leftBootJointX = 83, leftBootJointY = 15,
+    rightBootX = -142, rightBootY = 241, rightBootJointX = 77, rightBootJointY = 15
+  }
+
+  -- Aim cache
+  self.aimShoulderPos = nil
+  self.aimWorldAngle = 0
+  self.aimRelativeAngle = 0
+  self.aimAnchorPos = nil
+
+  return self
+end
+
+------------------------------------------------------------------
+-- Physics / movement
+------------------------------------------------------------------
+
+function Player:applyGravity()
+  if self.onSurface then return end
+  local planet = state.gravitySystem:findDominantPlanet(self.pos)
+  if not planet and self.lastInfluencePlanet then planet = self.lastInfluencePlanet end
+  if planet then
+    self.lastInfluencePlanet = planet
+    local direction = planet.pos:subtract(self.pos):normalize()
+    local grav = constants.GRAVITY_STRENGTH
+    if self.isGroundPounding then grav = grav * constants.GROUND_POUND_GRAV_MULTIPLIER end
+    self.vel:add(direction:multiply(grav))
+  end
+end
+
+function Player:getOutwardLaunchDirection()
+  if not self.currentPlanet then return Vector2.new(0, -1) end
+  if self.currentPlanet.isRoundedRect then
+    local surface = self.currentPlanet:nearestSurfacePoint(self.pos.x, self.pos.y)
+    local direction = surface.normal
+    if self.currentPlanet.isSkyDome then
+      local horizontalInput = 0
+      if state.keys["ArrowLeft"] then horizontalInput = -1 end
+      if state.keys["ArrowRight"] then horizontalInput = 1 end
+      if horizontalInput ~= 0 then
+        direction = Vector2.new(
+          direction.x + horizontalInput * self.jumpHorizontalCarry,
+          direction.y
+        ):normalize()
+      end
+    end
+    return direction
+  end
+  return self.pos:subtract(self.currentPlanet.pos):normalize()
+end
+
+function Player:jump()
+  local jumpBoost = state.gamepadRunHeld and self.runJumpMultiplier or 1
+  if self.onSurface and self.currentPlanet then
+    local direction = self:getOutwardLaunchDirection()
+    self.vel = direction:multiply(constants.JUMP_STRENGTH * jumpBoost)
+    self.onSurface = false
+    self.currentPlanet = nil
+    if state.audioManager then state.audioManager:playJump() end
+  end
+end
+
+function Player:tryGroundPound()
+  if self.isGroundPounding then return end
+  local planet = state.gravitySystem:findDominantPlanet(self.pos) or self.lastInfluencePlanet
+  if planet then
+    local outwardDir = self.pos:subtract(planet.pos):normalize()
+    local radialVel = self.vel:dot(outwardDir)
+    if radialVel > 0 then self.isGroundPounding = true end
+  end
+end
+
+function Player:spawnWalkDust()
+  if not self.currentPlanet then return end
+  local bobT = math.sin(self.walkTime) ^ 2
+  local justPlanted = bobT > 0.85 and self.lastWalkBobT <= 0.85
+  self.lastWalkBobT = bobT
+  if not justPlanted then return end
+  -- TODO: particles once Particle.lua exists
+end
+
+function Player:move(keys)
+  if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
+    local planet = self.currentPlanet
+    self.isWalking = false
+    local ds = 0
+    local speed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * state.timeScale
+
+    if keys["ArrowLeft"] then ds = -speed; self.facingDirection = -1; self.isWalking = true end
+    if keys["ArrowRight"] then ds = speed; self.facingDirection = 1; self.isWalking = true end
+
+    if planet.isSkyDome then
+      local coreHalfWidth = planet.halfWidth - planet.cornerRadius
+      local minX = planet.pos.x - coreHalfWidth
+      local maxX = planet.pos.x + coreHalfWidth
+      local desiredX = self.pos.x + ds
+
+      if desiredX < minX or desiredX > maxX then
+        self.onSurface = false
+        self.currentPlanet = nil
+        self.vel = Vector2.new(ds * self.edgeFallCarryFraction, 0)
+      else
+        local topY = planet.pos.y - planet.halfHeight
+        self.pos = Vector2.new(desiredX, topY - self.radius)
+      end
+    else
+      self.surfaceArcPos = self.surfaceArcPos + ds
+      local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
+      self.pos = worldSurface.point
+    end
+
+    if self.isWalking then
+      self.walkTime = self.walkTime + (math.abs(ds) / self.strideLength) * math.pi * 2
+      self:spawnWalkDust()
+    end
+
+  elseif self.onSurface and self.currentPlanet then
+    local surfaceDist = self.currentPlanet.radius + self.radius
+    local speed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * state.timeScale
+    local angularSpeed = speed / surfaceDist
+
+    self.isWalking = false
+    local prevAngle = self.angle
+
+    if keys["ArrowLeft"] then
+      self.angle = self.angle - angularSpeed
+      self.facingDirection = -1
+      self.isWalking = true
+    end
+    if keys["ArrowRight"] then
+      self.angle = self.angle + angularSpeed
+      self.facingDirection = 1
+      self.isWalking = true
+    end
+    self.pos.x = self.currentPlanet.pos.x + math.cos(self.angle) * surfaceDist
+    self.pos.y = self.currentPlanet.pos.y + math.sin(self.angle) * surfaceDist
+
+    if self.isWalking then
+      local distanceMoved = math.abs(self.angle - prevAngle) * surfaceDist
+      self.walkTime = self.walkTime + (distanceMoved / self.strideLength) * math.pi * 2
+      self:spawnWalkDust()
+    end
+
+  elseif (not self.onSurface) and self.lastInfluencePlanet and self.lastInfluencePlanet.isSkyDome then
+    if keys["ArrowLeft"] then
+      self.vel.x = math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed)
+      self.facingDirection = -1
+    end
+    if keys["ArrowRight"] then
+      self.vel.x = math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed)
+      self.facingDirection = 1
+    end
+  end
+end
+
+function Player:update()
+  if not self.onSurface then
+    self.vel = self.vel:multiply(constants.DRAG ^ state.timeScale)
+    self.pos:add(self.vel:clone():multiply(state.timeScale))
+
+    if self.pos.x - self.radius < 0 then self.pos.x = self.radius; self.vel.x = -self.vel.x end
+    if self.pos.x + self.radius > state.sceneWidth then self.pos.x = state.sceneWidth - self.radius; self.vel.x = -self.vel.x end
+    if self.pos.y - self.radius < 0 then self.pos.y = self.radius; self.vel.y = -self.vel.y end
+    if self.pos.y + self.radius > state.sceneHeight then self.pos.y = state.sceneHeight - self.radius; self.vel.y = -self.vel.y end
+  end
+
+  self:updateOrientationAndFacing()
+end
+
+------------------------------------------------------------------
+-- Facing / orientation
+------------------------------------------------------------------
+
+function Player:updateOrientationAndFacing()
+  if self.mode ~= "space" then return end
+
+  local lastMove = state.lastMouseMoveTime or 0
+  local lastWheel = state.lastWheelTime or 0
+  local now = love.timer.getTime()
+
+  local recentlyScrolled = (now - lastWheel) < self.mouseWheelSuppressDuration
+  self.mouseIdle = not self.lockedTarget
+    and not state.gamepadAimActive
+    and (recentlyScrolled or (now - lastMove) > self.mouseIdleThreshold)
+
+  if self.mouseIdle then return end
+
+  local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
+  local downDir = Vector2.new(0, 1)
+  if planet then
+    if planet.isRoundedRect then
+      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
+      downDir = surface.normal:clone():multiply(-1)
+    else
+      downDir = planet.pos:subtract(self.pos):normalize()
+    end
+  end
+  local downAngle = math.atan2(downDir.y, downDir.x)
+  local orientation = downAngle - math.pi / 2
+  local tangentX = math.cos(orientation)
+  local tangentY = math.sin(orientation)
+
+  local toTargetX, toTargetY
+  if self.lockedTarget then
+    toTargetX = self.lockedTarget.pos.x - self.pos.x
+    toTargetY = self.lockedTarget.pos.y - self.pos.y
+  elseif state.gamepadAimActive then
+    toTargetX = state.gamepadAimX or 0
+    toTargetY = state.gamepadAimY or 0
+  else
+    local cam = state.camera or { x = 0, y = 0 }
+    local zoom = state.zoom or 1
+    local mouse = state.mouse or { x = self.pos.x, y = self.pos.y }
+    local mouseWorldX = mouse.x / zoom + cam.x
+    local mouseWorldY = mouse.y / zoom + cam.y
+    toTargetX = mouseWorldX - self.pos.x
+    toTargetY = mouseWorldY - self.pos.y
+  end
+
+  local projection = toTargetX * tangentX + toTargetY * tangentY
+  self.facingDirection = projection >= 0 and 1 or -1
+end
+
+------------------------------------------------------------------
+-- Aim helpers
+------------------------------------------------------------------
+
+function Player:worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign)
+  if dirSign > 0 then
+    return desiredWorldAngle - orientation
+  end
+  return (orientation + math.pi) - desiredWorldAngle
+end
+
+function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
+  local cfg = self.bodyPartsConfig
+  local s = self.bodyScale
+  local cosO = math.cos(orientation)
+  local sinO = math.sin(orientation)
+
+  local offsetX = cfg.leftArmX * dirSign
+  local offsetY = cfg.leftArmY
+  local wx = offsetX * cosO - offsetY * sinO
+  local wy = offsetX * sinO + offsetY * cosO
+  local shoulderX = originPos.x + wx * s
+  local shoulderY = originPos.y + wy * s
+
+  local forwardAngle = dirSign > 0 and orientation or (orientation + math.pi)
+
+  local targetWorldX, targetWorldY
+  if self.lockedTarget then
+    targetWorldX = self.lockedTarget.pos.x
+    targetWorldY = self.lockedTarget.pos.y
+  elseif self.pullTarget then
+    targetWorldX = self.pullTarget.pos.x
+    targetWorldY = self.pullTarget.pos.y
+  elseif state.gamepadAimActive then
+    targetWorldX = shoulderX + (state.gamepadAimX or 0) * 1000
+    targetWorldY = shoulderY + (state.gamepadAimY or 0) * 1000
+  else
+    local cam = state.camera or { x = 0, y = 0 }
+    local zoom = state.zoom or 1
+    local mouse = state.mouse or { x = shoulderX, y = shoulderY }
+    targetWorldX = mouse.x / zoom + cam.x
+    targetWorldY = mouse.y / zoom + cam.y
+  end
+
+  local targetAngle = math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX)
+  local relative = math.atan2(
+    math.sin(targetAngle - forwardAngle),
+    math.cos(targetAngle - forwardAngle)
+  )
+
+  if not self.lockedTarget then
+    relative = math.max(-self.maxAimFromForward, math.min(self.maxAimFromForward, relative))
+  end
+
+  local clampedTargetAngle = forwardAngle + relative
+  self.aimShoulderPos = Vector2.new(shoulderX, shoulderY)
+  self.aimWorldAngle = clampedTargetAngle
+  self.aimRelativeAngle = relative
+  self.aimAnchorPos = self.pos:clone()
+
+  return self:worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign)
+end
+
+function Player:computeHeadLookTilt(orientation, dirSign)
+  local forwardAngle = dirSign > 0 and orientation or (orientation + math.pi)
+  local desiredWorldAngle = forwardAngle + self.headLookScale * (self.aimRelativeAngle or 0)
+  return self:worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign)
+end
+
+------------------------------------------------------------------
+-- Drawing
+------------------------------------------------------------------
+
+function Player:drawLimb(img, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal)
+  if not img then return end
+  local s = self.bodyScale
+
+  local wx = offsetX * cosO - offsetY * sinO
+  local wy = offsetX * sinO + offsetY * cosO
+
+  love.graphics.push()
+  love.graphics.translate(originPos.x + wx * s, originPos.y + wy * s)
+  love.graphics.rotate(orientation + angle)
+  if flipHorizontal then
+    love.graphics.scale(-1, 1)
+  end
+  love.graphics.draw(img, -jointX * s, -jointY * s, 0, s, s)
+  love.graphics.pop()
+end
+
+function Player:drawFullBody(orientation, originPos)
+  local images = state.characterImages
+  if not images then return end
+
+  local cfg = self.bodyPartsConfig
+  local s = self.bodyScale
+  local cosO = math.cos(orientation)
+  local sinO = math.sin(orientation)
+
+  local walkAngle = (self.onSurface and self.isWalking) and (math.sin(self.walkTime) * 0.6) or 0
+  local walkBobT = (self.onSurface and self.isWalking) and (math.sin(self.walkTime) ^ 2) or 0
+  local walkBobAmount = walkBobT * self.walkBobStrength
+  originPos = Vector2.new(
+    originPos.x + -sinO * walkBobAmount,
+    originPos.y + cosO * walkBobAmount
+  )
+
+  local dirSign = self.facingDirection < 0 and -1 or 1
+
+  local leftBootAngle = walkAngle
+  local rightBootAngle = -walkAngle
+  local leftArmAngle, rightArmAngle
+  local rightArmFlipped = false
+
+  local aimAngle = self:computeLeftArmAimAngle(orientation, dirSign, originPos)
+  if self.mouseIdle and not self.pullTarget then
+    local swayAngle = (self.onSurface and self.isWalking)
+      and (walkAngle * self.armSwingScale)
+      or (math.sin(love.timer.getTime() * 1.5) * 0.15)
+    leftArmAngle = swayAngle
+    rightArmAngle = swayAngle
+  else
+    leftArmAngle = aimAngle
+    rightArmAngle = walkAngle * self.armSwingScale
+  end
+
+  if not self.onSurface then
+    leftBootAngle = -0.7
+    rightBootAngle = 0.7
+    local raisedWorldAngle = -math.pi / 2 - (math.pi * 0.75) * dirSign
+    rightArmAngle = self:worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign)
+    rightArmFlipped = true
+  end
+
+  -- Draw order matches JS: left boot, left arm, body, right boot, right arm, head
+  self:drawLimb(images.leftboot, cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO)
+  self:drawLimb(images.leftarm, cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO)
+
+  if images.body then
+    local bodyW, bodyH = images.body:getDimensions()
+    love.graphics.push()
+    love.graphics.translate(originPos.x, originPos.y)
+    love.graphics.rotate(orientation)
+    love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s)
+    love.graphics.pop()
+  end
+
+  self:drawLimb(images.rightboot, cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO)
+  self:drawLimb(images.rightarm, cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO, rightArmFlipped)
+
+  if images.head then
+    local headW, headH = images.head:getDimensions()
+    local headWX = -cfg.headY * sinO
+    local headWY = cfg.headY * cosO
+    local headBob = (self.onSurface and self.isWalking) and (math.sin(self.walkTime * 2) * 0.03) or 0
+    local headLookTilt = self.mouseIdle and 0 or self:computeHeadLookTilt(orientation, dirSign)
+    local headTilt = headBob + headLookTilt
+    local pivotY = headH * s * self.headPivotFraction
+
+    love.graphics.push()
+    love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s)
+    love.graphics.rotate(orientation + headTilt)
+    love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s)
+    love.graphics.pop()
+  end
+end
+
+function Player:draw()
+  local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
+  local downDir = Vector2.new(0, 1)
+  if planet then
+    if planet.isRoundedRect then
+      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
+      downDir = surface.normal:clone():multiply(-1)
+    else
+      downDir = planet.pos:subtract(self.pos):normalize()
+    end
+  end
+  local downAngle = math.atan2(downDir.y, downDir.x)
+  local orientation = downAngle - math.pi / 2
+
+  local outwardDir = downDir:multiply(-1)
+  local visualPos = self.pos:clone():add(outwardDir:multiply(self.groundOffset * self.bodyScale))
+
+  local dirSign = self.facingDirection < 0 and -1 or 1
+
+  love.graphics.push()
+  love.graphics.translate(self.pos.x, self.pos.y)
+  love.graphics.rotate(orientation)
+  love.graphics.scale(dirSign, 1)
+  love.graphics.rotate(-orientation)
+  love.graphics.translate(-self.pos.x, -self.pos.y)
+
+  self:drawFullBody(orientation, visualPos)
+
+  love.graphics.pop()
+end
+
+------------------------------------------------------------------
+-- Pull target
+------------------------------------------------------------------
+
+function Player:trySelectPullTarget(explicitTarget)
+  if self.mode ~= "space" then return end
+
+  local best = nil
+  if explicitTarget then
+    for _, p in ipairs(state.planetoids) do
+      if p == explicitTarget and not explicitTarget.isPullExempt then
+        best = explicitTarget
+        break
+      end
+    end
+  else
+    local cam = state.camera or { x = 0, y = 0 }
+    local zoom = state.zoom or 1
+    local mouse = state.mouse or { x = self.pos.x, y = self.pos.y }
+    local worldX = mouse.x / zoom + cam.x
+    local worldY = mouse.y / zoom + cam.y
+
+    local bestDistSq = math.huge
+    for _, planet in ipairs(state.planetoids) do
+      if not planet.isPullExempt then
+        local dx = worldX - planet.pos.x
+        local dy = worldY - planet.pos.y
+        local hit = (dx * dx + dy * dy) <= planet.radius * planet.radius
+        if hit then
+          local distSq = dx * dx + dy * dy
+          if distSq < bestDistSq then
+            bestDistSq = distSq
+            best = planet
+          end
+        end
+      end
+    end
+  end
+
+  if best then
+    if self.onSurface and self.currentPlanet then
+      local launchDir = self:getOutwardLaunchDirection()
+      self.vel = launchDir:multiply(constants.JUMP_STRENGTH)
+    end
+    self.pullTarget = best
+    self.onSurface = false
+    self.currentPlanet = nil
+    state.vatsActive = false
+  end
+end
+
+function Player:clearPullTarget()
+  self.pullTarget = nil
+end
+
+function Player:applyPullForce()
+  if self.onSurface then self.pullTarget = nil; return end
+  if not self.pullTarget then return end
+
+  local stillActive = false
+  for _, p in ipairs(state.planetoids) do
+    if p == self.pullTarget then stillActive = true; break end
+  end
+  if not stillActive then
+    self.pullTarget = nil
+    return
+  end
+
+  local dx = self.pullTarget.pos.x - self.pos.x
+  local dy = self.pullTarget.pos.y - self.pos.y
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist < 1e-6 then return end
+
+  local dirX, dirY = dx / dist, dy / dist
+
+  local radialSpeed = self.vel.x * dirX + self.vel.y * dirY
+  local tangentX = self.vel.x - radialSpeed * dirX
+  local tangentY = self.vel.y - radialSpeed * dirY
+  local tangentRetention = (1 - self.pullTangentialDamping) ^ state.timeScale
+  self.vel.x = self.vel.x - tangentX * (1 - tangentRetention)
+  self.vel.y = self.vel.y - tangentY * (1 - tangentRetention)
+
+  self.vel.x = self.vel.x + dirX * self.pullAccel * state.timeScale
+  self.vel.y = self.vel.y + dirY * self.pullAccel * state.timeScale
+
+  local speed = self.vel:length()
+  if speed > self.pullMaxSpeed then
+    self.vel = self.vel:multiply(self.pullMaxSpeed / speed)
+  end
+end
+
+function Player:shootFireball()
+  if self.mode ~= "space" and self.mode ~= "platform" then return end
+
+  local now = love.timer.getTime()
+  self.lastShotTime = self.lastShotTime or 0
+  self.fireCooldown = self.fireCooldown or 0.15   -- seconds
+  if now - self.lastShotTime < self.fireCooldown then return end
+  self.lastShotTime = now
+
+  -- Prefer the aim angle computed during the last draw
+  local angle = self.aimWorldAngle or 0
+  if self.blasterAngleOffset then
+    angle = angle + self.blasterAngleOffset
+  end
+
+  local originX, originY
+  if self.aimShoulderPos then
+    local muzzleDist = (self.blasterMuzzleLength or 300) * (self.bodyScale or 0.1)
+    originX = self.aimShoulderPos.x + math.cos(angle) * muzzleDist
+    originY = self.aimShoulderPos.y + math.sin(angle) * muzzleDist
+  else
+    originX = self.pos.x
+    originY = self.pos.y
+  end
+
+  state.fireballs = state.fireballs or {}
+  local Fireball = require("lua.entities.Fireball")
+  table.insert(state.fireballs, Fireball.new(originX, originY, angle))
+end
+
+function Player:tryLockTargetNext() end
+function Player:tryLockTargetPrevious() end
+function Player:clearLockTarget()
+  self.lockedTarget = nil
+end
+
+return Player

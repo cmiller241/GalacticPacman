@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TilingSprite isolation test</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0a0a1a;
+    color: #dfe7ff;
+    font-family: system-ui, -apple-system, sans-serif;
+    height: 100%;
+  }
+  #layout {
+    display: flex;
+    height: 100vh;
+  }
+  #canvas-container {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  #panel {
+    flex: 0 0 320px;
+    padding: 20px;
+    box-sizing: border-box;
+    background: #111128;
+    border-left: 1px solid #2a2a50;
+    overflow-y: auto;
+  }
+  h1 {
+    font-size: 16px;
+    margin: 0 0 4px;
+    color: #ffffff;
+  }
+  .sub {
+    font-size: 12px;
+    color: #8a90c0;
+    margin: 0 0 20px;
+    line-height: 1.5;
+  }
+  fieldset {
+    border: 1px solid #2a2a50;
+    border-radius: 6px;
+    margin: 0 0 16px;
+    padding: 10px 12px 12px;
+  }
+  legend {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #7d84b8;
+    padding: 0 4px;
+  }
+  label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 5px 0;
+    cursor: pointer;
+    user-select: none;
+  }
+  label input[type=checkbox] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
+  label input[type=range] {
+    flex: 1;
+  }
+  .row-value {
+    font-size: 11px;
+    color: #8a90c0;
+    min-width: 34px;
+    text-align: right;
+  }
+  #status {
+    font-size: 12px;
+    line-height: 1.6;
+    background: #0a0a1a;
+    border: 1px solid #2a2a50;
+    border-radius: 6px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+  }
+  #tile-preview-wrap {
+    margin-top: 16px;
+  }
+  #tile-preview-wrap p {
+    font-size: 11px;
+    color: #7d84b8;
+    margin: 0 0 6px;
+  }
+  #tile-preview {
+    image-rendering: pixelated;
+    border: 1px solid #2a2a50;
+    background: #05050f;
+  }
+  .hint {
+    font-size: 11px;
+    color: #6b7099;
+    margin: 4px 0 0;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div id="layout">
+  <div id="canvas-container"></div>
+  <div id="panel">
+    <h1>TilingSprite isolation test</h1>
+    <p class="sub">Circle mask + hexagonal TilingSprite, isolated from every other system in the game. Toggle things one at a time.</p>
+
+    <fieldset>
+      <legend>The two variables under test</legend>
+      <label><input type="checkbox" id="toggle-address-mode" checked> addressMode: 'repeat'</label>
+      <p class="hint">Off = Pixi's real default (clamp-to-edge). If the stretched-band bug is what we think it is, turning this OFF alone should reproduce it.</p>
+      <label><input type="checkbox" id="toggle-scale-mode" checked> scaleMode: 'nearest'</label>
+      <p class="hint">Off = Pixi's real default (linear). Affects edge sharpness only, not tiling itself.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Other pieces from the real dome</legend>
+      <label><input type="checkbox" id="toggle-mask" checked> Circle clip mask</label>
+      <label><input type="checkbox" id="toggle-scroll"> Scroll animation (tilePosition)</label>
+      <label>
+        Scroll speed
+        <input type="range" id="scroll-speed" min="0.1" max="5" step="0.1" value="1">
+        <span class="row-value" id="scroll-speed-val">1.0</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Real-game container structure</legend>
+      <label><input type="checkbox" id="toggle-world-sim"> Simulate worldContainer (scale + large-world-coordinate pan)</label>
+      <p class="hint">The real dome lives inside a scaled/panned ancestor container that keeps the camera centered — this wraps the test object the same way and moves it out to world coordinates in the tens of thousands, instead of drawing directly at screen-center.</p>
+      <label>
+        Zoom
+        <input type="range" id="world-zoom" min="0.3" max="2" step="0.05" value="1">
+        <span class="row-value" id="world-zoom-val">1.00</span>
+      </label>
+      <label><input type="checkbox" id="toggle-reassign-size"> Reassign width/height after construction</label>
+      <p class="hint">My very first in-game fix used addressMode alone, still had this redundant reassignment left over from an earlier theory, and stayed broken. Never actually isolated whether this specific pattern mattered — testing it here closes that loop.</p>
+      <label><input type="checkbox" id="toggle-match-resolution"> Match real game's resolution/autoDensity</label>
+      <p class="hint">Confirmed directly in the real game's own init call: resolution: window.devicePixelRatio || 1, autoDensity: true — neither was ever set in this test harness before now, so it's been silently using resolution:1 regardless of your actual display. preference:'webgl' is also confirmed to match Pixi's own default, so the renderer backend itself was never the difference. This toggle fully re-initializes the Pixi application, since resolution/autoDensity can only be set at init time.</p>
+      <label><input type="checkbox" id="toggle-dome-geometry"> Match real dome's exact sprite/mask geometry</label>
+      <p class="hint">Genuinely new, not another guess: the real dome's hex sprite is HALF the mask's own height (domeRadiusY, not domeRadiusY*2), anchored (0.5, 1) so its bottom edge sits at the flat base line — a full-size mask over a half-size, bottom-anchored sprite. This test harness has always used a symmetric sprite matching a symmetric mask instead. The UV math should be self-consistent regardless of absolute size, in theory — but "in theory" hasn't been reliable evidence on this specific bug so far.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Tile geometry</legend>
+      <label>
+        Hex size
+        <input type="range" id="hex-size" min="15" max="100" step="1" value="40">
+        <span class="row-value" id="hex-size-val">40</span>
+      </label>
+      <label>
+        Circle radius
+        <input type="range" id="circle-radius" min="100" max="350" step="5" value="250">
+        <span class="row-value" id="circle-radius-val">250</span>
+      </label>
+    </fieldset>
+
+    <div id="status">Loading Pixi…</div>
+
+    <div id="tile-preview-wrap">
+      <p>Raw baked tile (native size, unscaled) — if this looks wrong, the bug is in baking, not tiling:</p>
+      <canvas id="tile-preview"></canvas>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8.19.0/dist/pixi.min.js"></script>
+<script>
+(async () => {
+  const statusEl = document.getElementById('status');
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  // ----------------------------------------------------------------
+  // Hex tile baking — same technique used throughout the real game
+  // (bakeHexGridTile/strokeHexagon in SkyDomePlanetoid.js), copied
+  // here deliberately rather than imported, so this test has zero
+  // dependency on the game's own bundle or file structure.
+  // ----------------------------------------------------------------
+  function strokeHexagon(ctx, cx, cy, size) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (Math.PI / 3) * i - Math.PI / 6; // pointy-top orientation
+      const x = cx + size * Math.cos(angle);
+      const y = cy + size * Math.sin(angle);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  function bakeHexGridTile(hexSize, opacity, lineWidth) {
+    const hexWidth = Math.sqrt(3) * hexSize;
+    const hexHeightStep = hexSize * 1.5;
+    const tileW = hexWidth;
+    const tileH = hexHeightStep * 2;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(tileW);
+    canvas.height = Math.ceil(tileH);
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = `rgba(255,255,255,${opacity})`;
+    ctx.lineWidth = lineWidth;
+
+    for (let row = -1; row <= 2; row++) {
+      const y = row * hexHeightStep;
+      const rowOffset = (row % 2 !== 0) ? hexWidth / 2 : 0;
+      for (let col = -1; col <= 2; col++) {
+        const x = col * hexWidth + rowOffset;
+        strokeHexagon(ctx, x, y, hexSize);
+      }
+    }
+
+    return { canvas, tileW, tileH };
+  }
+
+  // ----------------------------------------------------------------
+  // Pixi setup
+  // ----------------------------------------------------------------
+  const CANVAS_W = 800;
+  const CANVAS_H = 700;
+  const WORLD_FOCUS_X = 30000;
+  const WORLD_FOCUS_Y = 18000;
+
+  let app = null;
+  let worldContainer = null;
+  let container = null;
+  let currentSprite = null;
+  let currentMask = null;
+  let currentTexture = null;
+  let currentTileCanvas = null;
+
+  const els = {
+    addressMode: document.getElementById('toggle-address-mode'),
+    scaleMode: document.getElementById('toggle-scale-mode'),
+    mask: document.getElementById('toggle-mask'),
+    scroll: document.getElementById('toggle-scroll'),
+    scrollSpeed: document.getElementById('scroll-speed'),
+    scrollSpeedVal: document.getElementById('scroll-speed-val'),
+    hexSize: document.getElementById('hex-size'),
+    hexSizeVal: document.getElementById('hex-size-val'),
+    circleRadius: document.getElementById('circle-radius'),
+    circleRadiusVal: document.getElementById('circle-radius-val'),
+    tilePreview: document.getElementById('tile-preview'),
+    worldSim: document.getElementById('toggle-world-sim'),
+    worldZoom: document.getElementById('world-zoom'),
+    worldZoomVal: document.getElementById('world-zoom-val'),
+    reassignSize: document.getElementById('toggle-reassign-size'),
+    matchResolution: document.getElementById('toggle-match-resolution'),
+    domeGeometry: document.getElementById('toggle-dome-geometry')
+  };
+
+  // Rebuilds the whole PIXI.Application from scratch — needed
+  // specifically for the resolution/autoDensity toggle below, since
+  // those are init-time options on Application.init() itself, not
+  // properties that can be changed on a live app the way everything
+  // else in this test can. Everything else in the app (worldContainer,
+  // container, the ticker) gets recreated here too, since they'd
+  // otherwise be pointing at a destroyed app's stage.
+  async function setupApp() {
+    if (app) {
+      app.destroy(true, { children: true, texture: true, textureSource: true });
+      document.getElementById('canvas-container').innerHTML = '';
+    }
+
+    // Confirmed directly against the real game's own initPixiStage()
+    // call: resolution and autoDensity are explicitly set there
+    // (resolution: window.devicePixelRatio || 1, autoDensity: true),
+    // and were never set at all in this test harness before now —
+    // meaning this harness was silently defaulting to resolution:1
+    // regardless of the actual display, while the real game explicitly
+    // matches devicePixelRatio (often 2 or higher on modern high-DPI
+    // displays). preference:'webgl' is also confirmed to match — it's
+    // both the real game's explicit setting and Pixi's own default —
+    // so the renderer backend itself was never actually the
+    // difference.
+    const matchReal = els.matchResolution.checked;
+
+    app = new PIXI.Application();
+    await app.init({
+      width: CANVAS_W,
+      height: CANVAS_H,
+      backgroundColor: 0x0a0a1a,
+      antialias: true,
+      preference: 'webgl',
+      ...(matchReal ? {
+        resolution: window.devicePixelRatio || 1,
+        autoDensity: true
+      } : {})
+    });
+    document.getElementById('canvas-container').appendChild(app.canvas);
+
+    // Simulates the real game's worldContainer — the ancestor
+    // container that carries the camera's own scale (zoom) and pan
+    // (following the player through a world up to 60,000 units in
+    // each dimension). In the real dome, the hex TilingSprite sits
+    // several containers deep beneath this exact kind of transform.
+    worldContainer = new PIXI.Container();
+    app.stage.addChild(worldContainer);
+
+    container = new PIXI.Container();
+    worldContainer.addChild(container);
+
+    app.ticker.add(() => {
+      if (els.scroll.checked && currentSprite) {
+        currentSprite.tilePosition.x -= parseFloat(els.scrollSpeed.value);
+      }
+    });
+
+    rebuild();
+  }
+
+  function rebuild() {
+    container.removeChildren();
+    if (currentSprite) { currentSprite.destroy(); currentSprite = null; }
+    if (currentMask) { currentMask.destroy(); currentMask = null; }
+    if (currentTexture) { currentTexture.destroy(true); currentTexture = null; }
+
+    const hexSize = parseFloat(els.hexSize.value);
+    const circleRadius = parseFloat(els.circleRadius.value);
+    els.hexSizeVal.textContent = hexSize;
+    els.circleRadiusVal.textContent = circleRadius;
+
+    const { canvas: tileCanvas, tileW, tileH } = bakeHexGridTile(hexSize, 0.6, 1.5);
+    currentTileCanvas = tileCanvas;
+
+    // Raw tile preview, drawn directly to a plain <canvas> — completely
+    // bypasses Pixi, so this is a pure sanity check on the bake itself.
+    const previewCanvas = els.tilePreview;
+    previewCanvas.width = tileCanvas.width;
+    previewCanvas.height = tileCanvas.height;
+    const pctx = previewCanvas.getContext('2d');
+    pctx.fillStyle = '#05050f';
+    pctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+    pctx.drawImage(tileCanvas, 0, 0);
+
+    const texture = PIXI.Texture.from(tileCanvas);
+    if (els.addressMode.checked) {
+      texture.source.addressMode = 'repeat';
+    }
+    if (els.scaleMode.checked) {
+      texture.source.scaleMode = 'nearest';
+    }
+    currentTexture = texture;
+
+    const useDomeGeometry = els.domeGeometry.checked;
+
+    const sprite = new PIXI.TilingSprite({
+      texture,
+      width: circleRadius * 2,
+      // Real dome: sprite.height = domeRadiusY (HALF the mask's own
+      // diameter), not domeRadiusY*2 — the sprite only ever needs to
+      // cover the upper half of the ellipse, bottom-anchored at the
+      // flat base line, since that's the only region that's ever
+      // "glass" rather than "metal base."
+      height: useDomeGeometry ? circleRadius : circleRadius * 2
+    });
+    // Optional, redundant re-set — matches a pattern my very first
+    // in-game fix happened to have (addressMode alone, plus this left
+    // over from an earlier, different theory) and which stayed broken.
+    // Never actually isolated on its own until now.
+    if (els.reassignSize.checked) {
+      sprite.width = circleRadius * 2;
+      sprite.height = useDomeGeometry ? circleRadius : circleRadius * 2;
+    }
+    // Real dome: anchor(0.5, 1) — horizontally centered, but the
+    // BOTTOM edge sits at the position point, not the sprite's own
+    // center. This test harness always used a plain, fully-centered
+    // (0.5, 0.5) anchor before now.
+    sprite.anchor.set(0.5, useDomeGeometry ? 1 : 0.5);
+    currentSprite = sprite;
+
+    const simulateWorld = els.worldSim.checked;
+    const zoomVal = parseFloat(els.worldZoom.value);
+    els.worldZoomVal.textContent = zoomVal.toFixed(2);
+
+    let placeX, placeY;
+    if (simulateWorld) {
+      // Places the test object at real, large world-space coordinates
+      // (matching the real dome, which can sit anywhere across a
+      // 60,000-unit world) rather than at small, origin-adjacent
+      // canvas coordinates — and wraps everything in a scaled/panned
+      // ancestor container, the same structural role worldContainer
+      // plays in the real game, panned so this same world point still
+      // lands at screen-center regardless of zoom.
+      placeX = WORLD_FOCUS_X;
+      placeY = WORLD_FOCUS_Y;
+      worldContainer.scale.set(zoomVal);
+      worldContainer.position.set(
+        CANVAS_W / 2 - WORLD_FOCUS_X * zoomVal,
+        CANVAS_H / 2 - WORLD_FOCUS_Y * zoomVal
+      );
+    } else {
+      placeX = CANVAS_W / 2;
+      placeY = CANVAS_H / 2;
+      worldContainer.scale.set(1);
+      worldContainer.position.set(0, 0);
+    }
+    sprite.position.set(placeX, placeY);
+
+    if (els.mask.checked) {
+      // Real dome: mask is a FULL circle/ellipse centered at local
+      // (0,0), positioned at the SAME point as the sprite — extending
+      // both above AND below that point. With useDomeGeometry on, the
+      // sprite (bottom-anchored, half-height) only ever covers the
+      // upper half of that range, so the lower half of the visible
+      // masked circle should show nothing at all — that mismatch
+      // between mask extent and sprite extent is the exact thing this
+      // toggle exists to test.
+      const mask = new PIXI.Graphics().circle(0, 0, circleRadius).fill(0xffffff);
+      mask.position.set(placeX, placeY);
+      sprite.mask = mask;
+      currentMask = mask;
+      container.addChild(sprite, mask);
+    } else {
+      container.addChild(sprite);
+    }
+
+    const expectedRepeats = ((circleRadius * 2) / tileW).toFixed(1);
+    setStatus(
+      `addressMode: ${els.addressMode.checked ? "'repeat'" : "'clamp-to-edge' (default)"}\n` +
+      `scaleMode: ${els.scaleMode.checked ? "'nearest'" : "'linear' (default)"}\n` +
+      `Redundant width/height reassignment: ${els.reassignSize.checked ? 'ON' : 'off'}\n` +
+      `Dome geometry (half-height sprite, anchor 0.5/1): ${useDomeGeometry ? 'ON' : 'off'}\n` +
+      `worldContainer sim: ${simulateWorld ? `ON (zoom ${zoomVal.toFixed(2)}x, world pos ${WORLD_FOCUS_X},${WORLD_FOCUS_Y})` : 'off'}\n` +
+      `Tile native size: ${Math.round(tileW)} x ${Math.round(tileH)}px\n` +
+      `Sprite display size: ${circleRadius * 2} x ${circleRadius * 2}px\n` +
+      `Expected repeats across width: ~${expectedRepeats}\n\n` +
+      `If tiling works, you should see roughly ${expectedRepeats} hexagons across, ` +
+      `not one smeared/stretched shape.`
+    );
+  }
+
+  [els.addressMode, els.scaleMode, els.mask, els.hexSize, els.circleRadius, els.worldSim, els.worldZoom, els.reassignSize, els.domeGeometry].forEach(el => {
+    el.addEventListener('input', rebuild);
+  });
+
+  // Separate from the list above — this one needs a full setupApp()
+  // re-init, not just rebuild(), since resolution/autoDensity can only
+  // be set at Application.init() time.
+  els.matchResolution.addEventListener('input', setupApp);
+
+  els.scrollSpeed.addEventListener('input', () => {
+    els.scrollSpeedVal.textContent = parseFloat(els.scrollSpeed.value).toFixed(1);
+  });
+
+  await setupApp();
+})();
+</script>
+</body>
+</html>

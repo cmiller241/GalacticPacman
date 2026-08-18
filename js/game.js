@@ -42,7 +42,7 @@ state.explosions = [];
 // Camera zoom (1 = default view; >1 zooms in, <1 zooms out). Held
 // continuously with +/- (see gameLoop).
 state.zoom = 1;
-const ZOOM_MIN = 0.5;
+const ZOOM_MIN = 0.1;
 const ZOOM_MAX = 2.5;
 // Exposed so Player.js's sprite cache can bake at high enough
 // resolution to stay crisp at the maximum zoom level, without ever

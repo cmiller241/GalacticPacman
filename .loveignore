@@ -1,0 +1,29 @@
+# Node / JavaScript
+node_modules/
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+dist/
+build/
+*.js
+*.ts
+*.tsx
+*.jsx
+index.html
+vite.config.*
+webpack.config.*
+esbuild*
+.parcel-cache/
+
+# Common junk
+.git/
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+
+# Optional – uncomment if you want to exclude them
+# README.md
+# .gitignore
