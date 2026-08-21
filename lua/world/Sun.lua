@@ -12,7 +12,7 @@ Sun.__index = Sun
 ----------------------------------------------------------------------
 -- TUNABLES
 ----------------------------------------------------------------------
-local RADIUS              = 480
+local RADIUS              = 800
 
 local PARTICLE_COUNT      = 50
 local PARTICLE_INTERVAL   = 0.005
@@ -22,7 +22,7 @@ local PARTICLE_SIZE_MIN   = 2.2
 local PARTICLE_SIZE_MAX   = 6.5
 local PARTICLE_SPEED      = 3.4
 
-local SUN_INTENSITY       = 2.0
+local SUN_INTENSITY       = 16.0
 
 -- Particle color over lifetime
 local PARTICLE_START_COLOR = {1.0, 0.95, 0.70}
@@ -33,7 +33,7 @@ local PARTICLE_START_ALPHA = 0.3
 local PARTICLE_END_ALPHA   = 0.0
 
 -- Pulse
-local PULSE_SPEED         = 1.1     -- how fast it breathes (higher = faster)
+local PULSE_SPEED         = 3    -- how fast it breathes (higher = faster)
 local PULSE_AMOUNT        = 0.045   -- how much the size changes (0.04 = ±4%)
 local PULSE_INTENSITY     = 0.12    -- how much the brightness pulses
 ----------------------------------------------------------------------

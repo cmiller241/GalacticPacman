@@ -6,6 +6,7 @@ local Vector2 = require("lua.vector2")
 local Planetoid = require("lua.world.Planetoid")
 local Player = require("lua.entities.Player")
 local Asteroid = require("lua.entities.Asteroid")
+local Coin = require("lua.entities.Coin")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
 local Starfield = require("lua.world.Starfield")
@@ -14,54 +15,25 @@ local PullBeam = require("lua.effects.PullBeam")
 local assetLoading = require("lua.setup.assetLoading")
 local inputHandlers = require("lua.setup.inputHandlers")
 local gamepadInput = require("lua.setup.gamepadInput")
-local Coin = require("lua.entities.Coin")
+local worldGen = require("lua.setup.worldGen")
+local MiniMap = require("lua.ui.MiniMap")
+local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 
 local collisionSystem
 
-local ZOOM_MIN = 0.1
+local ZOOM_MIN = 0.5
 local ZOOM_MAX = 2.5
 local ZOOM_STEP_PER_FRAME = 0.02
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
 
-local function spawnTestCoins()
-  state.coins = {}
-  for _, planet in ipairs(state.planetoids) do
-    local count = 4 + math.floor(math.random() * 4)  -- 4–7 coins per planet
-    for i = 1, count do
-      table.insert(state.coins, Coin.new(planet))
-    end
-  end
-end
-
-local function spawnTestPlanetoids()
-  state.planetoids = {
-    Planetoid.new(1500, 1500, 180, { 0.75, 0.78, 0.85, 1 }),
-    Planetoid.new(2600, 1100, 100, { 0.95, 0.45, 0.40, 1 }),
-    Planetoid.new(2400, 2200, 130, { 0.45, 0.85, 0.50, 1 }),
-    Planetoid.new(900,  2300,  90, { 0.95, 0.85, 0.40, 1 }),
-  }
-  for _, p in ipairs(state.planetoids) do
-    p:createRingCanvas()
-  end
-end
-
-local function spawnTestAsteroids()
-  state.asteroids = {}
-  for i = 1, 14 do
-    local r = 16 + math.random() * 38
-    local x = math.random() * state.sceneWidth
-    local y = math.random() * state.sceneHeight
-    table.insert(state.asteroids, Asteroid.new(x, y, r))
-  end
-end
-
 function love.load()
   love.window.setTitle("Asteroid Bob")
 
-  state.sceneWidth = 3500
-  state.sceneHeight = 3500
+  -- Full streamed world (20x20 cells of 3000 = 60000x60000)
+  worldGen.initWorldSize()
+
   state.zoom = 1
   state.zoomMax = ZOOM_MAX
   state.zoomMin = ZOOM_MIN
@@ -74,6 +46,8 @@ function love.load()
   state.score = 0
   state.level = 1
   state.fireballs = {}
+  state.cellCheckCounter = 0
+  state.minimap = MiniMap.new()
 
   assetLoading.loadAssets()
   inputHandlers.attachInputHandlers()
@@ -81,20 +55,43 @@ function love.load()
   collisionSystem = CollisionSystem.new()
   state.starfield = Starfield.new()
 
-  spawnTestPlanetoids()
-  spawnTestAsteroids()
-  spawnTestCoins()
+  -- Generate the starting 3x3 neighborhood around the center cell
+  worldGen.generateStartingNeighborhood()
 
-  state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 480)
+  -- Sun at the true center of the full world
+  state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 1920)
+
+  -- GravitySystem holds a reference to state.planetoids (mutated in place by worldGen)
   state.gravitySystem = GravitySystem.new(state.planetoids)
 
+  -- Near world center, slightly below the sun
+  local dome = SkyDomePlanetoid.new(
+    state.sceneWidth / 2,
+    state.sceneHeight / 2 + 2500,
+    {
+      halfWidth = 2000,
+      halfHeight = 32,
+      grassHeight = 32,
+      domeRadiusX = 2000,
+      domeRadiusY = 2000,
+    }
+  )
+  table.insert(state.planetoids, dome)
+  state.skyDomePlanet = dome   -- optional, matches JS naming
+
+  -- Put the player on a planet in the starting neighborhood
   local startPlanet = state.planetoids[1]
   local surfaceDist = startPlanet.radius + constants.PLAYER_RADIUS
   state.player = Player.new(startPlanet.pos.x, startPlanet.pos.y - surfaceDist)
   state.player.onSurface = true
   state.player.currentPlanet = startPlanet
   state.player.lastInfluencePlanet = startPlanet
-  state.player.angle = math.atan2(state.player.pos.y - startPlanet.pos.y, state.player.pos.x - startPlanet.pos.x)
+  state.player.angle = math.atan2(
+    state.player.pos.y - startPlanet.pos.y,
+    state.player.pos.x - startPlanet.pos.x
+  )
+
+
 end
 
 local function updatePlanetoidsPhysics()
@@ -103,10 +100,24 @@ local function updatePlanetoidsPhysics()
       p.vel.x, p.vel.y = 0, 0
     else
       p.pos:add(p.vel:clone():multiply(state.timeScale))
-      if p.pos.x - p.radius < 0 then p.pos.x = p.radius; p.vel.x = -p.vel.x end
-      if p.pos.x + p.radius > state.sceneWidth then p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x end
-      if p.pos.y - p.radius < 0 then p.pos.y = p.radius; p.vel.y = -p.vel.y end
-      if p.pos.y + p.radius > state.sceneHeight then p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y end
+
+      -- Only bounce at the absolute outer world edge (not the old 3500 box)
+      if p.pos.x - p.radius < 0 then
+        p.pos.x = p.radius
+        p.vel.x = -p.vel.x
+      end
+      if p.pos.x + p.radius > state.sceneWidth then
+        p.pos.x = state.sceneWidth - p.radius
+        p.vel.x = -p.vel.x
+      end
+      if p.pos.y - p.radius < 0 then
+        p.pos.y = p.radius
+        p.vel.y = -p.vel.y
+      end
+      if p.pos.y + p.radius > state.sceneHeight then
+        p.pos.y = state.sceneHeight - p.radius
+        p.vel.y = -p.vel.y
+      end
     end
   end
 end
@@ -154,7 +165,7 @@ function love.update(dt)
   collisionSystem:handlePlayerPlanetCollisions(state.player)
   collisionSystem:handleElasticCollisions(state.planetoids)
 
-  -- Asteroid collisions (matches JS flow)
+  -- Asteroid collisions
   if state.asteroids and #state.asteroids > 0 then
     collisionSystem:handlePlayerAsteroidCollisions(state.player, state.asteroids)
     collisionSystem:handleElasticCollisions(state.asteroids)
@@ -173,7 +184,7 @@ function love.update(dt)
     collisionSystem:handleCoinCollisions(state.player, state.coins)
   end
 
-    -- Fireballs
+  -- Fireballs
   if state.fireballs then
     for i = #state.fireballs, 1, -1 do
       local f = state.fireballs[i]
@@ -183,18 +194,15 @@ function love.update(dt)
       end
     end
 
-    -- Optional: collide with asteroids / planets
     if #state.fireballs > 0 and state.asteroids then
       local hitFireballs, toBreakAsteroids = collisionSystem:handleFireballCollisions(
         state.fireballs, state.planetoids, state.asteroids
       )
-      -- remove hit fireballs
       for i = #state.fireballs, 1, -1 do
         if hitFireballs[state.fireballs[i]] then
           table.remove(state.fireballs, i)
         end
       end
-      -- break asteroids
       if next(toBreakAsteroids) then
         for i = #state.asteroids, 1, -1 do
           if toBreakAsteroids[state.asteroids[i]] then
@@ -209,6 +217,14 @@ function love.update(dt)
     state.sun:update(dt)
   end
 
+  -- Cell streaming (generate nearby / cull distant)
+  state.cellCheckCounter = (state.cellCheckCounter or 0) + 1
+  if state.cellCheckCounter >= worldGen.CELL_CHECK_INTERVAL then
+    state.cellCheckCounter = 0
+    worldGen.updateActiveCells()
+  end
+
+  -- Zoom
   if state.keys['+'] or state.keys['='] then
     state.zoom = math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME)
     state.zoomTarget = nil
@@ -218,10 +234,14 @@ function love.update(dt)
     state.zoomTarget = nil
   end
 
+  -- Camera
   local zoom = state.zoom
   local visibleWidth = love.graphics.getWidth() / zoom
   local visibleHeight = love.graphics.getHeight() / zoom
-  local camera = { x = state.player.pos.x - visibleWidth / 2, y = state.player.pos.y - visibleHeight / 2 }
+  local camera = {
+    x = state.player.pos.x - visibleWidth / 2,
+    y = state.player.pos.y - visibleHeight / 2,
+  }
   local maxCameraX = state.sceneWidth - visibleWidth
   local maxCameraY = state.sceneHeight - visibleHeight
   camera.x = maxCameraX > 0 and math.min(math.max(camera.x, 0), maxCameraX) or maxCameraX / 2
@@ -229,6 +249,10 @@ function love.update(dt)
   state.camera = camera
   state.visibleWidth = visibleWidth
   state.visibleHeight = visibleHeight
+
+  if state.skyDomePlanet then
+    state.skyDomePlanet:updateHexFlashes(dt)
+  end
 end
 
 function love.draw()
@@ -237,6 +261,10 @@ function love.draw()
   love.graphics.push()
   love.graphics.scale(state.zoom, state.zoom)
   love.graphics.translate(-state.camera.x, -state.camera.y)
+
+  if state.skyDomePlanet then
+    state.skyDomePlanet:draw()
+  end
 
   if state.sun then
     state.sun:draw()
@@ -263,15 +291,32 @@ function love.draw()
       c:draw()
     end
   end
-  
+
   state.player:draw()
   PullBeam.draw()
 
+  if state.skyDomePlanet then
+    state.skyDomePlanet:drawForegroundGlass()
+  end
+
   love.graphics.pop()
+
+  if state.minimap then
+    state.minimap:draw()
+  end
+
+  -- HUD
+  local cell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
 
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.print(string.format("Level %d - Score: %d", state.level, state.score), 20, 20)
   love.graphics.print(string.format("FPS: %.1f", state.fps or 0), 20, 40)
   love.graphics.print(string.format("Zoom: %.1fx (+/-)", state.zoom), 20, 60)
-  love.graphics.print("Right-click a planet to pull toward it, Space to jump", 20, 90)
+  love.graphics.print(string.format("Cell: (%d, %d)", cell.col, cell.row), 20, 80)
+  love.graphics.print(string.format("Planetoids: %d  Coins: %d  Asteroids: %d",
+    #state.planetoids,
+    state.coins and #state.coins or 0,
+    state.asteroids and #state.asteroids or 0
+  ), 20, 100)
+  love.graphics.print("Right-click a planet to pull toward it, Space to jump", 20, 120)
 end
