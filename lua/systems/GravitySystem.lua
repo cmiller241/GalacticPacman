@@ -1,14 +1,14 @@
 -- lua/systems/GravitySystem.lua
 --
 -- Direct translation of js/systems/GravitySystem.js — pure physics
--- math, no rendering at all, so unlike Planetoid.lua (its sibling in
--- this same batch) this one is a straightforward, faithful port with
--- no architectural rework needed. Relies directly on vector2.lua's
--- own mutate/non-mutate distinction, confirmed correct by that file's
--- test suite back when it was written: dominant.pos:subtract(...) and
--- surface.normal:clone() must NOT mutate their operands, while
--- entity.vel:add(...) MUST mutate entity.vel in place — this file
--- gets both right for the same reason vector2.lua's own tests exist.
+-- math, no rendering. Dominant-planet selection + directional gravity.
+--
+-- SkyDome:
+--   - Range is isWithinGravityWindow only (NOT also ANDed with
+--     INFLUENCE_PADDING — that would silently cap gravity to ~200 units
+--     regardless of dome size).
+--   - Direction comes from nearestSurfacePoint → the grass deck, so
+--     gravity reads as traditional platform "down," not radial-to-center.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -23,10 +23,9 @@ function GravitySystem.new(planetoids)
   return self
 end
 
--- For rect planets, "distance" is measured to the nearest SURFACE
--- point (not the center) — same reasoning as the original's own
--- comment: gravity range/direction near a wide, non-circular shape
--- would feel wrong measured from the center instead.
+-- For rect / sky-dome planets, "distance" is measured to the nearest
+-- SURFACE point (not the center). For SkyDome that surface is the grass
+-- deck. Circle planets still use center distance vs influenceRadius.
 function GravitySystem:findDominantPlanet(pos)
   local closest = nil
   local minDist = math.huge
@@ -35,20 +34,27 @@ function GravitySystem:findDominantPlanet(pos)
     local dist, withinRange
 
     if planet.isRoundedRect then
-      dist = planet:distanceToSurface(pos.x, pos.y)
-      if planet.isSkyDome then
-        -- isWithinGravityWindow is a COMPLETE proximity test on its
-        -- own for this planet type — must NOT also be ANDed with the
-        -- generic distanceToSurface < INFLUENCE_PADDING check below.
-        -- Same reasoning, same bug this avoids, as the original's own
-        -- comment describes.
-        withinRange = planet:isWithinGravityWindow(pos.x, pos.y)
+      if planet.distanceToSurface then
+        dist = planet:distanceToSurface(pos.x, pos.y)
+      elseif planet.nearestSurfacePoint then
+        dist = planet:nearestSurfacePoint(pos.x, pos.y).distance
       else
-        withinRange = dist < constants.INFLUENCE_PADDING
+        dist = pos:subtract(planet.pos):length()
+      end
+
+      if planet.isSkyDome then
+        -- Complete proximity test on its own — do NOT also require
+        -- dist < INFLUENCE_PADDING (that would re-impose a ~200-unit
+        -- cap and break high jumps inside a wide dome).
+        withinRange = planet.isWithinGravityWindow
+          and planet:isWithinGravityWindow(pos.x, pos.y)
+          or false
+      else
+        withinRange = dist < (constants.INFLUENCE_PADDING or 200)
       end
     else
       dist = pos:subtract(planet.pos):length()
-      withinRange = dist < planet.influenceRadius
+      withinRange = dist < (planet.influenceRadius or (planet.radius + (constants.INFLUENCE_PADDING or 200)))
     end
 
     if withinRange and dist < minDist then
@@ -64,27 +70,36 @@ function GravitySystem:applyTo(entity)
   if entity.onSurface then return end
 
   local dominant = self:findDominantPlanet(entity.pos)
-  if dominant then
-    entity.lastInfluencePlanet = dominant
+  if not dominant then return end
 
-    local dir
-    if dominant.isRoundedRect then
-      local surface = dominant:nearestSurfacePoint(entity.pos.x, entity.pos.y)
-      if surface.distance > 1e-6 then
-        dir = Vector2.new(surface.point.x - entity.pos.x, surface.point.y - entity.pos.y):normalize()
-      else
-        dir = surface.normal:clone():multiply(-1)
-      end
+  entity.lastInfluencePlanet = dominant
+
+  local dir
+  if dominant.isRoundedRect and dominant.nearestSurfacePoint then
+    local surface = dominant:nearestSurfacePoint(entity.pos.x, entity.pos.y)
+    -- Toward the deck point while airborne; once nearly on it, use
+    -- "down" along the surface normal (SkyDome normal is (0,-1), so
+    -- -normal is (0,1) — traditional platform gravity).
+    if surface.distance > 1e-6 then
+      dir = Vector2.new(
+        surface.point.x - entity.pos.x,
+        surface.point.y - entity.pos.y
+      ):normalize()
     else
-      dir = dominant.pos:subtract(entity.pos):normalize()
+      dir = surface.normal:clone():multiply(-1)
     end
-
-    local grav = entity.GRAVITY_STRENGTH or constants.GRAVITY_STRENGTH
-    if entity.isGroundPounding then
-      grav = grav * (entity.GROUND_POUND_GRAV_MULTIPLIER or constants.GROUND_POUND_GRAV_MULTIPLIER)
-    end
-    entity.vel:add(dir:multiply(grav * state.timeScale))
+  else
+    dir = dominant.pos:subtract(entity.pos):normalize()
   end
+
+  local grav = entity.GRAVITY_STRENGTH or constants.GRAVITY_STRENGTH or 0.35
+  if entity.isGroundPounding then
+    grav = grav * (entity.GROUND_POUND_GRAV_MULTIPLIER
+      or constants.GROUND_POUND_GRAV_MULTIPLIER
+      or 3)
+  end
+
+  entity.vel:add(dir:multiply(grav * (state.timeScale or 1)))
 end
 
 return GravitySystem

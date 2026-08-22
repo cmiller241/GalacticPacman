@@ -1,6 +1,8 @@
 -- lua/systems/CollisionSystem.lua
 --
 -- Full port of js/systems/CollisionSystem.js.
+-- SkyDome landing uses the grass deck (nearestSurfacePoint) and does not
+-- require arcPositionForWorldPoint unless the planet actually provides it.
 
 local state = require("lua.state")
 local constants = require("lua.constants")
@@ -199,25 +201,52 @@ end
 
 function CollisionSystem:tryLandOnPlanet(player, planet)
   if planet.isRoundedRect then
-    if planet.isSkyDome and not planet:isWithinGravityWindow(player.pos.x, player.pos.y) then
-      return false
+    -- SkyDome: only land inside gravity window, while falling / neutral
+    if planet.isSkyDome then
+      if type(planet.isWithinGravityWindow) == "function"
+         and not planet:isWithinGravityWindow(player.pos.x, player.pos.y) then
+        return false
+      end
+      if player.vel.y < 0 then
+        return false
+      end
     end
-    if planet.isSkyDome and player.vel.y < 0 then
-      return false
-    end
+
     local surface = planet:nearestSurfacePoint(player.pos.x, player.pos.y)
     if surface.distance <= player.radius + constants.SURFACE_TOLERANCE then
+      -- For SkyDome, also require horizontally over the deck
+      if planet.isSkyDome then
+        local minX = planet.pos.x - planet.halfWidth
+        local maxX = planet.pos.x + planet.halfWidth
+        if player.pos.x < minX - player.radius or player.pos.x > maxX + player.radius then
+          return false
+        end
+      end
+
       player.pos = surface.point:clone():add(surface.normal:clone():multiply(player.radius))
       player.onSurface = true
       player.currentPlanet = planet
       player.lastInfluencePlanet = planet
-      player.surfaceArcPos = planet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+
+      -- arcPosition only if the planet implements it (full rounded-rect).
+      -- SkyDome may only expose a minimal stub or none at all.
+      if type(planet.arcPositionForWorldPoint) == "function" then
+        player.surfaceArcPos = planet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+      elseif planet.isSkyDome then
+        local minX = planet.pos.x - planet.halfWidth
+        player.surfaceArcPos = player.pos.x - minX
+      end
+
       local impactVel = player.vel:clone()
       player.vel = Vector2.new(0, 0)
+
       if player.isGroundPounding then
         player.isGroundPounding = false
-        local pushDir = surface.normal:clone():multiply(-1)
-        planet.vel:add(pushDir:multiply(impactVel:length() * constants.GROUND_POUND_PUSH_STRENGTH))
+        -- SkyDome is immovable — don't shove it
+        if not planet.isImmovable then
+          local pushDir = surface.normal:clone():multiply(-1)
+          planet.vel:add(pushDir:multiply(impactVel:length() * constants.GROUND_POUND_PUSH_STRENGTH))
+        end
       end
       return true
     end
@@ -238,8 +267,10 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
     player.angle = math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x)
     if player.isGroundPounding then
       player.isGroundPounding = false
-      local pushDir = normal:multiply(-1)
-      planet.vel:add(pushDir:multiply(impactVel:length() * constants.GROUND_POUND_PUSH_STRENGTH))
+      if not planet.isImmovable then
+        local pushDir = normal:multiply(-1)
+        planet.vel:add(pushDir:multiply(impactVel:length() * constants.GROUND_POUND_PUSH_STRENGTH))
+      end
     end
     return true
   end
