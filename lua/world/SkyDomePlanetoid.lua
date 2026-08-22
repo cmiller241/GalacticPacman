@@ -3,8 +3,11 @@
 -- Port of js/world/SkyDomePlanetoid.js
 -- Upper-half glass dome (radial shader + specular highlight),
 -- lower-half metal base, flat grass platform, scrolling hex grids.
--- Foreground hexes are larger, bulged, and host subtle force-field flashes
--- snapped to the SAME scrolled FG lattice as the outlines.
+-- Foreground hexes are larger, bulged, and host subtle force-field flashes.
+--
+-- Physics: isRoundedRect + isSkyDome. Landing / walking / gravity use the
+-- grass deck (trueSurfaceY). Pull targets should aim at the deck, not the
+-- ellipse center. Dome shell is visual + shield only.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -193,15 +196,18 @@ function SkyDomePlanetoid.new(x, y, options)
   self.grassHeight = grassHeight
   self.cornerRadius = options.cornerRadius or 0
   self.color = options.color or { 0.36, 0.54, 0.29, 1 }
-  self.radius = halfWidth
+
+  -- Bounding radius for generic systems; true surface uses nearestSurfacePoint
+  self.radius = math.sqrt(halfWidth * halfWidth + (halfHeight + grassHeight) * (halfHeight + grassHeight))
 
   self.rotationAngle = 0
   self.rotationSpeed = 0
 
-  self.isImmovable  = true
-  self.isPermanent  = true
-  self.isSkyDome    = true
-  self.noSunShading = true
+  self.isImmovable   = true
+  self.isPermanent   = true
+  self.isSkyDome     = true
+  self.isRoundedRect = true   -- required for Player.move / GravitySystem branches
+  self.noSunShading  = true
 
   self.domeRadiusX = options.domeRadiusX or halfWidth
   self.domeRadiusY = options.domeRadiusY or halfWidth
@@ -255,8 +261,6 @@ function SkyDomePlanetoid.new(x, y, options)
   self.hexGridTileW, self.hexGridTileH = 0, 0
   self.hexGridForegroundTileW, self.hexGridForegroundTileH = 0, 0
   self.fgHexLayer = nil
-
-  -- Exact lattice periods (NOT ceil) so flashes and outlines share one grid
   self.fgHexWidth = 0
   self.fgHexHeightStep = 0
 
@@ -269,7 +273,7 @@ function SkyDomePlanetoid.new(x, y, options)
 end
 
 ----------------------------------------------------------------------
--- Geometry
+-- Geometry / physics (deck is the real surface)
 ----------------------------------------------------------------------
 
 function SkyDomePlanetoid:trueSurfaceY()
@@ -280,11 +284,46 @@ function SkyDomePlanetoid:domeAnchorY()
   return self:trueSurfaceY() + self.grassHeight
 end
 
+-- Pull / beam anchor: center of the grass deck
+function SkyDomePlanetoid:getPullAnchor()
+  return self.pos.x, self:trueSurfaceY()
+end
+
 function SkyDomePlanetoid:isWithinGravityWindow(worldX, worldY)
   if worldY > self:trueSurfaceY() then return false end
   local nx = (worldX - self.pos.x) / self.domeRadiusX
   local ny = (worldY - self:domeAnchorY()) / self.domeRadiusY
   return (nx * nx + ny * ny) <= 1
+end
+
+-- Flat grass deck (what the player lands/walks on)
+function SkyDomePlanetoid:nearestSurfacePoint(worldX, worldY)
+  local topY = self:trueSurfaceY()
+  local minX = self.pos.x - self.halfWidth
+  local maxX = self.pos.x + self.halfWidth
+  local clampedX = math.max(minX, math.min(maxX, worldX))
+  return {
+    point = Vector2.new(clampedX, topY),
+    normal = Vector2.new(0, -1), -- outward = up
+    distance = math.abs(worldY - topY),
+  }
+end
+
+function SkyDomePlanetoid:distanceToSurface(worldX, worldY)
+  return self:nearestSurfacePoint(worldX, worldY).distance
+end
+
+-- Right-click / pull target selection
+function SkyDomePlanetoid:containsPoint(worldX, worldY)
+  if self:isWithinGravityWindow(worldX, worldY) then
+    return true
+  end
+  local topY = self:trueSurfaceY()
+  local minX = self.pos.x - self.halfWidth
+  local maxX = self.pos.x + self.halfWidth
+  return worldX >= minX and worldX <= maxX
+     and worldY >= topY - 4
+     and worldY <= topY + self.grassHeight + 8
 end
 
 function SkyDomePlanetoid:nearestEllipseSurfacePoint(centerX, centerY, radiusX, radiusY, worldX, worldY, fallbackDirY)
@@ -332,15 +371,37 @@ function SkyDomePlanetoid:nearestBaseSurfacePoint(worldX, worldY)
   )
 end
 
-function SkyDomePlanetoid:nearestSurfacePoint(worldX, worldY)
-  local topY = self:trueSurfaceY()
+-- Minimal arc API so CollisionSystem landing / walk helpers don't crash.
+-- SkyDome walking does not use arc length (Player.move pins X/Y on the
+-- grass), but tryLandOnPlanet still queries these on isRoundedRect.
+
+function SkyDomePlanetoid:getPerimeter()
+  -- Top grass edge only (what landing cares about)
+  return self.halfWidth * 2
+end
+
+function SkyDomePlanetoid:arcPositionForWorldPoint(worldX, worldY)
   local minX = self.pos.x - self.halfWidth
   local maxX = self.pos.x + self.halfWidth
-  local clampedX = math.max(minX, math.min(maxX, worldX))
+  local x = math.max(minX, math.min(maxX, worldX))
+  return x - minX  -- 0 .. perimeter along the top edge
+end
+
+function SkyDomePlanetoid:worldPointAtArcPosition(s, pushDistance)
+  pushDistance = pushDistance or 0
+  local perimeter = self:getPerimeter()
+  if perimeter <= 0 then
+    return {
+      point = Vector2.new(self.pos.x, self:trueSurfaceY() - pushDistance),
+      normal = Vector2.new(0, -1),
+    }
+  end
+  s = ((s % perimeter) + perimeter) % perimeter
+  local x = (self.pos.x - self.halfWidth) + s
+  local y = self:trueSurfaceY() - pushDistance
   return {
-    point = Vector2.new(clampedX, topY),
+    point = Vector2.new(x, y),
     normal = Vector2.new(0, -1),
-    distance = math.abs(worldY - topY),
   }
 end
 
@@ -371,7 +432,7 @@ function SkyDomePlanetoid:triggerShieldImpact(worldX, worldY, intensity)
 end
 
 ----------------------------------------------------------------------
--- FG lattice (shared by outlines + flashes)
+-- FG lattice / flashes
 ----------------------------------------------------------------------
 
 function SkyDomePlanetoid:fgHexMetrics()
@@ -399,10 +460,6 @@ local function fgLatticePos(col, row, scroll, hexWidth, hexHeightStep)
   return x, y
 end
 
-----------------------------------------------------------------------
--- Flashes
-----------------------------------------------------------------------
-
 function SkyDomePlanetoid:updateHexFlashes(dt)
   self.hexFlashTimer = self.hexFlashTimer - dt
   if self.hexFlashTimer <= 0 then
@@ -419,7 +476,7 @@ function SkyDomePlanetoid:updateHexFlashes(dt)
       local ang = math.pi + math.random() * math.pi
       local rad = math.sqrt(math.random()) * 0.85
       local canvasX = rx + math.cos(ang) * rx * rad
-      local canvasY = ch + math.sin(ang) * ry * rad -- upper half: sin <= 0
+      local canvasY = ch + math.sin(ang) * ry * rad
 
       local row = math.floor(canvasY / hexHeightStep + 0.5)
       local rowOffset = (row % 2 ~= 0) and (hexWidth * 0.5) or 0
@@ -427,7 +484,6 @@ function SkyDomePlanetoid:updateHexFlashes(dt)
 
       local cellX, cellY = fgLatticePos(col, row, scroll, hexWidth, hexHeightStep)
 
-      -- Very permissive on-canvas check (visibility first)
       if cellY >= -hexHeightStep and cellY <= ch + hexHeightStep
          and cellX >= -hexWidth and cellX <= cw + hexWidth then
         table.insert(self.hexFlashes, {
@@ -455,7 +511,6 @@ end
 function SkyDomePlanetoid:bakeHexGridTile(hexSize, opacity, lineWidth)
   local hexWidth = math.sqrt(3) * hexSize
   local hexHeightStep = hexSize * 1.5
-  -- Canvas needs integer pixels, but lattice period stays exact hexWidth/hexHeightStep
   local tileW = math.max(1, math.ceil(hexWidth))
   local tileH = math.max(1, math.ceil(hexHeightStep * 2))
 
@@ -472,7 +527,7 @@ function SkyDomePlanetoid:bakeHexGridTile(hexSize, opacity, lineWidth)
 
   for row = -1, 2 do
     local y = row * hexHeightStep
-    local rowOffset = (row % 2 ~= 0) and (hexWidth * 0.5) or 0
+    local rowOffset = (row % 2 ~= 0) and (hexWidth / 2) or 0
     for col = -1, 2 do
       local x = col * hexWidth + rowOffset
       strokeHexagon(x, y, hexSize)
@@ -521,7 +576,6 @@ function SkyDomePlanetoid:rebuildForegroundHexLayer()
   love.graphics.setCanvas(self.fgHexLayer)
   love.graphics.clear(0, 0, 0, 0)
 
-  -- Step by EXACT lattice periods (same as flash math)
   love.graphics.setColor(1, 1, 1, 1)
   for y = -hexHeightStep * 2, ch + hexHeightStep * 2, hexHeightStep * 2 do
     for x = -scroll - hexWidth, cw + hexWidth, hexWidth do

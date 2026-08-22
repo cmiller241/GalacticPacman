@@ -5,9 +5,10 @@
 --   - Full-body astronaut rig (body, head, arms, boots)
 --   - Planet-surface orientation + walk cycle
 --   - Basic left-arm aim toward mouse / pull target
+--   - SkyDome pull/aim/walk toward grass deck (trueSurfaceY)
 --
 -- Not yet ported (deliberately): maze/platform modes, death/teleport
--- animations, Pixi path, fireballs, invincibility flicker, etc.
+-- animations, Pixi path, invincibility flicker, etc.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -86,16 +87,54 @@ function Player.new(x, y)
 end
 
 ------------------------------------------------------------------
+-- Pull anchor (SkyDome → grass deck; others → center)
+------------------------------------------------------------------
+
+function Player:getPullAnchor(target)
+  if not target then
+    return self.pos.x, self.pos.y
+  end
+  if target.isSkyDome then
+    if target.getPullAnchor then
+      return target:getPullAnchor()
+    end
+    if target.trueSurfaceY then
+      return target.pos.x, target:trueSurfaceY()
+    end
+  end
+  return target.pos.x, target.pos.y
+end
+
+------------------------------------------------------------------
 -- Physics / movement
 ------------------------------------------------------------------
 
 function Player:applyGravity()
   if self.onSurface then return end
-  local planet = state.gravitySystem:findDominantPlanet(self.pos)
+  -- Prefer shared GravitySystem (handles SkyDome deck gravity correctly)
+  if state.gravitySystem then
+    state.gravitySystem:applyTo(self)
+    return
+  end
+
+  local planet = nil
+  if state.gravitySystem and state.gravitySystem.findDominantPlanet then
+    planet = state.gravitySystem:findDominantPlanet(self.pos)
+  end
   if not planet and self.lastInfluencePlanet then planet = self.lastInfluencePlanet end
   if planet then
     self.lastInfluencePlanet = planet
-    local direction = planet.pos:subtract(self.pos):normalize()
+    local direction
+    if planet.isRoundedRect and planet.nearestSurfacePoint then
+      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
+      if surface.distance > 1e-6 then
+        direction = Vector2.new(surface.point.x - self.pos.x, surface.point.y - self.pos.y):normalize()
+      else
+        direction = surface.normal:clone():multiply(-1)
+      end
+    else
+      direction = planet.pos:subtract(self.pos):normalize()
+    end
     local grav = constants.GRAVITY_STRENGTH
     if self.isGroundPounding then grav = grav * constants.GROUND_POUND_GRAV_MULTIPLIER end
     self.vel:add(direction:multiply(grav))
@@ -136,9 +175,19 @@ end
 
 function Player:tryGroundPound()
   if self.isGroundPounding then return end
-  local planet = state.gravitySystem:findDominantPlanet(self.pos) or self.lastInfluencePlanet
+  local planet = nil
+  if state.gravitySystem then
+    planet = state.gravitySystem:findDominantPlanet(self.pos)
+  end
+  planet = planet or self.lastInfluencePlanet
   if planet then
-    local outwardDir = self.pos:subtract(planet.pos):normalize()
+    local outwardDir
+    if planet.isRoundedRect and planet.nearestSurfacePoint then
+      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
+      outwardDir = surface.normal
+    else
+      outwardDir = self.pos:subtract(planet.pos):normalize()
+    end
     local radialVel = self.vel:dot(outwardDir)
     if radialVel > 0 then self.isGroundPounding = true end
   end
@@ -164,7 +213,7 @@ function Player:move(keys)
     if keys["ArrowRight"] then ds = speed; self.facingDirection = 1; self.isWalking = true end
 
     if planet.isSkyDome then
-      local coreHalfWidth = planet.halfWidth - planet.cornerRadius
+      local coreHalfWidth = planet.halfWidth - (planet.cornerRadius or 0)
       local minX = planet.pos.x - coreHalfWidth
       local maxX = planet.pos.x + coreHalfWidth
       local desiredX = self.pos.x + ds
@@ -174,7 +223,7 @@ function Player:move(keys)
         self.currentPlanet = nil
         self.vel = Vector2.new(ds * self.edgeFallCarryFraction, 0)
       else
-        local topY = planet.pos.y - planet.halfHeight
+        local topY = planet.trueSurfaceY and planet:trueSurfaceY() or (planet.pos.y - planet.halfHeight)
         self.pos = Vector2.new(desiredX, topY - self.radius)
       end
     else
@@ -326,8 +375,7 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
     targetWorldX = self.lockedTarget.pos.x
     targetWorldY = self.lockedTarget.pos.y
   elseif self.pullTarget then
-    targetWorldX = self.pullTarget.pos.x
-    targetWorldY = self.pullTarget.pos.y
+    targetWorldX, targetWorldY = self:getPullAnchor(self.pullTarget)
   elseif state.gamepadAimActive then
     targetWorldX = shoulderX + (state.gamepadAimX or 0) * 1000
     targetWorldY = shoulderY + (state.gamepadAimY or 0) * 1000
@@ -429,7 +477,6 @@ function Player:drawFullBody(orientation, originPos)
     rightArmFlipped = true
   end
 
-  -- Draw order matches JS: left boot, left arm, body, right boot, right arm, head
   self:drawLimb(images.leftboot, cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO)
   self:drawLimb(images.leftarm, cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO)
 
@@ -518,11 +565,20 @@ function Player:trySelectPullTarget(explicitTarget)
     local bestDistSq = math.huge
     for _, planet in ipairs(state.planetoids) do
       if not planet.isPullExempt then
-        local dx = worldX - planet.pos.x
-        local dy = worldY - planet.pos.y
-        local hit = (dx * dx + dy * dy) <= planet.radius * planet.radius
+        local hit = false
+        if planet.containsPoint then
+          hit = planet:containsPoint(worldX, worldY)
+        else
+          local dx = worldX - planet.pos.x
+          local dy = worldY - planet.pos.y
+          hit = (dx * dx + dy * dy) <= (planet.radius or 0) * (planet.radius or 0)
+        end
+
         if hit then
-          local distSq = dx * dx + dy * dy
+          local ax, ay = self:getPullAnchor(planet)
+          local adx = worldX - ax
+          local ady = worldY - ay
+          local distSq = adx * adx + ady * ady
           if distSq < bestDistSq then
             bestDistSq = distSq
             best = planet
@@ -561,8 +617,9 @@ function Player:applyPullForce()
     return
   end
 
-  local dx = self.pullTarget.pos.x - self.pos.x
-  local dy = self.pullTarget.pos.y - self.pos.y
+  local tx, ty = self:getPullAnchor(self.pullTarget)
+  local dx = tx - self.pos.x
+  local dy = ty - self.pos.y
   local dist = math.sqrt(dx * dx + dy * dy)
   if dist < 1e-6 then return end
 
@@ -589,11 +646,10 @@ function Player:shootFireball()
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0
-  self.fireCooldown = self.fireCooldown or 0.15   -- seconds
+  self.fireCooldown = self.fireCooldown or 0.15
   if now - self.lastShotTime < self.fireCooldown then return end
   self.lastShotTime = now
 
-  -- Prefer the aim angle computed during the last draw
   local angle = self.aimWorldAngle or 0
   if self.blasterAngleOffset then
     angle = angle + self.blasterAngleOffset
