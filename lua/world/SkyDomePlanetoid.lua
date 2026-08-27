@@ -69,11 +69,77 @@ local function setGlassUniforms(self, cx, cy)
 end
 
 ----------------------------------------------------------------------
+-- Metal base shader: #6A6A70 at the deck, fade to dark at the keel
+----------------------------------------------------------------------
+
+local metalShader = nil
+
+local function getMetalShader()
+  if metalShader then return metalShader end
+
+  metalShader = love.graphics.newShader([[
+    extern vec2 center;
+    extern vec2 radii;
+    extern vec4 colorTop;
+    extern vec4 colorBottom;
+    extern vec4 colorHighlight;
+
+    vec4 effect(vec4 color, Image tex, vec2 texture_coords, vec2 screen_coords) {
+      vec2 p = (screen_coords - center) / radii;
+      float d = length(p);
+      if (d > 1.0 || p.y < -0.02) return vec4(0.0);
+
+      // 0 at the deck line, 1 at the bottom of the hull
+      float depth = clamp(p.y, 0.0, 1.0);
+      float t = smoothstep(0.0, 1.0, depth);
+      t = t * t * (3.0 - 2.0 * t);
+
+      vec4 outColor = mix(colorTop, colorBottom, t);
+
+      // Soft rim / bevel near the ellipse edge
+      float rim = smoothstep(0.72, 1.0, d);
+      outColor.rgb = mix(outColor.rgb, colorBottom.rgb * 0.55, rim * 0.65);
+
+      // Cool highlight band just under the deck
+      float band = 1.0 - smoothstep(0.0, 0.22, depth);
+      outColor.rgb = mix(outColor.rgb, colorHighlight.rgb, band * 0.22);
+
+      outColor.a = 1.0;
+      return outColor;
+    }
+  ]])
+
+  return metalShader
+end
+
+local function setMetalUniforms(self, cx, cy, rx, ry)
+  local shader = getMetalShader()
+  local zoom = state.zoom or 1
+  local cam = state.camera or { x = 0, y = 0 }
+
+  shader:send("center", { (cx - cam.x) * zoom, (cy - cam.y) * zoom })
+  shader:send("radii", { rx * zoom, ry * zoom })
+  -- #6A6A70
+  shader:send("colorTop", { 106/255, 106/255, 112/255, 1 })
+  shader:send("colorBottom", { 0.07, 0.07, 0.08, 1 })
+  shader:send("colorHighlight", { 180/255, 184/255, 196/255, 1 })
+end
+
+----------------------------------------------------------------------
 -- Foreground bulge shader
 ----------------------------------------------------------------------
 
 local bulgeShader = nil
 
+-- Warps in FIXED box-pixel space (independent of scroll — center/radii
+-- always describe the same physical spot on the dome), then converts
+-- the warped position into the small repeating tile's own UV space and
+-- adds the scroll offset there, as the very last step before sampling.
+-- tex is expected to have wrap="repeat": warpedUV routinely exceeds
+-- [0,1] (the whole point — that's what makes one small baked tile
+-- cover the dome's full box without ever re-rendering it), and the GPU
+-- sampler tiles it automatically. See drawForegroundGlass's own
+-- comment for why this replaced a per-frame full-canvas rebuild.
 local function getBulgeShader()
   if bulgeShader then return bulgeShader end
 
@@ -82,10 +148,11 @@ local function getBulgeShader()
     extern vec2 radii;
     extern number strength;
     extern number radius;
-    extern vec2 texSize;
+    extern vec2 tileSize;
+    extern number scroll;
 
     vec4 effect(vec4 color, Image tex, vec2 texture_coords, vec2 screen_coords) {
-      vec2 pixel = texture_coords * texSize;
+      vec2 pixel = texture_coords * tileSize;
       vec2 p = (pixel - center) / radii;
       float d = length(p);
 
@@ -96,15 +163,12 @@ local function getBulgeShader()
       }
 
       vec2 warpedPixel = center + p * radii;
-      vec2 warpedUV = warpedPixel / texSize;
 
-      if (warpedUV.x < 0.0 || warpedUV.x > 1.0 || warpedUV.y < 0.0 || warpedUV.y > 1.0) {
-        return vec4(0.0);
-      }
       if (length((warpedPixel - center) / radii) > 1.02) {
         return vec4(0.0);
       }
 
+      vec2 warpedUV = (warpedPixel + vec2(scroll, 0.0)) / tileSize;
       return Texel(tex, warpedUV) * color;
     }
   ]])
@@ -157,16 +221,6 @@ local function closedHalf(cx, cy, rx, ry, upper, segments)
   return pts
 end
 
-local function fillHexagon(cx, cy, size)
-  local pts = {}
-  for i = 0, 5 do
-    local angle = (math.pi / 3) * i - math.pi / 6
-    pts[#pts + 1] = cx + size * math.cos(angle)
-    pts[#pts + 1] = cy + size * math.sin(angle)
-  end
-  love.graphics.polygon("fill", pts)
-end
-
 local function strokeHexagon(cx, cy, size)
   local pts = {}
   for i = 0, 5 do
@@ -175,6 +229,24 @@ local function strokeHexagon(cx, cy, size)
     pts[#pts + 1] = cy + size * math.sin(angle)
   end
   love.graphics.polygon("line", pts)
+end
+
+-- Quadratic bezier seam: deck → bowed toward center → keel (not all the way in)
+local function curvedSeamPoints(cx, cy, rx, ry, startX, endX, segments)
+  segments = segments or 18
+  -- Bow AWAY from center mid-hull, then ease in at the keel
+  local ctrlX = startX + (startX - cx) * 0.05
+  local ctrlY = cy + ry * 0.48
+  local pts = {}
+  for i = 0, segments do
+    local s = i / segments
+    local omt = 1 - s
+    local x = omt * omt * startX + 2 * omt * s * ctrlX + s * s * endX
+    local y = omt * omt * cy + 2 * omt * s * ctrlY + s * s * (cy + ry)
+    pts[#pts + 1] = x
+    pts[#pts + 1] = y
+  end
+  return pts
 end
 
 ----------------------------------------------------------------------
@@ -197,7 +269,6 @@ function SkyDomePlanetoid.new(x, y, options)
   self.cornerRadius = options.cornerRadius or 0
   self.color = options.color or { 0.36, 0.54, 0.29, 1 }
 
-  -- Bounding radius for generic systems; true surface uses nearestSurfacePoint
   self.radius = math.sqrt(halfWidth * halfWidth + (halfHeight + grassHeight) * (halfHeight + grassHeight))
 
   self.rotationAngle = 0
@@ -206,7 +277,7 @@ function SkyDomePlanetoid.new(x, y, options)
   self.isImmovable   = true
   self.isPermanent   = true
   self.isSkyDome     = true
-  self.isRoundedRect = true   -- required for Player.move / GravitySystem branches
+  self.isRoundedRect = true
   self.noSunShading  = true
 
   self.domeRadiusX = options.domeRadiusX or halfWidth
@@ -237,11 +308,11 @@ function SkyDomePlanetoid.new(x, y, options)
   self.domeHexScrollSpeed = options.domeHexScrollSpeed or 0.006
   self.domeHexLineWidth = options.domeHexLineWidth or 1
 
-  self.domeForegroundHexSize = options.domeForegroundHexSize or (self.domeHexSize * 1.85)
-  self.domeForegroundHexOpacity = options.domeForegroundHexOpacity or math.min(1, self.domeHexOpacity * 2.6)
+  self.domeForegroundHexSize = options.domeForegroundHexSize or (self.domeHexSize * 1.5)
+  self.domeForegroundHexOpacity = options.domeForegroundHexOpacity or math.min(1, self.domeHexOpacity * 4)
   self.domeForegroundHexScrollSpeed = options.domeForegroundHexScrollSpeed or -0.01
-  self.domeForegroundHexLineWidth = options.domeForegroundHexLineWidth or 1.5
-  self.domeForegroundTintOpacity = options.domeForegroundTintOpacity or 1.0
+  self.domeForegroundHexLineWidth = options.domeForegroundHexLineWidth or 2.5
+  self.domeForegroundTintOpacity = options.domeForegroundTintOpacity or 2.0
   self.domeForegroundOutlineOpacity = options.domeForegroundOutlineOpacity or 0.2
   self.domeForegroundZoomReference = options.domeForegroundZoomReference or 1.0
   self.domeForegroundZoomFloor = options.domeForegroundZoomFloor or 0
@@ -249,20 +320,11 @@ function SkyDomePlanetoid.new(x, y, options)
   self.domeBulgeStrength = options.domeBulgeStrength or 0.55
   self.domeBulgeRadius = options.domeBulgeRadius or 2.0
 
-  self.hexFlashes = {}
-  self.hexFlashTimer = 0
-  self.hexFlashInterval = options.hexFlashInterval or 0.35
-  self.hexFlashLife = options.hexFlashLife or 0.50
-  self.hexFlashAlpha = options.hexFlashAlpha or 0.18
-  self.hexFlashCount = options.hexFlashCount or 4
-
   self.hexGridCanvas = nil
   self.hexGridForegroundCanvas = nil
   self.hexGridTileW, self.hexGridTileH = 0, 0
   self.hexGridForegroundTileW, self.hexGridForegroundTileH = 0, 0
-  self.fgHexLayer = nil
-  self.fgHexWidth = 0
-  self.fgHexHeightStep = 0
+  self.fgQuad = nil
 
   self.lastImpactTime = 0
   self.shieldRipples = {}
@@ -273,7 +335,7 @@ function SkyDomePlanetoid.new(x, y, options)
 end
 
 ----------------------------------------------------------------------
--- Geometry / physics (deck is the real surface)
+-- Geometry / physics
 ----------------------------------------------------------------------
 
 function SkyDomePlanetoid:trueSurfaceY()
@@ -284,7 +346,6 @@ function SkyDomePlanetoid:domeAnchorY()
   return self:trueSurfaceY() + self.grassHeight
 end
 
--- Pull / beam anchor: center of the grass deck
 function SkyDomePlanetoid:getPullAnchor()
   return self.pos.x, self:trueSurfaceY()
 end
@@ -296,7 +357,6 @@ function SkyDomePlanetoid:isWithinGravityWindow(worldX, worldY)
   return (nx * nx + ny * ny) <= 1
 end
 
--- Flat grass deck (what the player lands/walks on)
 function SkyDomePlanetoid:nearestSurfacePoint(worldX, worldY)
   local topY = self:trueSurfaceY()
   local minX = self.pos.x - self.halfWidth
@@ -304,7 +364,7 @@ function SkyDomePlanetoid:nearestSurfacePoint(worldX, worldY)
   local clampedX = math.max(minX, math.min(maxX, worldX))
   return {
     point = Vector2.new(clampedX, topY),
-    normal = Vector2.new(0, -1), -- outward = up
+    normal = Vector2.new(0, -1),
     distance = math.abs(worldY - topY),
   }
 end
@@ -313,7 +373,6 @@ function SkyDomePlanetoid:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
 end
 
--- Right-click / pull target selection
 function SkyDomePlanetoid:containsPoint(worldX, worldY)
   if self:isWithinGravityWindow(worldX, worldY) then
     return true
@@ -371,12 +430,7 @@ function SkyDomePlanetoid:nearestBaseSurfacePoint(worldX, worldY)
   )
 end
 
--- Minimal arc API so CollisionSystem landing / walk helpers don't crash.
--- SkyDome walking does not use arc length (Player.move pins X/Y on the
--- grass), but tryLandOnPlanet still queries these on isRoundedRect.
-
 function SkyDomePlanetoid:getPerimeter()
-  -- Top grass edge only (what landing cares about)
   return self.halfWidth * 2
 end
 
@@ -384,7 +438,7 @@ function SkyDomePlanetoid:arcPositionForWorldPoint(worldX, worldY)
   local minX = self.pos.x - self.halfWidth
   local maxX = self.pos.x + self.halfWidth
   local x = math.max(minX, math.min(maxX, worldX))
-  return x - minX  -- 0 .. perimeter along the top edge
+  return x - minX
 end
 
 function SkyDomePlanetoid:worldPointAtArcPosition(s, pushDistance)
@@ -432,76 +486,18 @@ function SkyDomePlanetoid:triggerShieldImpact(worldX, worldY, intensity)
 end
 
 ----------------------------------------------------------------------
--- FG lattice / flashes
+-- FG lattice scroll
 ----------------------------------------------------------------------
 
-function SkyDomePlanetoid:fgHexMetrics()
-  local hexSize = self.domeForegroundHexSize
-  local hexWidth = self.fgHexWidth
-  local hexHeightStep = self.fgHexHeightStep
-  if hexWidth <= 0 or hexHeightStep <= 0 then
-    hexWidth = math.sqrt(3) * hexSize
-    hexHeightStep = hexSize * 1.5
-  end
-  return hexSize, hexWidth, hexHeightStep
-end
-
+-- Modded by the tile's own actual pixel width (not the fractional
+-- geometric hexWidth) — this now has to line up EXACTLY with the GPU's
+-- own repeat period (see getBulgeShader), where a mismatch would show
+-- as a slow drift/seam instead of a clean tile-to-tile wrap.
 function SkyDomePlanetoid:fgScroll()
-  local _, hexWidth = self:fgHexMetrics()
-  if hexWidth <= 0 then return 0 end
+  local tileW = self.hexGridForegroundTileW
+  if not tileW or tileW <= 0 then return 0 end
   local nowMs = love.timer.getTime() * 1000
-  return ((nowMs * self.domeForegroundHexScrollSpeed) % hexWidth + hexWidth) % hexWidth
-end
-
-local function fgLatticePos(col, row, scroll, hexWidth, hexHeightStep)
-  local rowOffset = (row % 2 ~= 0) and (hexWidth * 0.5) or 0
-  local x = -scroll + col * hexWidth + rowOffset
-  local y = row * hexHeightStep
-  return x, y
-end
-
-function SkyDomePlanetoid:updateHexFlashes(dt)
-  self.hexFlashTimer = self.hexFlashTimer - dt
-  if self.hexFlashTimer <= 0 then
-    self.hexFlashTimer = self.hexFlashInterval * (0.6 + math.random() * 0.8)
-
-    local hexSize, hexWidth, hexHeightStep = self:fgHexMetrics()
-    local scroll = self:fgScroll()
-    local rx = self.domeRadiusX
-    local ry = self.domeRadiusY
-    local cw = self.fgHexLayer and self.fgHexLayer:getWidth() or (rx * 2)
-    local ch = self.fgHexLayer and self.fgHexLayer:getHeight() or ry
-
-    for _ = 1, self.hexFlashCount do
-      local ang = math.pi + math.random() * math.pi
-      local rad = math.sqrt(math.random()) * 0.85
-      local canvasX = rx + math.cos(ang) * rx * rad
-      local canvasY = ch + math.sin(ang) * ry * rad
-
-      local row = math.floor(canvasY / hexHeightStep + 0.5)
-      local rowOffset = (row % 2 ~= 0) and (hexWidth * 0.5) or 0
-      local col = math.floor((canvasX - rowOffset + scroll) / hexWidth + 0.5)
-
-      local cellX, cellY = fgLatticePos(col, row, scroll, hexWidth, hexHeightStep)
-
-      if cellY >= -hexHeightStep and cellY <= ch + hexHeightStep
-         and cellX >= -hexWidth and cellX <= cw + hexWidth then
-        table.insert(self.hexFlashes, {
-          col = col,
-          row = row,
-          born = love.timer.getTime(),
-          life = self.hexFlashLife,
-        })
-      end
-    end
-  end
-
-  local now = love.timer.getTime()
-  for i = #self.hexFlashes, 1, -1 do
-    if now - self.hexFlashes[i].born > self.hexFlashes[i].life then
-      table.remove(self.hexFlashes, i)
-    end
-  end
+  return ((nowMs * self.domeForegroundHexScrollSpeed) % tileW + tileW) % tileW
 end
 
 ----------------------------------------------------------------------
@@ -546,8 +542,8 @@ function SkyDomePlanetoid:createOffscreen()
   self.hexGridCanvas, self.hexGridTileW, self.hexGridTileH =
     self:bakeHexGridTile(self.domeHexSize, self.domeHexOpacity, self.domeHexLineWidth)
 
-  local fwTile, fhTile, fgHexWidth, fgHexHeightStep
-  self.hexGridForegroundCanvas, fwTile, fhTile, fgHexWidth, fgHexHeightStep =
+  local fwTile, fhTile
+  self.hexGridForegroundCanvas, fwTile, fhTile =
     self:bakeHexGridTile(
       self.domeForegroundHexSize,
       self.domeForegroundHexOpacity,
@@ -555,53 +551,23 @@ function SkyDomePlanetoid:createOffscreen()
     )
   self.hexGridForegroundTileW = fwTile
   self.hexGridForegroundTileH = fhTile
-  self.fgHexWidth = fgHexWidth
-  self.fgHexHeightStep = fgHexHeightStep
 
-  local fw = math.max(2, math.ceil(self.domeRadiusX * 2))
-  local fh = math.max(2, math.ceil(self.domeRadiusY))
-  self.fgHexLayer = love.graphics.newCanvas(fw, fh)
-end
+  -- Lets the bulge shader (getBulgeShader) sample this one small baked
+  -- tile as an infinitely repeating texture instead of needing a
+  -- dome-sized canvas pre-tiled onto it every frame — see
+  -- drawForegroundGlass's own comment for the full reasoning.
+  self.hexGridForegroundCanvas:setWrap("repeat", "repeat")
 
-function SkyDomePlanetoid:rebuildForegroundHexLayer()
-  if not self.fgHexLayer or not self.hexGridForegroundCanvas then return end
-
-  local hexSize, hexWidth, hexHeightStep = self:fgHexMetrics()
-  local scroll = self:fgScroll()
-  local cw, ch = self.fgHexLayer:getDimensions()
-  local tile = self.hexGridForegroundCanvas
-
-  love.graphics.push()
-  love.graphics.origin()
-  love.graphics.setCanvas(self.fgHexLayer)
-  love.graphics.clear(0, 0, 0, 0)
-
-  love.graphics.setColor(1, 1, 1, 1)
-  for y = -hexHeightStep * 2, ch + hexHeightStep * 2, hexHeightStep * 2 do
-    for x = -scroll - hexWidth, cw + hexWidth, hexWidth do
-      love.graphics.draw(tile, x, y)
-    end
-  end
-
-  if #self.hexFlashes > 0 then
-    local now = love.timer.getTime()
-    love.graphics.setBlendMode("add")
-    for _, f in ipairs(self.hexFlashes) do
-      local t = (now - f.born) / f.life
-      if t < 1 then
-        local fade = 1 - t
-        local a = self.hexFlashAlpha * fade * fade
-        local x, y = fgLatticePos(f.col, f.row, scroll, hexWidth, hexHeightStep)
-        love.graphics.setColor(1, 1, 1, a)
-        fillHexagon(x, y, hexSize * 0.92)
-      end
-    end
-    love.graphics.setBlendMode("alpha")
-  end
-
-  love.graphics.setCanvas()
-  love.graphics.pop()
-  love.graphics.setColor(1, 1, 1, 1)
+  -- A single quad covering the dome's full box (domeRadiusX*2 x
+  -- domeRadiusY), expressed in the tile's own repeat units — built
+  -- once here and never touched again: unlike the old rebuilt-every-
+  -- frame canvas, nothing about this quad's own geometry depends on
+  -- scroll (that's applied in the shader instead, see getBulgeShader),
+  -- and the dome's size never changes after construction.
+  self.fgQuad = love.graphics.newQuad(
+    0, 0, self.domeRadiusX * 2, self.domeRadiusY,
+    self.hexGridForegroundTileW, self.hexGridForegroundTileH
+  )
 end
 
 ----------------------------------------------------------------------
@@ -681,47 +647,66 @@ function SkyDomePlanetoid:drawMetalBase()
   local cx = self.pos.x
   local cy = self:domeAnchorY()
   local rx, ry = self.halfWidth, self.baseRadiusY
+  local hull = closedHalf(cx, cy, rx, ry, false)
 
-  local bands = {
-    { 1.00, { 0.52, 0.52, 0.56, 0.95 } },
-    { 0.82, { 0.32, 0.32, 0.35, 0.95 } },
-    { 0.60, { 0.16, 0.16, 0.18, 0.95 } },
-    { 0.36, { 0.06, 0.06, 0.07, 0.95 } },
-    { 0.16, { 0.02, 0.02, 0.025, 0.95 } },
-  }
-  for _, band in ipairs(bands) do
-    local s, c = band[1], band[2]
-    love.graphics.setColor(c[1], c[2], c[3], c[4])
-    love.graphics.polygon("fill", closedHalf(cx, cy, rx, ry * s, false))
-  end
+  local shader = getMetalShader()
+  setMetalUniforms(self, cx, cy, rx, ry)
 
-  love.graphics.setColor(self.baseGlowColor[1], self.baseGlowColor[2], self.baseGlowColor[3], 0.10)
-  love.graphics.setLineWidth(math.max(2, ry * 0.22))
-  love.graphics.line(lowerArc(cx, cy, rx * 0.98, ry * 0.9))
+  love.graphics.setShader(shader)
+  love.graphics.stencil(function()
+    love.graphics.polygon("fill", hull)
+  end, "replace", 1)
+  love.graphics.setStencilTest("greater", 0)
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.rectangle("fill", cx - rx, cy, rx * 2, ry)
+  love.graphics.setStencilTest()
+  love.graphics.setShader()
 
-  love.graphics.setLineWidth(1.5)
+  -- Deck lip matches grass.png metal (#6A6A70)
+  love.graphics.setColor(106/255, 106/255, 112/255, 1)
+  love.graphics.setLineWidth(3)
+  love.graphics.line(cx - rx, cy, cx + rx, cy)
+
+  -- Soft underside rim
+  love.graphics.setColor(self.baseGlowColor[1], self.baseGlowColor[2], self.baseGlowColor[3], 0.08)
+  love.graphics.setLineWidth(math.max(2, ry * 0.18))
+  love.graphics.line(lowerArc(cx, cy, rx * 0.98, ry * 0.92))
+
+  -- Horizontal plate seams (ellipse chords)
+  love.graphics.setLineWidth(1.25)
   for i = 1, self.baseHorizontalLineCount do
     local t = i / (self.baseHorizontalLineCount + 1)
     local y = cy + ry * t
     local halfSpan = rx * math.sqrt(math.max(0, 1 - t * t))
-    love.graphics.setColor(0.85, 0.90, 0.95, 0.08)
-    love.graphics.line(cx - halfSpan, y - 1.5, cx + halfSpan, y - 1.5)
-    love.graphics.setColor(0.02, 0.02, 0.03, 0.35)
+    love.graphics.setColor(0.82, 0.84, 0.88, 0.06)
+    love.graphics.line(cx - halfSpan, y - 1.2, cx + halfSpan, y - 1.2)
+    love.graphics.setColor(0.04, 0.04, 0.05, 0.28)
     love.graphics.line(cx - halfSpan, y, cx + halfSpan, y)
   end
 
+  -- Vertical panel seams: curve inward, stop short of center
   for i = 1, self.baseSeamCount - 1 do
     local t = i / self.baseSeamCount
     local startX = cx - rx + t * (rx * 2)
     local endX = cx + (startX - cx) * (1 - self.baseSeamConvergence)
-    love.graphics.setColor(0.02, 0.02, 0.03, 0.28)
-    love.graphics.line(startX, cy, endX, cy + ry)
+    local pts = curvedSeamPoints(cx, cy, rx, ry, startX, endX, 20)
+    love.graphics.setColor(0.03, 0.03, 0.035, 0.38)
+    love.graphics.setLineWidth(1.6)
+    love.graphics.line(pts)
+    love.graphics.setColor(0.78, 0.80, 0.84, 0.07)
+    love.graphics.setLineWidth(1)
+    -- slight highlight offset
+    local hi = {}
+    for n = 1, #pts, 2 do
+      hi[#hi + 1] = pts[n] + 1.2
+      hi[#hi + 1] = pts[n + 1]
+    end
+    love.graphics.line(hi)
   end
 
-  love.graphics.setColor(0.10, 0.10, 0.11, 0.9)
+  love.graphics.setColor(0.10, 0.10, 0.12, 0.85)
   love.graphics.setLineWidth(1.5)
   love.graphics.line(lowerArc(cx, cy, rx, ry))
-  love.graphics.line(cx - rx, cy, cx + rx, cy)
 
   love.graphics.setLineWidth(1)
   love.graphics.setColor(1, 1, 1, 1)
@@ -812,25 +797,32 @@ function SkyDomePlanetoid:drawForegroundGlass()
   love.graphics.setColor(c[1], c[2], c[3], (c[4] or 1) * self.domeForegroundTintOpacity * zoomFactor * 0.22)
   love.graphics.polygon("fill", glass)
 
-  if self.fgHexLayer and self.hexGridForegroundCanvas then
-    self:rebuildForegroundHexLayer()
-
+  -- Samples hexGridForegroundCanvas — one small baked tile, set to
+  -- wrap="repeat" — directly through the bulge shader via self.fgQuad,
+  -- a fixed quad covering the dome's whole box in the tile's own
+  -- repeat units (both built once in createOffscreen). This used to
+  -- rebuild a dome-sized canvas from scratch (~184 tile draws plus a
+  -- full render-target switch) every single frame just to re-tile the
+  -- SAME small pattern at a slightly different scroll offset; now the
+  -- GPU's own texture sampler handles the repeat, and only the scroll
+  -- uniform changes frame to frame — no canvas rebuild at all anymore.
+  if self.hexGridForegroundCanvas then
     love.graphics.stencil(function()
       love.graphics.polygon("fill", glass)
     end, "replace", 1)
     love.graphics.setStencilTest("greater", 0)
 
     local shader = getBulgeShader()
-    local cw, ch = self.fgHexLayer:getDimensions()
-    shader:send("center", { cw * 0.5, ch })
+    shader:send("center", { self.domeRadiusX, self.domeRadiusY })
     shader:send("radii", { rx, ry })
     shader:send("strength", self.domeBulgeStrength)
     shader:send("radius", self.domeBulgeRadius)
-    shader:send("texSize", { cw, ch })
+    shader:send("tileSize", { self.hexGridForegroundTileW, self.hexGridForegroundTileH })
+    shader:send("scroll", self:fgScroll())
 
     love.graphics.setShader(shader)
     love.graphics.setColor(1, 1, 1, zoomFactor * 0.95)
-    love.graphics.draw(self.fgHexLayer, cx - rx, cy - ry)
+    love.graphics.draw(self.hexGridForegroundCanvas, self.fgQuad, cx - rx, cy - ry)
     love.graphics.setShader()
 
     love.graphics.setStencilTest()

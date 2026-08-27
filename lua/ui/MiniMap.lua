@@ -13,7 +13,7 @@ function Minimap.new()
   local self = setmetatable({}, Minimap)
 
   self.size = 240
-  self.sizeFraction = 0.25
+  self.sizeFraction = 0.20
   self.margin = 20
 
   self.backgroundColor = { 6/255, 14/255, 24/255, 0.72 }

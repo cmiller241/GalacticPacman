@@ -62,6 +62,10 @@ local function loadAssets(onComplete)
   -- Goomba enemy — 64x32, two 32x32 tiles (standing, walking).
   state.goombaTexture = love.graphics.newImage("img/goomba.png")
 
+  -- Ooomba enemy (patrols the sky dome's jump platforms) — 2400x950,
+  -- three 800x950 frames: standing, walk-forward-A, walk-forward-B.
+  state.oombaTexture = love.graphics.newImage("img/Ooomba.png")
+
   -- SkyDomePlanetoid's grass cap — a single 32x16 tile, drawn as a
   -- thin strip right at the flat top line, on top of the metal base
   -- (see SkyDomePlanetoid.drawGrassCap).

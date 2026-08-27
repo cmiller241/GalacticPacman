@@ -7,6 +7,7 @@ local Planetoid = require("lua.world.Planetoid")
 local Player = require("lua.entities.Player")
 local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
+local Explosion = require("lua.entities.Explosion")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
 local Starfield = require("lua.world.Starfield")
@@ -18,7 +19,9 @@ local gamepadInput = require("lua.setup.gamepadInput")
 local worldGen = require("lua.setup.worldGen")
 local MiniMap = require("lua.ui.MiniMap")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
+local TiledTerrain = require("lua.world.TiledTerrain")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
+local utils = require("lua.utils")
 
 local collisionSystem
 
@@ -28,6 +31,9 @@ local ZOOM_STEP_PER_FRAME = 0.02
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
+
+local HOME_CELL_COL = 13
+local HOME_CELL_ROW = 9
 
 function love.load()
   love.window.setTitle("Asteroid Bob")
@@ -40,12 +46,15 @@ function love.load()
   state.zoomTarget = nil
   state.timeScale = 1
   state.timeScaleTarget = 1
+  state.vatsMultiplier = 1
+  state.showCollisionDebug = true
   state.vatsActive = false
   state.vatsAutoEnterOnLock = true
   state.vatsTimeScale = VATS_TIME_SCALE
   state.score = 0
   state.level = 1
   state.fireballs = {}
+  state.explosions = {}
   state.fireBars = state.fireBars or {}
   state.cellCheckCounter = 0
   state.minimap = MiniMap.new()
@@ -56,36 +65,64 @@ function love.load()
   collisionSystem = CollisionSystem.new()
   state.starfield = Starfield.new()
 
-  worldGen.generateStartingNeighborhood()
+  local cellSize = worldGen.CELL_SIZE
+  local domeHalfW = 2000
+  -- Left edge of cell 9,14, hull just inside the cell
+  local domeX = HOME_CELL_COL * cellSize + domeHalfW + 80
+  local domeY = HOME_CELL_ROW * cellSize + cellSize * 0.5
+
+  local dome = SkyDomePlanetoid.new(domeX, domeY, {
+    halfWidth = domeHalfW,
+    halfHeight = 32,
+    grassHeight = 32,
+    domeRadiusX = 2000,
+    domeRadiusY = 2000,
+  })
+  dome.isPermanent = true
+  table.insert(state.planetoids, dome)
+  state.skyDomePlanet = dome
+
+  -- === TILED HILL TERRAIN above the sky dome's ground ===
+  -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
+  -- is now authored in Tiled (tiled/Level1.lua) and loaded as real
+  -- walkable terrain (flat ground + 45-degree slopes) via
+  -- lua/world/TiledTerrain.lua. Centered horizontally on the dome and
+  -- bottom-aligned to its ground line; TiledTerrain.load itself just
+  -- takes a plain world-space anchor, so this centering math is the
+  -- dome-specific part, kept here rather than baked into that module.
+  do
+    local levelData = require("tiled.Level1")
+    local mapWorldWidth = levelData.width * 64
+    local mapWorldHeight = levelData.height * 64
+    local anchorX = dome.pos.x - mapWorldWidth / 2
+    local anchorY = dome:trueSurfaceY() - mapWorldHeight
+    local terrainLevel = TiledTerrain.load(levelData, anchorX, anchorY)
+
+    for _, shape in ipairs(terrainLevel.shapes) do
+      table.insert(state.planetoids, shape)
+    end
+    state.tiledLevels = { terrainLevel }
+  end
+
+  local topY = dome:trueSurfaceY()
+  state.player = Player.new(dome.pos.x, topY - constants.PLAYER_RADIUS)
+  state.player.onSurface = true
+  state.player.currentPlanet = dome
+  state.player.lastInfluencePlanet = dome
+  state.player.angle = -math.pi / 2
+
+  -- Stream the 3x3 around the house, not world center — must run AFTER
+  -- the dome above is created and assigned to state.skyDomePlanet, not
+  -- before: cell generation steers new planetoids/asteroids away from
+  -- the dome's footprint (see WorldGen.lua's isNearSkyDome), and it can
+  -- only do that for cells generated while state.skyDomePlanet is
+  -- already set — which, for this exact starting neighborhood, is
+  -- every cell that actually overlaps the dome's home area.
+  worldGen.generateStartingNeighborhood(HOME_CELL_COL, HOME_CELL_ROW)
 
   state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 1920)
 
   state.gravitySystem = GravitySystem.new(state.planetoids)
-
-  local dome = SkyDomePlanetoid.new(
-    state.sceneWidth / 2,
-    state.sceneHeight / 2 + 2500,
-    {
-      halfWidth = 2000,
-      halfHeight = 32,
-      grassHeight = 32,
-      domeRadiusX = 2000,
-      domeRadiusY = 2000,
-    }
-  )
-  table.insert(state.planetoids, dome)
-  state.skyDomePlanet = dome
-
-  local startPlanet = state.planetoids[1]
-  local surfaceDist = startPlanet.radius + constants.PLAYER_RADIUS
-  state.player = Player.new(startPlanet.pos.x, startPlanet.pos.y - surfaceDist)
-  state.player.onSurface = true
-  state.player.currentPlanet = startPlanet
-  state.player.lastInfluencePlanet = startPlanet
-  state.player.angle = math.atan2(
-    state.player.pos.y - startPlanet.pos.y,
-    state.player.pos.x - startPlanet.pos.x
-  )
 end
 
 local function updatePlanetoidsPhysics()
@@ -122,13 +159,39 @@ function love.update(dt)
 
   gamepadInput.pollGamepad(dt)
 
+  -- Normalizes this frame's real elapsed time to "how many 60fps-baseline
+  -- frames this update represents" (1.0 at exactly 60fps) — clamped so a
+  -- stall or frame-drop spike can't fling anything through geometry.
+  -- Every per-frame rate below is expressed in these units so the game's
+  -- existing speed/force/easing tuning (all written assuming ~60fps)
+  -- keeps meaning the same thing at exactly 60 FPS, and produces the same
+  -- real-time behavior at any other frame rate.
+  local FPS_BASELINE = 60
+  local MAX_FRAME_DT = 0.05 -- clamp to a 20fps floor
+  local frameNorm = math.min(dt, MAX_FRAME_DT) * FPS_BASELINE
+
+  -- state.vatsMultiplier is the slow-motion easing value on its own (1 =
+  -- normal speed, VATS_TIME_SCALE = full slow-mo). VATS_EASE_RATE is
+  -- itself a per-baseline-frame rate, so it's scaled by frameNorm too —
+  -- otherwise the slow-mo blend-in/out speed would still vary with frame
+  -- rate even after everything else stopped.
   state.timeScaleTarget = state.vatsActive and VATS_TIME_SCALE or 1
-  local timeScaleDiff = state.timeScaleTarget - state.timeScale
+  local timeScaleDiff = state.timeScaleTarget - state.vatsMultiplier
   if math.abs(timeScaleDiff) < VATS_EASE_SNAP_THRESHOLD then
-    state.timeScale = state.timeScaleTarget
+    state.vatsMultiplier = state.timeScaleTarget
   else
-    state.timeScale = state.timeScale + timeScaleDiff * VATS_EASE_RATE
+    state.vatsMultiplier = state.vatsMultiplier + timeScaleDiff * math.min(VATS_EASE_RATE * frameNorm, 1)
   end
+
+  -- state.timeScale is what nearly every moving thing in the game (Player,
+  -- Asteroid, Coin, Fireball, Ooomba, Particle, FireBar, GravitySystem,
+  -- BeltOrbitSystem, ...) multiplies its per-update movement/velocity by.
+  -- It was never actually tied to real elapsed time — only to the VATS
+  -- slow-mo easing above — so every one of those systems was advancing by
+  -- a fixed amount PER FRAME rather than per SECOND. That's why raising
+  -- the frame rate visibly sped the whole game up: 150 FPS produced 150
+  -- movement steps per second of real time versus 60 FPS's 60.
+  state.timeScale = state.vatsMultiplier * frameNorm
 
   updatePlanetoidsPhysics()
 
@@ -162,6 +225,29 @@ function love.update(dt)
 
   collisionSystem:handlePlayerPlanetCollisions(state.player)
   collisionSystem:handleElasticCollisions(state.planetoids)
+
+  -- Any planetoid tagged isImmovable (the sky dome and its TiledTerrain
+  -- hill shapes are the current examples) gets the same surface-accurate
+  -- bounce treatment FireBar's
+  -- block already has below, against every OTHER planetoid — this is
+  -- what handleElasticCollisions above deliberately skips (it excludes
+  -- any pair where either side is immovable). Without this, an
+  -- immovable planetoid never reacted to anything touching it at all,
+  -- which is what let regular planetoids silently overlap/sit inside
+  -- the dome instead of repelling off its actual dome+base shape.
+  -- Asteroids are deliberately NOT included here — they always break
+  -- against a planet's true surface (dome included), handled by
+  -- handlePlanetAsteroidCollisions below instead; bouncing them here
+  -- too would be redundant with that.
+  do
+    local immovablePlanetoids = {}
+    for _, p in ipairs(state.planetoids) do
+      if p.isImmovable then table.insert(immovablePlanetoids, p) end
+    end
+    if #immovablePlanetoids > 0 then
+      collisionSystem:handleImmovableCollisions(immovablePlanetoids, state.planetoids)
+    end
+  end
 
   if state.fireBars and #state.fireBars > 0 then
     if collisionSystem.handlePlayerFireBarCollisions then
@@ -201,20 +287,47 @@ function love.update(dt)
     end
 
     if #state.fireballs > 0 and state.asteroids then
-      local hitFireballs, toBreakAsteroids = collisionSystem:handleFireballCollisions(
+      local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
         state.fireballs, state.planetoids, state.asteroids
       )
+      if next(toBreakAsteroids) then
+        for i = #state.asteroids, 1, -1 do
+          local a = state.asteroids[i]
+          if toBreakAsteroids[a] then
+            table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
+            if state.audioManager then state.audioManager:playFireball() end
+            table.remove(state.asteroids, i)
+          end
+        end
+      end
+      for _, hit in ipairs(planetHits) do
+        table.insert(state.explosions, Explosion.new(hit.fireball.pos.x, hit.fireball.pos.y))
+        if state.audioManager then state.audioManager:playFireball() end
+      end
       for i = #state.fireballs, 1, -1 do
         if hitFireballs[state.fireballs[i]] then
           table.remove(state.fireballs, i)
         end
       end
-      if next(toBreakAsteroids) then
-        for i = #state.asteroids, 1, -1 do
-          if toBreakAsteroids[state.asteroids[i]] then
-            table.remove(state.asteroids, i)
-          end
-        end
+    end
+  end
+
+  -- Explosions: purely time-driven visuals (see lua/entities/Explosion.lua)
+  if state.explosions then
+    for i = #state.explosions, 1, -1 do
+      state.explosions[i]:update()
+      if state.explosions[i]:isDead() then
+        table.remove(state.explosions, i)
+      end
+    end
+  end
+
+  -- Debris/death particles (explosion bursts, etc. — see lua/entities/Particle.lua)
+  if state.particles then
+    for i = #state.particles, 1, -1 do
+      state.particles[i]:update()
+      if state.particles[i].life <= 0 then
+        table.remove(state.particles, i)
       end
     end
   end
@@ -222,7 +335,7 @@ function love.update(dt)
   BeltOrbit.apply(state.planetoids)
 
   if state.sun then
-    state.sun:update(dt)
+    state.sun:update()
   end
 
   state.cellCheckCounter = (state.cellCheckCounter or 0) + 1
@@ -254,10 +367,6 @@ function love.update(dt)
   state.camera = camera
   state.visibleWidth = visibleWidth
   state.visibleHeight = visibleHeight
-
-  if state.skyDomePlanet then
-    state.skyDomePlanet:updateHexFlashes(dt)
-  end
 end
 
 function love.draw()
@@ -275,11 +384,68 @@ function love.draw()
     state.sun:draw()
   end
 
+  -- Viewport culling below: this game can have hundreds of active
+  -- planetoids (BELT_PLANETOIDS_PER_CELL=36 alone) and dozens of fire
+  -- bars alive at once in the streamed 3x3 cell neighborhood, almost
+  -- all off-screen at any given moment — skipping their (comparatively
+  -- expensive, especially Planetoid's own per-frame stencil sun-shading
+  -- pass) draw calls entirely when they can't possibly be visible is
+  -- the single biggest lever for frame time here. Update/physics
+  -- (position integration, orbits, collisions) deliberately still runs
+  -- for everything regardless of visibility — culling THAT risks a
+  -- visible "catch-up" pop the moment something re-enters view, which
+  -- culling only :draw() never risks.
   if state.asteroids then
     for _, a in ipairs(state.asteroids) do
-      a:draw()
+      if utils.isOnScreen(a.pos.x, a.pos.y, a.radius, 50) then
+        a:draw()
+      end
     end
   end
+
+  for _, p in ipairs(state.planetoids) do
+    if utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+      p:draw()
+    end
+  end
+
+  if state.tiledLevels then
+    for _, level in ipairs(state.tiledLevels) do
+      if utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50) then
+        level:draw()
+        if state.showCollisionDebug then
+          love.graphics.setColor(1, 0, 0, 1)
+          love.graphics.setLineWidth(4)
+          for _, shape in ipairs(level.shapes) do
+            for _, seg in ipairs(shape.segments) do
+              love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
+            end
+          end
+          love.graphics.setColor(1, 1, 1, 1)
+          love.graphics.setLineWidth(1)
+        end
+      end
+    end
+  end
+
+  if state.coins then
+    for _, c in ipairs(state.coins) do
+      if utils.isOnScreen(c.pos.x, c.pos.y, c.radius, 20) then
+        c:draw()
+      end
+    end
+  end
+
+  if state.fireBars then
+    for _, bar in ipairs(state.fireBars) do
+      if utils.isOnScreen(bar.pos.x, bar.pos.y, bar.barLength + bar.fireballRadius, 50) then
+        bar:draw()
+      end
+    end
+  end
+
+  state.player:draw()
+  PullBeam.draw()
 
   if state.fireballs then
     for _, f in ipairs(state.fireballs) do
@@ -287,24 +453,17 @@ function love.draw()
     end
   end
 
-  for _, p in ipairs(state.planetoids) do
-    p:draw()
-  end
-
-  if state.coins then
-    for _, c in ipairs(state.coins) do
-      c:draw()
+  if state.particles then
+    for _, p in ipairs(state.particles) do
+      p:draw()
     end
   end
 
-  if state.fireBars then
-    for _, bar in ipairs(state.fireBars) do
-      bar:draw()
+  if state.explosions then
+    for _, e in ipairs(state.explosions) do
+      e:draw()
     end
   end
-
-  state.player:draw()
-  PullBeam.draw()
 
   if state.skyDomePlanet then
     state.skyDomePlanet:drawForegroundGlass()
@@ -329,5 +488,5 @@ function love.draw()
     state.asteroids and #state.asteroids or 0,
     state.fireBars and #state.fireBars or 0
   ), 20, 100)
-  love.graphics.print("Right-click a planet to pull toward it, Space to jump", 20, 120)
+  love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 120)
 end

@@ -1,7 +1,7 @@
 -- lua/setup/worldGen.lua
 --
 -- Cell streaming + annular sun belt (2–3 cell radii).
--- Deterministic FireBars on the mid-belt ring; spawned/culled with the 3x3.
+-- Deterministic FireBars spread across the belt's radial width; spawned/culled with the 3x3.
 
 local state = require("lua.state")
 local constants = require("lua.constants")
@@ -21,7 +21,8 @@ worldGen.BELT_INNER_CELLS = 2
 worldGen.BELT_OUTER_CELLS = 3
 worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5   -- 2.7
 
-worldGen.FIREBAR_COUNT = 16
+worldGen.FIREBAR_COUNT = 36      -- spread across the belt's radial width
+worldGen.FIREBAR_EDGE_COUNT = 10 -- extra, hugging the inner/outer edges specifically
 
 local PLANETOIDS_PER_CELL = 6
 local BELT_PLANETOIDS_PER_CELL = 36
@@ -99,22 +100,29 @@ function worldGen.cellIntersectsBelt(col, row)
 end
 
 ----------------------------------------------------------------------
--- Deterministic FireBar slots on the mid-belt ring
+-- Deterministic FireBar slots, spread across the belt's radial width
 ----------------------------------------------------------------------
+
+local FIREBAR_RADIAL_JITTER = 0.75 -- fraction of the belt's half-width each "spread" slot can be pushed toward either edge
+local FIREBAR_EDGE_MARGIN = 0.08   -- fraction of the belt's full width the edge-hugging slots sit inside the true inner/outer boundary
+local FIREBAR_EDGE_JITTER = 0.3    -- small extra scatter for the edge-hugging slots, as a fraction of their own margin — avoids a perfectly uniform ring
 
 local function fireBarSlots()
   if worldGen._fireBarSlots then return worldGen._fireBarSlots end
   local inner, outer = worldGen.beltRadii()
-  local r = (inner + outer) * 0.5
+  local width = outer - inner
+  local midR = (inner + outer) * 0.5
+  local halfSpan = width * 0.5
   local sx, sy = worldGen.sunPos()
   local slots = {}
-  for i = 0, worldGen.FIREBAR_COUNT - 1 do
-    local ang = (i / worldGen.FIREBAR_COUNT) * math.pi * 2
+  local nextId = 0
+
+  local function addSlot(ang, r)
     local x = sx + math.cos(ang) * r
     local y = sy + math.sin(ang) * r
     local cell = worldGen.cellCoordFor(x, y)
     table.insert(slots, {
-      id = i,
+      id = nextId,
       x = x,
       y = y,
       startAngle = ang + math.pi / 2,
@@ -122,7 +130,44 @@ local function fireBarSlots()
       row = cell.row,
       key = worldGen.cellKey(cell.col, cell.row),
     })
+    nextId = nextId + 1
   end
+
+  -- Spread radially across most of the belt's width instead of sitting
+  -- exactly on the mid-belt ring every time — every fire bar used to
+  -- sit at the exact midpoint radius, so a planetoid riding near the
+  -- belt's inner or outer edge would almost never cross paths with
+  -- one. Computed once and cached in worldGen._fireBarSlots, so this
+  -- stays a fixed, stable layout for the whole session rather than
+  -- reshuffling.
+  for i = 0, worldGen.FIREBAR_COUNT - 1 do
+    local ang = (i / worldGen.FIREBAR_COUNT) * math.pi * 2
+    local radialJitter = (math.random() * 2 - 1) * FIREBAR_RADIAL_JITTER
+    addSlot(ang, midR + radialJitter * halfSpan)
+  end
+
+  -- Extra edge-hugging bars, on top of the spread set above — half
+  -- sitting just inside the inner boundary, half just inside the outer
+  -- boundary, so riding right along either rim of the belt (where even
+  -- the widest spread above rarely reaches) still crosses one.
+  -- Staggered by half an angular step against the spread set so they
+  -- don't cluster at the exact same angles.
+  local innerCount = math.floor(worldGen.FIREBAR_EDGE_COUNT / 2)
+  local outerCount = worldGen.FIREBAR_EDGE_COUNT - innerCount
+  local edgeMargin = FIREBAR_EDGE_MARGIN * width
+  local angleStagger = math.pi / worldGen.FIREBAR_COUNT
+
+  for i = 0, innerCount - 1 do
+    local ang = angleStagger + (i / innerCount) * math.pi * 2
+    local jitter = (math.random() * 2 - 1) * FIREBAR_EDGE_JITTER * edgeMargin
+    addSlot(ang, inner + edgeMargin + jitter)
+  end
+  for i = 0, outerCount - 1 do
+    local ang = angleStagger + (i / outerCount) * math.pi * 2
+    local jitter = (math.random() * 2 - 1) * FIREBAR_EDGE_JITTER * edgeMargin
+    addSlot(ang, outer - edgeMargin + jitter)
+  end
+
   worldGen._fireBarSlots = slots
   return slots
 end
@@ -163,11 +208,41 @@ local function applyBeltOrbit(planet)
   planet.beltOrbitRadius = dist
 end
 
+local SKYDOME_SPAWN_MARGIN = 200 -- extra clearance kept beyond the dome's own silhouette
+
+-- A generous bounding-circle exclusion zone around the sky dome's
+-- WHOLE structure (dome + narrower base), used only to steer spawn
+-- placement away from it — deliberately not shape-precise the way
+-- actual collision response needs to be (see CollisionSystem.lua's
+-- handleImmovableCollisions / handlePlanetAsteroidCollisions for that);
+-- a little extra empty space kept clear around the dome for spawning
+-- purposes is harmless, whereas under-covering it is the actual bug
+-- (things spawning inside).
+local function isNearSkyDome(x, y)
+  local dome = state.skyDomePlanet
+  if not dome then return false end
+  local cy = dome.domeAnchorY and dome:domeAnchorY() or dome.pos.y
+  local dx, dy = x - dome.pos.x, y - cy
+  local exclR = math.max(dome.domeRadiusX or 0, dome.domeRadiusY or 0, dome.halfWidth or 0)
+    + (dome.baseRadiusY or 0) + SKYDOME_SPAWN_MARGIN
+  return dx * dx + dy * dy < exclR * exclR
+end
+
 local function randomPointInCell(col, row, radius)
   local originX = col * worldGen.CELL_SIZE
   local originY = row * worldGen.CELL_SIZE
-  local x = originX + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
-  local y = originY + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+  local x, y
+  for _ = 1, 20 do
+    x = originX + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    y = originY + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    if not isNearSkyDome(x, y) then
+      return x, y
+    end
+  end
+  -- Every attempt landed inside the dome's exclusion zone — only
+  -- realistically possible for a cell almost entirely covered by it.
+  -- Falls back to the last attempt rather than looping forever, same
+  -- tradeoff as beltPlanetoidTooClose's own retry loop below.
   return x, y
 end
 
@@ -189,13 +264,47 @@ local function randomPointInCellBelt(col, row, radius)
   return sx + (dx / d) * r, sy + (dy / d) * r
 end
 
+local BELT_PLANETOID_MIN_GAP = 5 -- min surface-to-surface distance enforced between belt planetoids
+
+-- Checked only against OTHER belt planetoids (not the whole
+-- state.planetoids array, which also holds every regular/spikey/maze
+-- planet in the game) — non-belt planetoids live in a completely
+-- different region of the world and were never the ones observed
+-- stacking. Cheap enough to call per placement attempt: this only runs
+-- during the occasional cell-generation event, never per-frame, and
+-- the active belt planetoid count at any one time is small.
+local function beltPlanetoidTooClose(x, y, radius)
+  for _, p in ipairs(state.planetoids) do
+    if p.isBeltPlanetoid then
+      local dx, dy = p.pos.x - x, p.pos.y - y
+      local minDist = p.radius + radius + BELT_PLANETOID_MIN_GAP
+      if dx * dx + dy * dy < minDist * minDist then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function createPlanetoidsInCell(col, row, count, belt)
   local created = {}
   for i = 1, count do
     local radius = belt and (28 + math.random() * 36) or (30 + math.random() * 40)
     local x, y
     if belt then
-      x, y = randomPointInCellBelt(col, row, radius)
+      -- Retries a handful of times to find a spot that isn't
+      -- overlapping an already-placed belt planetoid (including ones
+      -- from earlier in this same batch — they're inserted into
+      -- state.planetoids immediately below, so beltPlanetoidTooClose
+      -- sees them too). Falls back to the last-tried spot if a clean
+      -- one isn't found — a packed cell shouldn't hang cell generation
+      -- or leave a planetoid unplaced, just occasionally still overlap
+      -- in the rare worst case.
+      local attempts = 0
+      repeat
+        x, y = randomPointInCellBelt(col, row, radius)
+        attempts = attempts + 1
+      until not beltPlanetoidTooClose(x, y, radius) or attempts >= 20
     else
       x, y = randomPointInCell(col, row, radius)
     end
@@ -211,12 +320,9 @@ local function createPlanetoidsInCell(col, row, count, belt)
 end
 
 local function createAsteroidsInCell(col, row, count)
-  local originX = col * worldGen.CELL_SIZE
-  local originY = row * worldGen.CELL_SIZE
   for i = 1, count do
     local radius = 16 + math.random() * 30
-    local x = originX + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
-    local y = originY + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    local x, y = randomPointInCell(col, row, radius) -- also steers clear of the sky dome, see isNearSkyDome
     table.insert(state.asteroids, Asteroid.new(x, y, radius))
   end
 end
@@ -224,6 +330,9 @@ end
 local function createCoinsForPlanetoids(planetoids)
   for _, planet in ipairs(planetoids) do
     local numCoins = COINS_PER_PLANET_BASE + math.floor(planet.radius / 10)
+    if planet.isBeltPlanetoid then
+      numCoins = math.max(1, math.floor(numCoins / 2))
+    end
     for i = 1, numCoins do
       local coin = Coin.new(planet)
       coin.angle = (i / numCoins) * math.pi * 2 + math.random() * 0.2
