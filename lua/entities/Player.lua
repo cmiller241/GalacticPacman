@@ -21,6 +21,7 @@ function Player.new(x, y)
   local self = setmetatable({}, Player)
 
   self.pos = Vector2.new(x, y)
+  self.prevPos = Vector2.new(x, y)
   self.vel = Vector2.new(0, 0)
   self.sizeMultiplier = 1
   self.radius = constants.PLAYER_RADIUS * self.sizeMultiplier
@@ -141,12 +142,40 @@ function Player:applyGravity()
   end
 end
 
+-- "Down" direction used purely for the character rig's visual rotation
+-- (drawing and idle-facing orientation) — NOT for physics/gravity, which
+-- still follows the real surface normal. forceUprightJump surfaces
+-- (TiledTerrain) keep the astronaut standing straight up regardless of
+-- which way a 45-degree segment's normal points, the same way Mario
+-- doesn't tilt to match a slope's angle. Without this override, the rig
+-- would snap between upright and tilted every time the player crossed a
+-- short slope segment, which reads as a glitch rather than motion.
+function Player:visualDownDirection(planet)
+  if not planet then return Vector2.new(0, 1) end
+  if planet.isRoundedRect then
+    if planet.forceUprightJump then return Vector2.new(0, 1) end
+    local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
+    return surface.normal:clone():multiply(-1)
+  end
+  return planet.pos:subtract(self.pos):normalize()
+end
+
 function Player:getOutwardLaunchDirection()
   if not self.currentPlanet then return Vector2.new(0, -1) end
   if self.currentPlanet.isRoundedRect then
     local surface = self.currentPlanet:nearestSurfacePoint(self.pos.x, self.pos.y)
     local direction = surface.normal
-    if self.currentPlanet.isSkyDome then
+    -- forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
+    -- whatever this surface's own local normal is — a 45-degree slope's
+    -- normal points diagonally, but jumping off one should still launch
+    -- straight up, same as a flat SkyDome deck already does (there, it's
+    -- straight up only because a flat deck's own normal already equals
+    -- (0,-1) — this makes the same result explicit for surfaces whose
+    -- normal isn't vertical).
+    if self.currentPlanet.forceUprightJump then
+      direction = Vector2.new(0, -1)
+    end
+    if self.currentPlanet.isSkyDome or self.currentPlanet.forceUprightJump then
       local horizontalInput = 0
       if state.keys["ArrowLeft"] then horizontalInput = -1 end
       if state.keys["ArrowRight"] then horizontalInput = 1 end
@@ -227,9 +256,41 @@ function Player:move(keys)
         self.pos = Vector2.new(desiredX, topY - self.radius)
       end
     else
-      self.surfaceArcPos = self.surfaceArcPos + ds
-      local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
-      self.pos = worldSurface.point
+      -- Optional per-surface speed scaling (e.g. TiledTerrain slowing the
+      -- player down on its 45-degree slope segments) — looked up at the
+      -- CURRENT arc position, before stepping, since the segment the
+      -- player is standing on right now is what should govern this
+      -- step's speed. Duck-typed: surfaces without this method (every
+      -- existing one) behave exactly as before.
+      if type(planet.getArcSpeedMultiplier) == "function" then
+        ds = ds * planet:getArcSpeedMultiplier(self.surfaceArcPos)
+      end
+
+      local desiredArcPos = self.surfaceArcPos + ds
+
+      -- isOpenPath surfaces (e.g. TiledTerrain — a hill has two ends, not
+      -- a closed loop like RoundedRectPlanetoid) fall off the end instead
+      -- of wrapping around, same "carry momentum into a fall" pattern
+      -- SkyDome's own edge-of-deck check above already uses.
+      if planet.isOpenPath and (desiredArcPos < 0 or desiredArcPos > planet:getPerimeter()) then
+        -- Snap to the exact edge vertex before falling, rather than
+        -- leaving self.pos wherever last frame's walk step landed (which
+        -- can be up to one whole step short of the true end). Landing
+        -- back on this same shape is decided purely by geometry from here
+        -- on (CollisionSystem's swept crossing test) — starting exactly
+        -- at the edge is what lets that test exclude a re-land on the
+        -- very next frame instead of only after several more steps'
+        -- worth of horizontal drift.
+        local edgeArcPos = desiredArcPos < 0 and 0 or planet:getPerimeter()
+        self.pos = planet:worldPointAtArcPosition(edgeArcPos, self.radius).point
+        self.onSurface = false
+        self.currentPlanet = nil
+        self.vel = Vector2.new(ds * self.edgeFallCarryFraction, 0)
+      else
+        self.surfaceArcPos = desiredArcPos
+        local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
+        self.pos = worldSurface.point
+      end
     end
 
     if self.isWalking then
@@ -264,7 +325,8 @@ function Player:move(keys)
       self:spawnWalkDust()
     end
 
-  elseif (not self.onSurface) and self.lastInfluencePlanet and self.lastInfluencePlanet.isSkyDome then
+  elseif (not self.onSurface) and self.lastInfluencePlanet
+      and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump) then
     if keys["ArrowLeft"] then
       self.vel.x = math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed)
       self.facingDirection = -1
@@ -277,6 +339,13 @@ function Player:move(keys)
 end
 
 function Player:update()
+  -- Captured before this frame's own movement, so CollisionSystem can
+  -- compare "where was I a moment ago" against "where am I now" — a
+  -- swept crossing test against open-path terrain, the same principle
+  -- ordinary platformer tile collision uses instead of a plain distance
+  -- check. See TerrainShape:findLandingCrossing.
+  self.prevPos = self.pos:clone()
+
   if not self.onSurface then
     self.vel = self.vel:multiply(constants.DRAG ^ state.timeScale)
     self.pos:add(self.vel:clone():multiply(state.timeScale))
@@ -309,15 +378,7 @@ function Player:updateOrientationAndFacing()
   if self.mouseIdle then return end
 
   local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
-  local downDir = Vector2.new(0, 1)
-  if planet then
-    if planet.isRoundedRect then
-      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
-      downDir = surface.normal:clone():multiply(-1)
-    else
-      downDir = planet.pos:subtract(self.pos):normalize()
-    end
-  end
+  local downDir = self:visualDownDirection(planet)
   local downAngle = math.atan2(downDir.y, downDir.x)
   local orientation = downAngle - math.pi / 2
   local tangentX = math.cos(orientation)
@@ -511,15 +572,7 @@ end
 
 function Player:draw()
   local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
-  local downDir = Vector2.new(0, 1)
-  if planet then
-    if planet.isRoundedRect then
-      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
-      downDir = surface.normal:clone():multiply(-1)
-    else
-      downDir = planet.pos:subtract(self.pos):normalize()
-    end
-  end
+  local downDir = self:visualDownDirection(planet)
   local downAngle = math.atan2(downDir.y, downDir.x)
   local orientation = downAngle - math.pi / 2
 

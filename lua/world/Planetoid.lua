@@ -84,6 +84,7 @@ function Planetoid.new(x, y, radius, color)
   self.bodyCanvasPadding = 0
   self.ringCanvas = nil
   self.interiorType = nil
+  self.eclipseMesh = nil
   return self
 end
 
@@ -307,12 +308,23 @@ function Planetoid:drawEclipseShadow()
     {f1x, f1y, 0, 0, 0, 0, 0, 0},              -- far, transparent
   }
 
-  local mesh = love.graphics.newMesh(vertices, "fan", "static")
+  -- Reused across frames (created once, rewritten in place via
+  -- setVertices) instead of newMesh()+release() every frame — this
+  -- shadow's shape genuinely changes every frame (direction to the
+  -- sun, proximity-driven length/strength all shift as the planet
+  -- moves), but allocating and freeing a whole GPU mesh object every
+  -- frame, for every planet close enough to the sun to show one, was
+  -- needless GPU churn. "dynamic" usage tells LÖVE to expect frequent
+  -- CPU-side rewrites like this, unlike the "static" usage above.
+  if not self.eclipseMesh then
+    self.eclipseMesh = love.graphics.newMesh(vertices, "fan", "dynamic")
+  else
+    self.eclipseMesh:setVertices(vertices)
+  end
 
   love.graphics.setBlendMode("alpha")
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(mesh)
-  mesh:release()
+  love.graphics.draw(self.eclipseMesh)
 
   love.graphics.setColor(1, 1, 1, 1)
 end

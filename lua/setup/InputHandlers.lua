@@ -183,6 +183,10 @@ local function attachInputHandlers()
     if key == 'Enter' then
       tryRestartOrAdvance()
     end
+
+    if key == 'c' and not isrepeat then
+      state.showCollisionDebug = not state.showCollisionDebug
+    end
   end
 
   function love.keyreleased(loveKey, scancode)

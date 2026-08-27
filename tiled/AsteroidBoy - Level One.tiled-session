@@ -1,0 +1,23 @@
+{
+    "Map/SizeTest": {
+        "height": 4300,
+        "width": 2
+    },
+    "activeFile": "",
+    "expandedProjectPaths": [
+    ],
+    "fileStates": {
+    },
+    "last.exportedFilePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/tiled",
+    "last.imagePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/img",
+    "map.height": 30,
+    "map.lastUsedExportFilter": "Lua files (*.lua)",
+    "map.lastUsedFormat": "tmx",
+    "map.width": 60,
+    "openFiles": [
+    ],
+    "project": "AsteroidBoy - Level One.tiled-project",
+    "recentFiles": [
+    ],
+    "tileset.lastUsedFormat": "tsx"
+}

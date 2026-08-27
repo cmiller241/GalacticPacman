@@ -8,6 +8,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local utils = require("lua.utils")
 
 ----------------------------------------------------------------------
 -- Ember (decorative only)
@@ -54,7 +55,19 @@ function FireBar.new(x, y, options)
   self.isImmovable = true
 
   self.blockRadius = options.blockRadius or 25
-  self.radius = self.blockRadius
+
+  -- Deliberately SMALLER than blockRadius, and only used for the
+  -- generic immovable-vs-movable push in
+  -- CollisionSystem:handleImmovableCollisions (planetoids/asteroids
+  -- vs. the bar's pivot) — NOT the drawn block size or the player's
+  -- lethal-touch radius, both of which still use blockRadius directly.
+  -- Aliasing this straight to blockRadius (25) meant a planetoid got
+  -- shoved out to (its own radius + 25) and settled exactly there;
+  -- with several differently-sized planetoids drifting through over
+  -- time, that produced a visible clump/ring sitting right at the
+  -- bar's edge. Shrinking just the collision radius means a planetoid
+  -- has to get much closer before being pushed out at all.
+  self.radius = options.collisionRadius or 2
 
   self.barLength = options.barLength or 500
   self.numFireballs = options.numFireballs or 10
@@ -91,10 +104,18 @@ function FireBar:update()
   local timeScale = state.timeScale or 1
   self.angle = self.angle + self.rotationSpeed * timeScale
 
-  local fireballs = self:getFireballPositions()
-  for _, f in ipairs(fireballs) do
-    if math.random() < self.emberSpawnChance * timeScale then
-      table.insert(self.embers, FireEmber.new(f.x, f.y))
+  -- Ember spawning (getFireballPositions() plus a per-fireball roll,
+  -- numFireballs*2 positions) is skipped entirely while this bar is
+  -- off-screen — purely decorative, so there's nothing to preserve by
+  -- keeping it running unseen. Existing embers still decay/get culled
+  -- below regardless, so the list doesn't grow unbounded while a bar
+  -- is off-screen and then never shrinks back once it's visible again.
+  if utils.isOnScreen(self.pos.x, self.pos.y, self.barLength + self.fireballRadius, 100) then
+    local fireballs = self:getFireballPositions()
+    for _, f in ipairs(fireballs) do
+      if math.random() < self.emberSpawnChance * timeScale then
+        table.insert(self.embers, FireEmber.new(f.x, f.y))
+      end
     end
   end
 

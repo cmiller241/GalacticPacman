@@ -33,7 +33,14 @@ function GravitySystem:findDominantPlanet(pos)
   for _, planet in ipairs(self.planetoids) do
     local dist, withinRange
 
-    if planet.isRoundedRect then
+    if planet.isOpenPath then
+      -- TiledTerrain ledges/hills are landing surfaces only, never their
+      -- own gravity source — otherwise a ledge would tug falling/jumping
+      -- players sideways toward it like a tiny planet (surface.point can
+      -- sit off to the side, not just below), instead of just standing
+      -- there while the dome's own straight-down gravity does the rest.
+      withinRange = false
+    elseif planet.isRoundedRect then
       if planet.distanceToSurface then
         dist = planet:distanceToSurface(pos.x, pos.y)
       elseif planet.nearestSurfacePoint then

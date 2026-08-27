@@ -212,7 +212,23 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
       end
     end
 
-    local surface = planet:nearestSurfacePoint(player.pos.x, player.pos.y)
+    -- Open-path terrain (TiledTerrain ledges/hills) lands via a swept
+    -- crossing test — was the player above the surface a moment ago, are
+    -- they at/through it now, and are they actually over its span —
+    -- instead of "is the player currently near any point on this shape."
+    -- That's the same principle ordinary platformer tile collision uses,
+    -- and it's what makes jumping through from underneath, and walking
+    -- straight off the end, just work: neither is ever a valid crossing,
+    -- so no special-cased timers or tuned distance tolerances are needed.
+    local surface
+    if planet.isOpenPath and type(planet.findLandingCrossing) == "function" then
+      local prev = player.prevPos or player.pos
+      surface = planet:findLandingCrossing(prev.x, prev.y, player.pos.x, player.pos.y)
+      if not surface then return false end
+    else
+      surface = planet:nearestSurfacePoint(player.pos.x, player.pos.y)
+    end
+
     if surface.distance <= player.radius + constants.SURFACE_TOLERANCE then
       -- For SkyDome, also require horizontally over the deck
       if planet.isSkyDome then
@@ -384,9 +400,20 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
 
   for _, p in ipairs(planetoids) do
     for _, a in ipairs(asteroids) do
-      local dist = self:distanceToPlanetSurface(a.pos, p)
-      if dist < a.radius then
-        toBreak[a] = true
+      -- Skipped for the sky dome: its own nearestSurfacePoint is a
+      -- crude, UNBOUNDED flat-line distance (abs(worldY - topY), no X
+      -- clamping applied to the distance itself, only to the returned
+      -- point) — not the dome's actual curved silhouette. Used as-is
+      -- here, it could flag an asteroid far off to either side of the
+      -- dome (well outside its halfWidth) as "touching the surface"
+      -- just for being at the right height. The dome/base-specific
+      -- checks below already correctly cover both halves of its real
+      -- shape, so it doesn't need this generic fallback at all.
+      if not p.isSkyDome then
+        local dist = self:distanceToPlanetSurface(a.pos, p)
+        if dist < a.radius then
+          toBreak[a] = true
+        end
       end
 
       if type(p.nearestDomeSurfacePoint) == "function" then
