@@ -7,6 +7,7 @@ local Planetoid = require("lua.world.Planetoid")
 local Player = require("lua.entities.Player")
 local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
+local Ooomba = require("lua.entities.Ooomba")
 local Explosion = require("lua.entities.Explosion")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
@@ -38,6 +39,20 @@ local HOME_CELL_ROW = 9
 function love.load()
   love.window.setTitle("Asteroid Bob")
 
+  -- Pixel-art default: LÖVE's own default is "linear" filtering, which
+  -- blends neighboring texels — including across tile boundaries in a
+  -- shared atlas image (img/platform.png) the moment it's sampled while
+  -- baking TiledTerrain's level canvas. That's what caused both the faint
+  -- seam lines between tiles (bleeding a sliver of the adjacent tile's
+  -- edge color) and the overall soft/anti-aliased look instead of crisp
+  -- SNES-style pixels. Must be set before any image/canvas is created —
+  -- it only affects textures loaded after this call, not retroactively —
+  -- so this has to run before assetLoading.loadAssets() below. Anything
+  -- that specifically wants smooth shading instead (Planetoid's canvas)
+  -- already sets its own filter explicitly afterward, which overrides
+  -- this default for that one texture only.
+  love.graphics.setDefaultFilter("nearest", "nearest")
+
   worldGen.initWorldSize()
 
   state.zoom = 1
@@ -55,6 +70,7 @@ function love.load()
   state.level = 1
   state.fireballs = {}
   state.explosions = {}
+  state.wallContactPulses = {}
   state.fireBars = state.fireBars or {}
   state.cellCheckCounter = 0
   state.minimap = MiniMap.new()
@@ -102,6 +118,21 @@ function love.load()
       table.insert(state.planetoids, shape)
     end
     state.tiledLevels = { terrainLevel }
+
+    -- Ooombas patrol the walkable terrain shapes (replacing the old
+    -- JumpPlatform-based patrol) — one per shape with enough room to
+    -- actually walk back and forth; a shorter shape would put its two
+    -- inset turn-around bounds past each other, so it'd just flip
+    -- direction in place every frame instead of patrolling.
+    local OOMBA_MIN_SHAPE_LENGTH = 200
+    state.ooombas = {}
+    for i, shape in ipairs(terrainLevel.shapes) do
+      if shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH then
+        local startArcPos = shape:getPerimeter() / 2
+        local direction = (i % 2 == 0) and 1 or -1
+        table.insert(state.ooombas, Ooomba.new(shape, startArcPos, { direction = direction }))
+      end
+    end
   end
 
   local topY = dome:trueSurfaceY()
@@ -207,6 +238,12 @@ function love.update(dt)
     end
   end
 
+  if state.ooombas then
+    for _, o in ipairs(state.ooombas) do
+      o:update()
+    end
+  end
+
   if state.fireBars then
     for _, bar in ipairs(state.fireBars) do
       bar:update()
@@ -224,6 +261,20 @@ function love.update(dt)
   state.player:update()
 
   collisionSystem:handlePlayerPlanetCollisions(state.player)
+
+  if state.tiledLevels then
+    -- Reset once per frame, before re-checking every level's walls below
+    -- — handlePlayerWallCollisions only ever SETS this (on actual
+    -- contact), never clears it, so without this the flag would latch
+    -- true forever after the first touch instead of reflecting only
+    -- THIS frame's contact (see Player:jump's wall-jump branch).
+    state.player.touchingWall = nil
+    state.player.wallContactNormal = nil
+    for _, level in ipairs(state.tiledLevels) do
+      collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
+    end
+  end
+
   collisionSystem:handleElasticCollisions(state.planetoids)
 
   -- Any planetoid tagged isImmovable (the sky dome and its TiledTerrain
@@ -318,6 +369,17 @@ function love.update(dt)
       state.explosions[i]:update()
       if state.explosions[i]:isDead() then
         table.remove(state.explosions, i)
+      end
+    end
+  end
+
+  -- Wall-jump contact rings: purely time-driven visuals, same pattern as
+  -- explosions above (see lua/entities/WallContactPulse.lua)
+  if state.wallContactPulses then
+    for i = #state.wallContactPulses, 1, -1 do
+      state.wallContactPulses[i]:update()
+      if state.wallContactPulses[i]:isDead() then
+        table.remove(state.wallContactPulses, i)
       end
     end
   end
@@ -421,9 +483,23 @@ function love.draw()
               love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
             end
           end
+          love.graphics.setColor(0.2, 0.6, 1, 1)
+          for _, wall in ipairs(level.walls or {}) do
+            love.graphics.rectangle("line",
+              wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
+              wall.halfWidth * 2, wall.halfHeight * 2)
+          end
           love.graphics.setColor(1, 1, 1, 1)
           love.graphics.setLineWidth(1)
         end
+      end
+    end
+  end
+
+  if state.ooombas then
+    for _, o in ipairs(state.ooombas) do
+      if utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
+        o:draw()
       end
     end
   end
@@ -462,6 +538,12 @@ function love.draw()
   if state.explosions then
     for _, e in ipairs(state.explosions) do
       e:draw()
+    end
+  end
+
+  if state.wallContactPulses then
+    for _, p in ipairs(state.wallContactPulses) do
+      p:draw()
     end
   end
 

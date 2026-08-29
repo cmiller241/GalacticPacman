@@ -1,29 +1,40 @@
 -- lua/world/TiledTerrain.lua
 --
--- Loads a Tiled-exported Lua map (e.g. tiled/Level1.lua) into real,
--- walkable collision geometry plus a single baked-once rendering of the
--- whole tile grid.
+-- Loads a Tiled-exported Lua map (e.g. tiled/Level1.lua) into real
+-- collision geometry (walkable top surfaces AND solid walls) plus a
+-- single baked-once rendering of the whole tile grid.
 --
--- Tile roles, derived from GID ranges (see tiled/Grass Tiles.tsx — a
--- 9-column x 2-row, 32px tileset over img/platform.png):
---   local index 0-8 (GIDs 1-9, row 0)  = walkable top (flat or 45° slope)
---   local index 9-17 (GIDs 10-18, row 1) = solid background fill, not walkable
---   GID 0                                = empty
+-- Tile roles come from CUSTOM PROPERTIES authored per-tile in Tiled
+-- (tiled/Grass Tiles.tsx), not from GID/index ranges. An earlier version
+-- of this loader inferred role and slope direction from where a tile sat
+-- in the sheet — that broke silently the moment the two slope tile pairs
+-- turned out to anchor to opposite neighbors (confirmed only by testing),
+-- and would break again the same way for any future tile whose meaning
+-- doesn't happen to match the assumed ordinal convention. Explicit
+-- properties don't have that failure mode: adding a new tile is just
+-- "draw it, tag it," no code changes required.
 --
--- Slope DIRECTION and steepness are never read off the GID itself —
--- they're derived purely from comparing which grid ROW the walkable-top
--- tile sits in from one column to the next (flat = same row, 45° slope =
--- exactly one row different). This sidesteps ever having to hardcode
--- "GID 7 means sloping which way," which the tileset alone can't answer
--- unambiguously, and keeps working unchanged if more top-tile variants
--- are added later.
+-- Expected properties, set per-tile in the tileset (see buildTilePropertyLookup):
+--   role  = "top" (walkable — stand on it, land on it, jump through from
+--           below), "wall" (solid on every side — see WallShape below),
+--           or "fill" (pure decoration, no collision). Untagged tiles
+--           default to "fill".
+--   slope = "flat", "riseLeft", or "riseRight" — only meaningful when
+--           role == "top".
 --
--- Each shape built here is an OPEN path (a hill has two ends, unlike
--- RoundedRectPlanetoid's closed rectangle loop) — see the isOpenPath
--- flag and Player.lua's own walking code for the "fall off the end"
--- half of this. It's also deliberately NOT isSkyDome: this is meant to
--- be solid ground (collidable from every side), not a jump-through-
--- from-below floating platform.
+-- IMPORTANT: this requires the tileset to be EMBEDDED in the map (Tiled:
+-- right-click the tileset in the Tilesets panel -> "Embed Tileset in
+-- Map"). An external tileset reference (just name/firstgid/filename) never
+-- carries tile properties into the map's own Lua export — see
+-- buildTilePropertyLookup's assertion if this hasn't been done.
+--
+-- Each walkable shape built here is an OPEN path (a hill has two ends,
+-- unlike RoundedRectPlanetoid's closed rectangle loop) — see the
+-- isOpenPath flag and Player.lua's own walking code for the "fall off the
+-- end" half of this. It's also deliberately NOT isSkyDome: jump-through-
+-- from-below is handled by CollisionSystem's own swept crossing test
+-- instead (TerrainShape:findLandingCrossing), not the SkyDome gravity-
+-- window model.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -38,18 +49,18 @@ local TILE_SOURCE_SIZE = 32  -- px, matches tiled/Grass Tiles.tsx
 local TILE_SCALE = 2         -- same 2x convention JumpPlatform.lua already uses
 local TILE_WORLD_SIZE = TILE_SOURCE_SIZE * TILE_SCALE  -- 64 world units/tile
 
--- Matches tiled/Grass Tiles.tsx's own layout (288x64 = 9 cols x 2 rows).
--- Not derivable from the exported map data itself (external tileset
--- references only carry name/firstgid/filename, not their own image
--- dimensions) — would need updating if that tileset's shape changes.
-local TILESET_COLUMNS = 9
-local TOP_TILE_COUNT = 9 -- local indices [0, TOP_TILE_COUNT) are walkable top; the rest are fill
-local FLAT_INDEX_MAX = 4 -- local indices [0, FLAT_INDEX_MAX] are the 5 flat variants
+-- Fallback only — used if the embedded tileset def doesn't carry its own
+-- `columns` field for some reason. Normally read straight off the
+-- tileset data (see getTileQuadForLocalIndex), which stays correct
+-- automatically as the sheet grows (it went from 2 rows to 5 without any
+-- code change needed here).
+local DEFAULT_TILESET_COLUMNS = 9
 
-local SLOPE_SPEED_MULTIPLIER = 0.6 -- walking speed while on a 45-degree segment; flat stays 1.0
+local SLOPE_UPHILL_MULTIPLIER = 0.6   -- walking speed climbing a 45-degree segment; flat stays 1.0
+local SLOPE_DOWNHILL_MULTIPLIER = 1.4 -- walking speed descending a 45-degree segment
 
 ----------------------------------------------------------------------
--- Tileset GID -> local index
+-- Tileset GID -> role/slope, read from Tiled custom properties
 ----------------------------------------------------------------------
 
 local function findTileset(tilesets, gid)
@@ -62,50 +73,97 @@ local function findTileset(tilesets, gid)
   return best
 end
 
--- Returns "flat", "slopeAscRight", "slopeDescRight", "fill", or "empty".
---
--- The two slope tile pairs are NOT interchangeable — each anchors to a
--- DIFFERENT neighbor, confirmed by walking tiled/Level1.lua's actual
--- placements: local index 6 (GID7, used at columns 41 and 48) is placed
--- so its own row matches its LEFT neighbor's row and steps down one row
--- to the right ("descends going right"); local index 7 (GID8, used at
--- column 48 in a lower layer) is placed so its own row matches its RIGHT
--- neighbor's row and steps down one row to the left ("ascends going
--- right"). Treating both pairs the same way (inferring orientation from
--- which side the neighboring row differs, rather than from the tile's own
--- sub-type) is what shifted one of the two slope directions a full tile
--- off from its actual rendered position — see buildWorldSegments below,
--- which now keys directly off this per-tile classification instead of
--- guessing from row deltas.
-local function classifyGid(tilesets, gid)
+-- Tiled's Lua exporter emits a tile's custom properties as a flat
+-- { name = value } table. Defensively also accept the array-of-
+-- {name=,value=} shape (the JSON exporter's convention) in case a
+-- different Tiled version ever produces that instead — cheap to support,
+-- and fails loudly either way if neither shape is present (see the
+-- assertion in buildTilePropertyLookup) rather than silently guessing.
+local function readTileProperties(rawProperties)
+  if not rawProperties then return {} end
+  if rawProperties.role ~= nil or rawProperties.slope ~= nil then
+    return rawProperties
+  end
+  local out = {}
+  for _, entry in ipairs(rawProperties) do
+    if entry.name then out[entry.name] = entry.value end
+  end
+  return out
+end
+
+-- Builds a gid -> {role=, slope=} lookup from every tileset's embedded
+-- `tiles` array. Asserts loudly if a tileset has none — the near-certain
+-- cause is the tileset still being an external reference (just
+-- name/firstgid/filename) instead of embedded in the map, which silently
+-- carries no properties at all rather than an obviously-wrong value, so
+-- this is the one place worth failing hard instead of falling back to a
+-- guess.
+local function buildTilePropertyLookup(tilesets)
+  local byGid = {}
+  local anyTiles = false
+  for _, ts in ipairs(tilesets) do
+    if ts.tiles then
+      anyTiles = true
+      for _, tileDef in ipairs(ts.tiles) do
+        byGid[ts.firstgid + tileDef.id] = readTileProperties(tileDef.properties)
+      end
+    end
+  end
+  assert(anyTiles, "TiledTerrain.load: no embedded tile properties found — " ..
+    "the tileset must be embedded in the map (Tiled: right-click it in the " ..
+    "Tilesets panel -> \"Embed Tileset in Map\", then re-export)")
+  return byGid
+end
+
+-- Returns "flat", "riseRight", "riseLeft", "wall", "fill", or "empty",
+-- straight from that tile's own `role`/`slope` properties. Untagged or
+-- unrecognized-role tiles default to "fill" (matches the sheet's own
+-- convention — undecorated background dirt needs no explicit tagging).
+local function classifyGid(tileProps, gid)
   if gid == 0 then return "empty" end
-  local ts = findTileset(tilesets, gid)
-  if not ts then return "empty" end
-  local localIndex = gid - ts.firstgid -- 0-based
-  if localIndex <= FLAT_INDEX_MAX then return "flat" end
-  if localIndex < TOP_TILE_COUNT then
-    if localIndex == 5 or localIndex == 7 then return "slopeAscRight" end
-    return "slopeDescRight" -- localIndex 6 or 8
+  local props = tileProps[gid]
+  local role = props and props.role
+  if role == "wall" then return "wall" end
+  if role == "top" then
+    local slope = props.slope
+    if slope == "riseLeft" or slope == "riseRight" then return slope end
+    return "flat"
   end
   return "fill"
 end
 
+-- "wall" counts as walkable-top too, in addition to getting its own
+-- solid WallShape AABB elsewhere (see buildWallShapes) — a wall tile is
+-- solid rock: its vertical face blocks horizontal passage and is what a
+-- wall jump kicks off of, but its TOP is ordinary ground, exactly like a
+-- real cliff. Without this, a wall tile sitting flush against a walkable
+-- ledge (same row, adjacent column — the ordinary way to draw a cliff at
+-- the end of a plateau) would cut the walkable chain off one column short
+-- of where the ground actually ends, and a player or Ooomba walking to
+-- that true edge would clip the wall's AABB from above/the side instead
+-- of just standing on it like the rest of the ledge — confirmed against
+-- tiled/Level1.lua's own col17/row14 wall tile, placed exactly this way
+-- at the left end of the main plateau.
 local function isTopRole(role)
-  return role == "flat" or role == "slopeAscRight" or role == "slopeDescRight"
+  return role == "flat" or role == "riseRight" or role == "riseLeft" or role == "wall"
 end
 
 ----------------------------------------------------------------------
--- Shared baked quads (one 9x2 grid, reused by every loaded level)
+-- Shared baked quads (reused by every loaded level). Keyed only by
+-- localIndex, not by which tileset it came from — fine as long as this
+-- project uses a single tileset (true today); a second tileset with a
+-- different column count sharing a localIndex would need this cache
+-- keyed by (tileset, localIndex) instead.
 ----------------------------------------------------------------------
 
 local tileQuadCache = nil
 
-local function getTileQuadForLocalIndex(img, localIndex)
+local function getTileQuadForLocalIndex(img, localIndex, columns)
   if not tileQuadCache then tileQuadCache = {} end
   local quad = tileQuadCache[localIndex]
   if quad then return quad end
-  local col = localIndex % TILESET_COLUMNS
-  local row = math.floor(localIndex / TILESET_COLUMNS)
+  local col = localIndex % columns
+  local row = math.floor(localIndex / columns)
   local fullW, fullH = img:getDimensions()
   quad = love.graphics.newQuad(
     col * TILE_SOURCE_SIZE, row * TILE_SOURCE_SIZE,
@@ -233,7 +291,15 @@ function TerrainShape:worldPointAtArcPosition(s, pushDistance)
   local seg, point = self:segmentAtArcPosition(s)
   local normal = seg.normal
   if pushDistance ~= 0 then
-    point = point:clone():add(normal:clone():multiply(pushDistance))
+    -- Always straight up, never along the segment's own (possibly
+    -- diagonal) normal — this surface forces the player upright
+    -- regardless of slope (see Player:visualDownDirection), so the
+    -- resting offset has to match or the player's CENTER jumps sideways
+    -- by a chunk of pushDistance the instant a walk crosses from a flat
+    -- segment (normal straight up) onto a 45-degree one (normal
+    -- diagonal) or back. Since the camera tracks player.pos directly
+    -- with no smoothing, that jump reads as a camera jolt.
+    point = point:clone():add(Vector2.new(0, -pushDistance))
   end
   return { point = point, normal = normal }
 end
@@ -254,17 +320,31 @@ function TerrainShape:arcPositionForWorldPoint(worldX, worldY)
   return bestArc
 end
 
--- Walking-speed hook Player.lua looks for (duck-typed — see
--- lua/entities/Player.lua's generic isRoundedRect walking branch).
--- Steepness is binary here since every slope in this system is exactly
--- 45 degrees by construction: a segment either has a horizontal tangent
--- (flat) or it doesn't (slope).
-function TerrainShape:getArcSpeedMultiplier(s)
+-- Walking-speed hook Player.lua and Ooomba.lua look for (duck-typed —
+-- see Player.lua's generic isRoundedRect walking branch). Steepness is
+-- binary here since every slope in this system is exactly 45 degrees by
+-- construction: a segment either has a horizontal tangent (flat) or it
+-- doesn't (slope).
+--
+-- `direction` is the caller's own signed arc-length step for this update
+-- (ds for the player, ±1 for an Ooomba) — needed to tell uphill from
+-- downhill, which a segment's steepness alone can't: the same sloped
+-- segment is downhill walking one way along it and uphill walking the
+-- other. tangent always points toward increasing arc position; its sign
+-- says whether that direction climbs (tangent.y < 0, since y decreases
+-- upward) or descends (tangent.y > 0). direction * tangent.y is
+-- therefore positive when walking WITH that descent (downhill) and
+-- negative when walking AGAINST it (uphill).
+function TerrainShape:getArcSpeedMultiplier(s, direction)
   local seg = self:segmentAtArcPosition(s)
-  if math.abs(seg.tangent.y) > 0.01 then
-    return SLOPE_SPEED_MULTIPLIER
+  if math.abs(seg.tangent.y) <= 0.01 then
+    return 1.0
   end
-  return 1.0
+  direction = direction or 1
+  if direction * seg.tangent.y > 0 then
+    return SLOPE_DOWNHILL_MULTIPLIER
+  end
+  return SLOPE_UPHILL_MULTIPLIER
 end
 
 ----------------------------------------------------------------------
@@ -281,16 +361,58 @@ end
 -- every layer but the topmost, making the staircase underneath completely
 -- uncollidable even though it renders fine — see buildVertexRuns below for
 -- how multiple simultaneous layers are threaded into separate shapes.
-local function computeTopPointsByColumn(layer, tilesets, width, height)
+--
+-- WALL tiles get one extra check the others don't: only the TOPMOST
+-- EXPOSED wall tile of a stack counts (recorded only if the cell
+-- directly above it is empty). Wall tiles are routinely stacked many
+-- tiles deep to fill a cliff's solid body (confirmed against
+-- tiled/Level1.lua: column 14 is 8 wall tiles stacked solid, rows 14-21,
+-- no gaps) — without this check, every one of those buried tiles was
+-- ALSO recorded as its own walkable "floor," physically nonsensical
+-- (nothing can stand where solid rock is directly overhead), and worse,
+-- a buried wall tile several rows down could end up just one row away
+-- from an unrelated neighboring column's real shelf, letting the
+-- chain-builder connect them into a single shape with a genuine vertical
+-- jump in it — since a wall-kind vertex always draws its edges flat at
+-- its OWN row (see buildWorldSegments) regardless of what row it's
+-- chained from, that jump became a literal straight-up segment, walked
+-- via the same arc-length system as everything else, which is what made
+-- a character look like they were climbing a ladder up the tile.
+--
+-- Flat/slope tiles do NOT get this check, deliberately — they're only
+-- ever drawn one layer deep by design (a single cap over fill), so a
+-- non-empty cell above one is never a sign of being buried under more
+-- walkable surface; it's just ordinary terrain, like the decorative
+-- overhang tiles some ledges in tiled/Level1.lua actually have directly
+-- above them. Applying the wall-only check to these too briefly made
+-- every such ledge silently vanish from collision despite still
+-- rendering fine.
+local function computeTopPointsByColumn(layer, tileProps, width, height)
   local pointsByColumn = {}
   for col = 0, width - 1 do
     local rows = {}
     for row = 0, height - 1 do
       local gid = layer.data[row * width + col + 1] -- Lua 1-based, row-major
       if gid ~= 0 then
-        local role = classifyGid(tilesets, gid)
+        local role = classifyGid(tileProps, gid)
         if isTopRole(role) then
-          table.insert(rows, { row = row, kind = role })
+          -- Exposure check applies ONLY to "wall" — the one role that
+          -- gets stacked many tiles deep. Flat/slope tiles are recorded
+          -- unconditionally: they're always a single cap layer by design,
+          -- so a non-empty cell directly above one is never a sign of
+          -- being buried under more walkable surface — it's ordinary
+          -- terrain like a decorative overhang tile (a real case in
+          -- tiled/Level1.lua: some ledges have a fill tile immediately
+          -- above them), and excluding those wrongly made real, walkable
+          -- ledges disappear from collision entirely.
+          if role ~= "wall" then
+            table.insert(rows, { row = row, kind = role })
+          else
+            local aboveGid = row > 0 and layer.data[(row - 1) * width + col + 1] or 0
+            if aboveGid == 0 then
+              table.insert(rows, { row = row, kind = role })
+            end
+          end
         end
       end
     end
@@ -361,10 +483,10 @@ end
 -- single point at its center — a flat tile's left and right edges are
 -- both at its own row, tracing a plain horizontal line; a slope tile's
 -- two edges sit at DIFFERENT rows (one tile's own row, the other one row
--- off), exactly which edge is which determined by its `kind`
--- (slopeAscRight / slopeDescRight, set in classifyGid — the two slope tile
--- pairs anchor to opposite neighbors and are not interchangeable, see its
--- comment). Consecutive columns' shared edge always lines up exactly, so
+-- off), exactly which edge is which determined by its `kind` (the tile's
+-- own `slope` property — "riseLeft" and "riseRight" tiles anchor to
+-- opposite neighbors and are not interchangeable). Consecutive columns'
+-- shared edge always lines up exactly, so
 -- the duplicate point is simply dropped, leaving a minimal, pixel-accurate
 -- polyline with no separate "extend the outer ends" step needed — the
 -- first and last points are already true tile edges.
@@ -383,9 +505,9 @@ local function buildWorldSegments(vertices, anchorX, anchorY)
 
   for _, v in ipairs(vertices) do
     local leftRow, rightRow
-    if v.kind == "slopeDescRight" then
+    if v.kind == "riseLeft" then
       leftRow, rightRow = v.row, v.row + 1
-    elseif v.kind == "slopeAscRight" then
+    elseif v.kind == "riseRight" then
       leftRow, rightRow = v.row + 1, v.row
     else
       leftRow, rightRow = v.row, v.row
@@ -464,6 +586,58 @@ local function newShape(segments)
 end
 
 ----------------------------------------------------------------------
+-- WallShape — a solid axis-aligned rectangle, blocking the player from
+-- every side. Unlike TerrainShape (a one-way "stand on top of me"
+-- surface with its own arc-length walking API), a wall has no surface to
+-- walk along — it's plain circle-vs-rectangle collision, handled
+-- entirely in CollisionSystem:handlePlayerWallCollisions. Just a plain
+-- table (pos/halfWidth/halfHeight/radius), not a TerrainShape.
+----------------------------------------------------------------------
+
+-- Scans each row for horizontal runs of "wall"-role tiles and merges each
+-- run into one wide rectangle (same "don't emit one collider per tile"
+-- reasoning TerrainShape's own segment coalescing uses). Runs are NOT
+-- merged vertically across rows — a tall wall becomes a stack of
+-- full-width rectangles rather than one tall one — which is a deliberate
+-- simplicity trade, not a correctness issue: a stack of rectangles
+-- collides identically to one tall rectangle.
+local function buildWallShapes(layer, tileProps, width, height, anchorX, anchorY)
+  local walls = {}
+
+  local function addWallRun(row, startCol, endCol)
+    local x0 = anchorX + startCol * TILE_WORLD_SIZE
+    local x1 = anchorX + (endCol + 1) * TILE_WORLD_SIZE
+    local y0 = anchorY + row * TILE_WORLD_SIZE
+    local y1 = anchorY + (row + 1) * TILE_WORLD_SIZE
+    local halfWidth, halfHeight = (x1 - x0) / 2, (y1 - y0) / 2
+    table.insert(walls, {
+      pos = Vector2.new((x0 + x1) / 2, (y0 + y1) / 2),
+      halfWidth = halfWidth,
+      halfHeight = halfHeight,
+      radius = math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight),
+      isWall = true,
+    })
+  end
+
+  for row = 0, height - 1 do
+    local runStartCol = nil
+    for col = 0, width - 1 do
+      local gid = layer.data[row * width + col + 1]
+      local isWallTile = gid ~= 0 and classifyGid(tileProps, gid) == "wall"
+      if isWallTile and not runStartCol then
+        runStartCol = col
+      elseif not isWallTile and runStartCol then
+        addWallRun(row, runStartCol, col - 1)
+        runStartCol = nil
+      end
+    end
+    if runStartCol then addWallRun(row, runStartCol, width - 1) end
+  end
+
+  return walls
+end
+
+----------------------------------------------------------------------
 -- Whole-level renderer — baked ONCE to a single canvas, never rebuilt
 -- per frame (see SkyDomePlanetoid's own foreground-hex-grid history for
 -- exactly why a per-frame rebuild of something static is worth avoiding).
@@ -493,9 +667,10 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
 
   local width, height = mapData.width, mapData.height
   local tilesets = mapData.tilesets
+  local tileProps = buildTilePropertyLookup(tilesets)
 
   -- Collision: derive shapes from the walkable-top height profile.
-  local pointsByColumn = computeTopPointsByColumn(layer, tilesets, width, height)
+  local pointsByColumn = computeTopPointsByColumn(layer, tileProps, width, height)
   local runs = buildVertexRuns(pointsByColumn, width)
   local shapes = {}
   for _, run in ipairs(runs) do
@@ -505,9 +680,14 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     end
   end
 
+  -- Collision: solid walls, entirely separate from the walkable shapes
+  -- above — see WallShape's own comment for why these are plain rects
+  -- rather than TerrainShape instances.
+  local walls = buildWallShapes(layer, tileProps, width, height, anchorX, anchorY)
+
   -- Rendering: bake the ENTIRE grid (fill tiles included — rendering
-  -- doesn't care about the walkable/fill distinction, only collision does)
-  -- to one canvas, once.
+  -- doesn't care about the walkable/fill/wall distinction, only collision
+  -- does) to one canvas, once.
   local canvas = nil
   local img = state.platformTexture
   if img then
@@ -524,7 +704,8 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
           local ts = findTileset(tilesets, gid)
           if ts then
             local localIndex = gid - ts.firstgid
-            local quad = getTileQuadForLocalIndex(img, localIndex)
+            local columns = ts.columns or DEFAULT_TILESET_COLUMNS
+            local quad = getTileQuadForLocalIndex(img, localIndex, columns)
             love.graphics.draw(img, quad, col * TILE_WORLD_SIZE, row * TILE_WORLD_SIZE, 0, TILE_SCALE, TILE_SCALE)
           end
         end
@@ -540,6 +721,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
 
   local level = setmetatable({
     shapes = shapes,
+    walls = walls,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

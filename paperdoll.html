@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Paperdoll — Astronaut Rig Editor</title>
+<style>
+  :root {
+    --bg: #1b1e24;
+    --panel: #23272f;
+    --panel2: #2b3038;
+    --border: #3a4049;
+    --text: #e6e8eb;
+    --text-dim: #9aa2ad;
+    --accent: #4fa3ff;
+    --accent2: #ff7a5c;
+    --ok: #59d38c;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
+  .app { display: flex; height: 100%; }
+  .canvas-panel {
+    flex: 1; display: flex; flex-direction: column; min-width: 0;
+    background:
+      linear-gradient(var(--bg), var(--bg));
+  }
+  .canvas-toolbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .canvas-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+  .canvas-toolbar input[type=range] { width: 110px; }
+  .canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+  #stage { position: absolute; top: 0; left: 0; cursor: crosshair; }
+  .hint {
+    position: absolute; left: 10px; bottom: 10px; color: var(--text-dim);
+    background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 6px; max-width: 420px;
+    pointer-events: none;
+  }
+  .sidebar {
+    width: 360px; flex-shrink: 0; background: var(--panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  .section { border-bottom: 1px solid var(--border); padding: 10px 12px; }
+  .section h2 {
+    margin: 0 0 8px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-dim); font-weight: 600;
+  }
+  .layer-row {
+    display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 5px;
+    cursor: pointer; user-select: none;
+  }
+  .layer-row:hover { background: var(--panel2); }
+  .layer-row.selected { background: #2f4a70; }
+  .layer-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .layer-row .kind { color: var(--text-dim); font-size: 10px; }
+  .layer-row button {
+    background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px;
+    padding: 2px 5px; border-radius: 4px;
+  }
+  .layer-row button:hover { background: var(--border); color: var(--text); }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .row label { width: 78px; flex-shrink: 0; color: var(--text-dim); }
+  .row input[type=number] {
+    width: 72px; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 3px 6px;
+  }
+  .row input[type=range] { flex: 1; }
+  .row input[type=checkbox] { width: 16px; height: 16px; }
+  .btn {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0a1420; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .mode-toggle { display: flex; gap: 4px; margin-bottom: 8px; }
+  .mode-toggle .btn { flex: 1; }
+  .mode-toggle .btn.active { background: var(--accent2); border-color: var(--accent2); color: #241008; font-weight: 600; }
+  #fileInput { display: none; }
+  #log {
+    background: #14161a; border: 1px solid var(--border); border-radius: 5px; padding: 8px;
+    font: 11px/1.5 "Consolas", "SF Mono", monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow-y: auto; margin: 0;
+  }
+  input[type=text] {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 7px;
+  }
+  select {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 7px;
+  }
+  .empty-msg { color: var(--text-dim); font-style: italic; padding: 4px 6px; }
+  .legend { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+  .legend span.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="canvas-panel">
+    <div class="canvas-toolbar">
+      <label>Preview orientation
+        <input type="range" id="orientationSlider" min="-180" max="180" value="0">
+        <span id="orientationVal">0°</span>
+      </label>
+      <label>Body scale
+        <input type="range" id="scaleSlider" min="0.03" max="0.25" step="0.005" value="0.1">
+        <span id="scaleVal">0.100</span>
+      </label>
+      <label>View zoom
+        <input type="range" id="zoomSlider" min="0.5" max="3" step="0.05" value="1">
+        <span id="zoomVal">1.00x</span>
+      </label>
+      <label><input type="checkbox" id="gridToggle" checked> grid</label>
+      <button class="btn" id="resetViewBtn">Reset view</button>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="stage"></canvas>
+      <div class="hint" id="hint">Drag the image to move it. Drag the red dot to rotate. Scroll to zoom, middle/right-drag (or space+drag) to pan the workspace.</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+
+    <div class="section">
+      <h2>Layers (top = drawn last / in front)</h2>
+      <div id="layerList"></div>
+      <div class="btn-row">
+        <button class="btn" id="addImageBtn">+ Add image…</button>
+        <input type="file" id="fileInput" accept="image/png,image/*" multiple>
+        <button class="btn" id="resetAllBtn">Reset to game defaults</button>
+      </div>
+    </div>
+
+    <div class="section" id="propsSection">
+      <h2>Selected layer</h2>
+      <div id="propsBody"><div class="empty-msg">No layer selected.</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Pose presets (this browser only)</h2>
+      <div class="row"><input type="text" id="presetName" placeholder="pose name, e.g. crouch"></div>
+      <div class="btn-row">
+        <button class="btn primary" id="savePresetBtn">Save pose</button>
+        <select id="presetSelect"><option value="">— load saved pose —</option></select>
+        <button class="btn" id="loadPresetBtn">Load</button>
+        <button class="btn" id="deletePresetBtn">Delete</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Export / log</h2>
+      <div class="btn-row">
+        <button class="btn primary" id="logBtn">Log current pose</button>
+        <button class="btn" id="copyBtn">Copy to clipboard</button>
+      </div>
+      <div class="legend">Logs here AND to the browser console (F12). Report the "pose name" plus this block back and it plugs straight into Player.lua — angles/offsets are already in the exact units drawFullBody uses.</div>
+      <pre id="log">(nothing logged yet)</pre>
+    </div>
+
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------
+// Data model. Mirrors lua/entities/Player.lua's actual rendering exactly:
+//   - "limb" layers (arms/boots, or anything you add) use drawLimb's
+//     formula: an (x,y) attach offset rotated into place, then the
+//     image's own (jointX,jointY) pixel is what lands at that attach
+//     point, then an independent `angle` on top.
+//   - "body" uses drawFullBody's body-drawing block: no independent
+//     attach offset (always exactly at the body origin) and no
+//     independent angle — only a vertical offset `y`.
+//   - "head" mirrors the head-drawing block: vertical offset `y` only
+//     (always horizontally centered), a pivot expressed as a FRACTION
+//     of the image's own height (matching headPivotFraction), and an
+//     independent `angle`.
+// Values are stored in the same units Player.lua uses (sprite pixels
+// for x/y/jointX/jointY, RADIANS for angle internally — the UI shows
+// degrees and converts), so nothing here needs unit conversion when you
+// report it back.
+// ---------------------------------------------------------------------
+
+const DEFAULT_LAYERS = [
+  // name        file                     kind    x      y     jointX jointY  flip
+  ["leftboot",  "img/leftboot.png",  "limb", 111,   241,   83,    15,   false],
+  ["leftarm",   "img/leftarm.png",   "limb", 136,   9,     73,    199,  false],
+  ["body",      "img/body.png",      "body", 0,     115,   null,  null, false],
+  ["rightboot", "img/rightboot.png", "limb", -142,  241,   77,    15,   false],
+  ["rightarm",  "img/rightarm.png",  "limb", -186,  -14,   119,   40,   false],
+  ["head",      "img/head.png",      "head", 0,     -150,  null,  0.9,  false],
+];
+
+let layers = [];       // z-order array, index 0 = drawn first (back)
+let nextId = 1;
+let selectedId = null;
+let pivotEditMode = false;
+
+const state = {
+  orientationDeg: 0,   // preview only — real orientation comes from physics in-game
+  bodyScale: 0.1,
+  viewZoom: 1,
+  viewOffsetX: 0,
+  viewOffsetY: 0,
+  showGrid: true,
+};
+
+function makeLayer(name, kind, img, x, y, jointX, jointY, flip) {
+  const w = img.naturalWidth || img.width || 100;
+  const h = img.naturalHeight || img.height || 100;
+  return {
+    id: nextId++,
+    name,
+    kind,               // "limb" | "body" | "head"
+    img,
+    visible: true,
+    x: x || 0,
+    y: y || 0,
+    jointX: (jointX == null) ? w / 2 : jointX,
+    jointY: (jointY == null) ? h / 2 : jointY,
+    pivotFraction: (kind === "head") ? (jointY == null ? 0.9 : jointY) : 0.9,
+    angleDeg: 0,
+    flip: !!flip,
+  };
+}
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+async function loadDefaults() {
+  for (const [name, src, kind, x, y, jointX, jointY, flip] of DEFAULT_LAYERS) {
+    const img = await loadImage(src);
+    if (!img) {
+      logMessage(`Could not load ${src} — is paperdoll.html sitting at the project root, next to the img/ folder?`);
+      continue;
+    }
+    const layer = makeLayer(name, kind, img, x, y, jointX, jointY, flip);
+    layers.push(layer);
+  }
+  if (layers.length) selectedId = layers.find(l => l.name === "body")?.id ?? layers[0].id;
+  rebuildLayerList();
+  renderProps();
+  render();
+}
+
+// ---------------------------------------------------------------------
+// Canvas / rendering
+// ---------------------------------------------------------------------
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  canvas.width = wrap.width;
+  canvas.height = wrap.height;
+  render();
+}
+window.addEventListener("resize", resizeCanvas);
+
+function originScreenPos() {
+  // Body origin, in canvas pixels, before view pan/zoom is applied on
+  // top — kept roughly centered with room for legs below / head above.
+  return { x: canvas.width / 2, y: canvas.height * 0.55 };
+}
+
+function toView(x, y) {
+  const o = originScreenPos();
+  return {
+    x: o.x + state.viewOffsetX + (x - o.x) * state.viewZoom,
+    y: o.y + state.viewOffsetY + (y - o.y) * state.viewZoom,
+  };
+}
+
+function orientationRad() { return state.orientationDeg * Math.PI / 180; }
+
+// World-space (pre-view-zoom) attach point for a limb/head layer.
+function attachPoint(layer, originWorld) {
+  const o = orientationRad();
+  const cosO = Math.cos(o), sinO = Math.sin(o);
+  if (layer.kind === "body") {
+    return { x: originWorld.x, y: originWorld.y };
+  }
+  if (layer.kind === "head") {
+    // headWX = -headY*sin, headWY = headY*cos  (x is always locked to 0)
+    const wx = -layer.y * sinO;
+    const wy = layer.y * cosO;
+    return { x: originWorld.x + wx * state.bodyScale, y: originWorld.y + wy * state.bodyScale };
+  }
+  // limb
+  const wx = layer.x * cosO - layer.y * sinO;
+  const wy = layer.x * sinO + layer.y * cosO;
+  return { x: originWorld.x + wx * state.bodyScale, y: originWorld.y + wy * state.bodyScale };
+}
+
+function drawLayerImage(layer, originWorld) {
+  const img = layer.img;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const s = state.bodyScale;
+  const o = orientationRad();
+  const pt = attachPoint(layer, originWorld);
+
+  ctx.save();
+  ctx.translate(pt.x, pt.y);
+
+  if (layer.kind === "body") {
+    ctx.rotate(o); // body always matches orientation exactly, no independent angle
+    ctx.drawImage(img, -w * s / 2, layer.y * s - h * s / 2, w * s, h * s);
+  } else if (layer.kind === "head") {
+    ctx.rotate(o + (layer.angleDeg * Math.PI / 180));
+    const pivotY = h * s * layer.pivotFraction;
+    ctx.drawImage(img, -w * s / 2, -pivotY, w * s, h * s);
+  } else {
+    ctx.rotate(o + (layer.angleDeg * Math.PI / 180));
+    if (layer.flip) ctx.scale(-1, 1);
+    ctx.drawImage(img, -layer.jointX * s, -layer.jointY * s, w * s, h * s);
+  }
+  ctx.restore();
+}
+
+function drawGrid(originWorld) {
+  if (!state.showGrid) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  const step = 50;
+  const range = 1200;
+  for (let gx = -range; gx <= range; gx += step) {
+    const a = toView(originWorld.x + gx, originWorld.y - range);
+    const b = toView(originWorld.x + gx, originWorld.y + range);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  for (let gy = -range; gy <= range; gy += step) {
+    const a = toView(originWorld.x - range, originWorld.y + gy);
+    const b = toView(originWorld.x + range, originWorld.y + gy);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  // origin crosshair
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  const o = toView(originWorld.x, originWorld.y);
+  ctx.beginPath(); ctx.moveTo(o.x - 14, o.y); ctx.lineTo(o.x + 14, o.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(o.x, o.y - 14); ctx.lineTo(o.x, o.y + 14); ctx.stroke();
+  ctx.restore();
+}
+
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const originWorld = originScreenPos();
+
+  // Draw into an offscreen-equivalent by applying the view pan/zoom via
+  // a single canvas transform, so layer math above can stay in plain
+  // "world" (unzoomed) coordinates.
+  ctx.save();
+  const o = originScreenPos();
+  ctx.translate(o.x + state.viewOffsetX, o.y + state.viewOffsetY);
+  ctx.scale(state.viewZoom, state.viewZoom);
+  ctx.translate(-o.x, -o.y);
+
+  drawGrid(originWorld);
+  for (const layer of layers) {
+    if (layer.visible) drawLayerImage(layer, originWorld);
+  }
+  drawHandles(originWorld);
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------
+// Selection handles (drawn in the SAME zoomed/panned space as the art,
+// since drawHandles runs inside render()'s save/restore block).
+// ---------------------------------------------------------------------
+
+function selectedLayer() { return layers.find(l => l.id === selectedId) || null; }
+
+function drawHandles(originWorld) {
+  const layer = selectedLayer();
+  if (!layer) return;
+  const pt = attachPoint(layer, originWorld);
+  const s = state.bodyScale;
+
+  // Position handle (blue) — drag to move x/y (body: y only, head: y only).
+  ctx.save();
+  ctx.fillStyle = pivotEditMode ? "rgba(79,163,255,0.35)" : "#4fa3ff";
+  ctx.strokeStyle = "#0a1420";
+  ctx.lineWidth = 1.5 / state.viewZoom;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, 7 / state.viewZoom, 0, Math.PI * 2);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  if (layer.kind !== "body") {
+    // Rotation handle (red) — fixed radius from the attach point, in the
+    // direction of the layer's current total rotation.
+    const totalAngle = orientationRad() + (layer.angleDeg * Math.PI / 180);
+    const radius = 55 / state.viewZoom;
+    const hx = pt.x + Math.cos(totalAngle) * radius;
+    const hy = pt.y + Math.sin(totalAngle) * radius;
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,122,92,0.6)";
+    ctx.lineWidth = 1.5 / state.viewZoom;
+    ctx.beginPath(); ctx.moveTo(pt.x, pt.y); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.fillStyle = pivotEditMode ? "rgba(255,122,92,0.35)" : "#ff7a5c";
+    ctx.beginPath(); ctx.arc(hx, hy, 6 / state.viewZoom, 0, Math.PI * 2); ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (pivotEditMode && layer.kind === "limb") {
+    // Pivot crosshair (green) — shows which source pixel currently sits
+    // at the attach point. Position is, BY DEFINITION, always exactly
+    // the attach point itself while not dragging (that's what "pivot"
+    // means) — see beginPivotDrag/dragPivot for how this actually lets
+    // you pick a different pixel without the image jumping around.
+    ctx.save();
+    ctx.strokeStyle = "#59d38c";
+    ctx.lineWidth = 2 / state.viewZoom;
+    const r = 10 / state.viewZoom;
+    ctx.beginPath(); ctx.moveTo(pt.x - r, pt.y); ctx.lineTo(pt.x + r, pt.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pt.x, pt.y - r); ctx.lineTo(pt.x, pt.y + r); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Hit testing / coordinate inversion
+// ---------------------------------------------------------------------
+
+function screenToWorld(sx, sy) {
+  const o = originScreenPos();
+  return {
+    x: o.x + (sx - o.x - state.viewOffsetX) / state.viewZoom,
+    y: o.y + (sy - o.y - state.viewOffsetY) / state.viewZoom,
+  };
+}
+
+// Inverse of drawLayerImage's transform for "limb"/"head" kinds: given a
+// WORLD point, returns the corresponding pixel coordinate in the
+// layer's own unrotated source image.
+function worldToLocalPixel(layer, worldPt, originWorld) {
+  const pt = attachPoint(layer, originWorld);
+  const s = state.bodyScale;
+  const totalAngle = orientationRad() + (layer.kind === "body" ? 0 : layer.angleDeg * Math.PI / 180);
+  const dx = worldPt.x - pt.x, dy = worldPt.y - pt.y;
+  const cosA = Math.cos(-totalAngle), sinA = Math.sin(-totalAngle);
+  let lx = dx * cosA - dy * sinA;
+  let ly = dx * sinA + dy * cosA;
+  if (layer.kind === "limb" && layer.flip) lx = -lx;
+  return { px: lx / s + (layer.jointX || 0), py: ly / s + (layer.jointY || 0) };
+}
+
+function hitTestLayer(layer, worldPt, originWorld) {
+  if (layer.kind === "body" || layer.kind === "head") {
+    // Centered horizontally by design — treat as a generous circular hit area.
+    const pt = attachPoint(layer, originWorld);
+    const dist = Math.hypot(worldPt.x - pt.x, worldPt.y - pt.y);
+    return dist < (Math.max(layer.img.naturalWidth, layer.img.naturalHeight) * state.bodyScale) / 2;
+  }
+  const { px, py } = worldToLocalPixel(layer, worldPt, originWorld);
+  return px >= 0 && px <= layer.img.naturalWidth && py >= 0 && py <= layer.img.naturalHeight;
+}
+
+function topLayerAt(worldPt, originWorld) {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
+    if (l.visible && hitTestLayer(l, worldPt, originWorld)) return l;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------
+// Pointer interaction
+// ---------------------------------------------------------------------
+
+let drag = null; // { type: 'move'|'rotate'|'pivot'|'pan', ... }
+let spaceHeld = false;
+
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("mousedown", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const worldPt = screenToWorld(sx, sy);
+  const originWorld = originScreenPos();
+
+  if (e.button === 1 || e.button === 2 || spaceHeld) {
+    drag = { type: "pan", startSx: sx, startSy: sy, startOX: state.viewOffsetX, startOY: state.viewOffsetY };
+    e.preventDefault();
+    return;
+  }
+
+  const layer = selectedLayer();
+  if (layer) {
+    // Rotation handle hit test
+    if (layer.kind !== "body") {
+      const pt = attachPoint(layer, originWorld);
+      const totalAngle = orientationRad() + (layer.angleDeg * Math.PI / 180);
+      const radius = 55;
+      const hx = pt.x + Math.cos(totalAngle) * radius;
+      const hy = pt.y + Math.sin(totalAngle) * radius;
+      if (Math.hypot(worldPt.x - hx, worldPt.y - hy) < 12 / state.viewZoom) {
+        drag = { type: "rotate", layer, pt };
+        return;
+      }
+    }
+    if (pivotEditMode && layer.kind === "limb") {
+      drag = { type: "pivot", layer, originWorld };
+      dragPivot(sx, sy); // set immediately on click too, not just on move
+      return;
+    }
+    // Position handle / body hit test
+    const pt = attachPoint(layer, originWorld);
+    if (Math.hypot(worldPt.x - pt.x, worldPt.y - pt.y) < 12 / state.viewZoom || hitTestLayer(layer, worldPt, originWorld)) {
+      drag = { type: "move", layer, startWorld: worldPt, startX: layer.x, startY: layer.y };
+      return;
+    }
+  }
+
+  // Otherwise, try selecting whatever's under the cursor.
+  const hit = topLayerAt(worldPt, originWorld);
+  if (hit) {
+    selectLayer(hit.id);
+  }
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!drag) return;
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  if (drag.type === "pan") {
+    state.viewOffsetX = drag.startOX + (sx - drag.startSx);
+    state.viewOffsetY = drag.startOY + (sy - drag.startSy);
+    render();
+    return;
+  }
+
+  const worldPt = screenToWorld(sx, sy);
+
+  if (drag.type === "move") {
+    const dx = (worldPt.x - drag.startWorld.x) / state.bodyScale;
+    const dy = (worldPt.y - drag.startWorld.y) / state.bodyScale;
+    const o = orientationRad();
+    const cosO = Math.cos(-o), sinO = Math.sin(-o);
+    if (drag.layer.kind === "limb") {
+      // Un-rotate the screen delta by orientation to get local (x,y) delta.
+      const localDx = dx * cosO - dy * sinO;
+      const localDy = dx * sinO + dy * cosO;
+      drag.layer.x = round2(drag.startX + localDx);
+      drag.layer.y = round2(drag.startY + localDy);
+    } else {
+      // body / head: vertical-only, in the ALREADY-rotated frame (no
+      // un-rotation — see drawLayerImage, their y offset is applied
+      // post-rotation, unlike a limb's x/y).
+      const alongY = dx * -Math.sin(o) + dy * Math.cos(o); // component along local +Y
+      drag.layer.y = round2(drag.startY + alongY);
+    }
+    renderProps();
+    render();
+    return;
+  }
+
+  if (drag.type === "rotate") {
+    const ang = Math.atan2(worldPt.y - drag.pt.y, worldPt.x - drag.pt.x);
+    let deg = (ang - orientationRad()) * 180 / Math.PI;
+    // normalize to [-180,180)
+    deg = ((deg + 180) % 360 + 360) % 360 - 180;
+    drag.layer.angleDeg = round2(deg);
+    renderProps();
+    render();
+    return;
+  }
+
+  if (drag.type === "pivot") {
+    dragPivot(sx, sy);
+  }
+});
+
+function dragPivot(sx, sy) {
+  const worldPt = screenToWorld(sx, sy);
+  const { px, py } = worldToLocalPixel(drag.layer, worldPt, drag.originWorld);
+  drag.layer.jointX = round2(px);
+  drag.layer.jointY = round2(py);
+  renderProps();
+  render();
+}
+
+window.addEventListener("mouseup", () => { drag = null; });
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const before = screenToWorld(sx, sy);
+  state.viewZoom = clamp(state.viewZoom * (e.deltaY < 0 ? 1.1 : 0.9), 0.2, 6);
+  const after = screenToWorld(sx, sy);
+  // Keep the point under the cursor stationary while zooming.
+  state.viewOffsetX += (after.x - before.x) * state.viewZoom;
+  state.viewOffsetY += (after.y - before.y) * state.viewZoom;
+  document.getElementById("zoomSlider").value = state.viewZoom;
+  document.getElementById("zoomVal").textContent = state.viewZoom.toFixed(2) + "x";
+  render();
+}, { passive: false });
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { spaceHeld = true; canvas.style.cursor = "grab"; }
+  const layer = selectedLayer();
+  if (!layer) return;
+  if (document.activeElement && (document.activeElement.tagName === "INPUT")) return; // don't steal arrow keys from number fields
+  const step = e.shiftKey ? 10 : 1;
+  let handled = true;
+  if (e.key === "ArrowLeft") layer.kind === "limb" ? layer.x -= step : null;
+  else if (e.key === "ArrowRight") layer.kind === "limb" ? layer.x += step : null;
+  else if (e.key === "ArrowUp") layer.y -= step;
+  else if (e.key === "ArrowDown") layer.y += step;
+  else handled = false;
+  if (handled) { e.preventDefault(); renderProps(); render(); }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") { spaceHeld = false; canvas.style.cursor = "crosshair"; }
+});
+
+function round2(n) { return Math.round(n * 100) / 100; }
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+// ---------------------------------------------------------------------
+// Sidebar: layer list
+// ---------------------------------------------------------------------
+
+function selectLayer(id) {
+  selectedId = id;
+  rebuildLayerList();
+  renderProps();
+  render();
+}
+
+function rebuildLayerList() {
+  const list = document.getElementById("layerList");
+  list.innerHTML = "";
+  if (!layers.length) {
+    list.innerHTML = '<div class="empty-msg">No layers loaded.</div>';
+    return;
+  }
+  // Show top-of-stack (drawn last / in front) first, since that's how
+  // a normal layers panel reads.
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const layer = layers[i];
+    const row = document.createElement("div");
+    row.className = "layer-row" + (layer.id === selectedId ? " selected" : "");
+    row.innerHTML = `
+      <input type="checkbox" ${layer.visible ? "checked" : ""} title="show/hide">
+      <span class="name">${layer.name}</span>
+      <span class="kind">${layer.kind}</span>
+      <button data-act="up" title="move up (in front)">▲</button>
+      <button data-act="down" title="move down (behind)">▼</button>
+      <button data-act="remove" title="remove layer">✕</button>
+    `;
+    row.querySelector('input[type=checkbox]').addEventListener("change", (e) => {
+      layer.visible = e.target.checked; render();
+    });
+    row.querySelector('[data-act=up]').addEventListener("click", (e) => {
+      e.stopPropagation(); moveLayer(layer.id, 1);
+    });
+    row.querySelector('[data-act=down]').addEventListener("click", (e) => {
+      e.stopPropagation(); moveLayer(layer.id, -1);
+    });
+    row.querySelector('[data-act=remove]').addEventListener("click", (e) => {
+      e.stopPropagation(); removeLayer(layer.id);
+    });
+    row.addEventListener("click", () => selectLayer(layer.id));
+    list.appendChild(row);
+  }
+}
+
+function moveLayer(id, dir) {
+  const i = layers.findIndex(l => l.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= layers.length) return;
+  [layers[i], layers[j]] = [layers[j], layers[i]];
+  rebuildLayerList();
+  render();
+}
+
+function removeLayer(id) {
+  layers = layers.filter(l => l.id !== id);
+  if (selectedId === id) selectedId = layers.length ? layers[layers.length - 1].id : null;
+  rebuildLayerList();
+  renderProps();
+  render();
+}
+
+// ---------------------------------------------------------------------
+// Sidebar: property panel for the selected layer
+// ---------------------------------------------------------------------
+
+function renderProps() {
+  const body = document.getElementById("propsBody");
+  const layer = selectedLayer();
+  if (!layer) { body.innerHTML = '<div class="empty-msg">No layer selected.</div>'; return; }
+
+  let html = `<div class="row"><label>Name</label><input type="text" id="p_name" value="${layer.name}"></div>`;
+
+  if (layer.kind === "limb") {
+    html += field("X (attach)", "p_x", layer.x);
+    html += field("Y (attach)", "p_y", layer.y);
+    html += field("Joint X (pivot)", "p_jointX", layer.jointX);
+    html += field("Joint Y (pivot)", "p_jointY", layer.jointY);
+    html += field("Angle (deg)", "p_angle", layer.angleDeg);
+    html += `<div class="row"><label>Flip H</label><input type="checkbox" id="p_flip" ${layer.flip ? "checked" : ""}></div>`;
+    html += `<div class="mode-toggle">
+      <button class="btn ${pivotEditMode ? "" : "active"}" id="modeMove">Drag = Move</button>
+      <button class="btn ${pivotEditMode ? "active" : ""}" id="modePivot">Drag = Set Pivot</button>
+    </div>`;
+  } else if (layer.kind === "body") {
+    html += field("Y offset", "p_y", layer.y);
+    html += `<div class="legend">Body has no independent x offset or angle in the real rig — it always sits exactly at the character origin and matches the current orientation.</div>`;
+  } else if (layer.kind === "head") {
+    html += field("Y offset", "p_y", layer.y);
+    html += field("Pivot fraction (0-1)", "p_pivotFrac", layer.pivotFraction, 0.01);
+    html += field("Angle (deg)", "p_angle", layer.angleDeg);
+    html += `<div class="legend">Head has no independent x offset — always horizontally centered on the body.</div>`;
+  }
+
+  body.innerHTML = html;
+
+  const bind = (id, prop, isCheckbox, scale) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener(isCheckbox ? "change" : "input", () => {
+      if (isCheckbox) layer[prop] = el.checked;
+      else layer[prop] = scale ? parseFloat(el.value) : (parseFloat(el.value) || 0);
+      render();
+    });
+  };
+  bind("p_name", "name", false);
+  bind("p_x", "x", false);
+  bind("p_y", "y", false);
+  bind("p_jointX", "jointX", false);
+  bind("p_jointY", "jointY", false);
+  bind("p_angle", "angleDeg", false);
+  bind("p_flip", "flip", true);
+  bind("p_pivotFrac", "pivotFraction", false);
+
+  const moveBtn = document.getElementById("modeMove");
+  const pivotBtn = document.getElementById("modePivot");
+  if (moveBtn) moveBtn.addEventListener("click", () => { pivotEditMode = false; renderProps(); render(); });
+  if (pivotBtn) pivotBtn.addEventListener("click", () => { pivotEditMode = true; renderProps(); render(); });
+}
+
+function field(label, id, value, step) {
+  return `<div class="row"><label>${label}</label><input type="number" id="${id}" step="${step || 1}" value="${value}"></div>`;
+}
+
+// ---------------------------------------------------------------------
+// Global toolbar bindings
+// ---------------------------------------------------------------------
+
+document.getElementById("orientationSlider").addEventListener("input", (e) => {
+  state.orientationDeg = parseFloat(e.target.value);
+  document.getElementById("orientationVal").textContent = state.orientationDeg + "°";
+  render();
+});
+document.getElementById("scaleSlider").addEventListener("input", (e) => {
+  state.bodyScale = parseFloat(e.target.value);
+  document.getElementById("scaleVal").textContent = state.bodyScale.toFixed(3);
+  render();
+});
+document.getElementById("zoomSlider").addEventListener("input", (e) => {
+  state.viewZoom = parseFloat(e.target.value);
+  document.getElementById("zoomVal").textContent = state.viewZoom.toFixed(2) + "x";
+  render();
+});
+document.getElementById("gridToggle").addEventListener("change", (e) => {
+  state.showGrid = e.target.checked; render();
+});
+document.getElementById("resetViewBtn").addEventListener("click", () => {
+  state.viewZoom = 1; state.viewOffsetX = 0; state.viewOffsetY = 0;
+  document.getElementById("zoomSlider").value = 1;
+  document.getElementById("zoomVal").textContent = "1.00x";
+  render();
+});
+
+document.getElementById("addImageBtn").addEventListener("click", () => {
+  document.getElementById("fileInput").click();
+});
+document.getElementById("fileInput").addEventListener("change", async (e) => {
+  for (const file of e.target.files) {
+    const url = URL.createObjectURL(file);
+    const img = await loadImage(url);
+    if (!img) continue;
+    const name = file.name.replace(/\.[^.]+$/, "");
+    const layer = makeLayer(name, "limb", img, 0, 0, null, null, false);
+    layers.push(layer);
+    selectedId = layer.id;
+  }
+  rebuildLayerList();
+  renderProps();
+  render();
+  e.target.value = "";
+});
+
+document.getElementById("resetAllBtn").addEventListener("click", async () => {
+  if (!confirm("Reset every layer back to the game's current default rig? This discards unsaved changes.")) return;
+  layers = [];
+  nextId = 1;
+  selectedId = null;
+  await loadDefaults();
+});
+
+// ---------------------------------------------------------------------
+// Presets (localStorage)
+// ---------------------------------------------------------------------
+
+const PRESET_KEY = "asteroidbob_paperdoll_presets_v1";
+
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); }
+  catch (e) { return {}; }
+}
+function savePresets(p) { localStorage.setItem(PRESET_KEY, JSON.stringify(p)); }
+
+function refreshPresetSelect() {
+  const sel = document.getElementById("presetSelect");
+  const presets = loadPresets();
+  sel.innerHTML = '<option value="">— load saved pose —</option>';
+  for (const name of Object.keys(presets).sort()) {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+}
+
+function serializePose() {
+  return {
+    orientationDeg: state.orientationDeg,
+    bodyScale: state.bodyScale,
+    layers: layers.map(l => ({
+      name: l.name, kind: l.kind, visible: l.visible,
+      x: l.x, y: l.y, jointX: l.jointX, jointY: l.jointY,
+      pivotFraction: l.pivotFraction, angleDeg: l.angleDeg, flip: l.flip,
+    })),
+  };
+}
+
+document.getElementById("savePresetBtn").addEventListener("click", () => {
+  const name = document.getElementById("presetName").value.trim();
+  if (!name) { alert("Give the pose a name first."); return; }
+  const presets = loadPresets();
+  presets[name] = serializePose();
+  savePresets(presets);
+  refreshPresetSelect();
+  document.getElementById("presetSelect").value = name;
+  logMessage(`Saved pose "${name}" to this browser's local storage.`);
+});
+
+document.getElementById("loadPresetBtn").addEventListener("click", () => {
+  const name = document.getElementById("presetSelect").value;
+  if (!name) return;
+  const presets = loadPresets();
+  const pose = presets[name];
+  if (!pose) return;
+  state.orientationDeg = pose.orientationDeg || 0;
+  state.bodyScale = pose.bodyScale || 0.1;
+  document.getElementById("orientationSlider").value = state.orientationDeg;
+  document.getElementById("orientationVal").textContent = state.orientationDeg + "°";
+  document.getElementById("scaleSlider").value = state.bodyScale;
+  document.getElementById("scaleVal").textContent = state.bodyScale.toFixed(3);
+
+  // Match by name where possible so layer identity (and any manually
+  // added images that are still loaded) survives; falls back to
+  // positional order if names don't line up.
+  for (const saved of pose.layers) {
+    const match = layers.find(l => l.name === saved.name);
+    if (match) Object.assign(match, saved, { img: match.img, id: match.id });
+  }
+  document.getElementById("presetName").value = name;
+  rebuildLayerList();
+  renderProps();
+  render();
+  logMessage(`Loaded pose "${name}".`);
+});
+
+document.getElementById("deletePresetBtn").addEventListener("click", () => {
+  const name = document.getElementById("presetSelect").value;
+  if (!name) return;
+  if (!confirm(`Delete saved pose "${name}"?`)) return;
+  const presets = loadPresets();
+  delete presets[name];
+  savePresets(presets);
+  refreshPresetSelect();
+});
+
+// ---------------------------------------------------------------------
+// Export / log
+// ---------------------------------------------------------------------
+
+function logMessage(msg) {
+  const el = document.getElementById("log");
+  el.textContent = msg;
+  console.log(msg);
+}
+
+function buildReport() {
+  const name = document.getElementById("presetName").value.trim() || "(unnamed pose)";
+  const lines = [];
+  lines.push(`-- Pose: ${name}`);
+  lines.push(`-- (preview orientation was ${state.orientationDeg}°, bodyScale ${state.bodyScale} — orientation is only`);
+  lines.push(`--  for previewing here; in-game it comes from the surface, not this pose)`);
+  lines.push("");
+  // Draw-order (z-order), bottom to top — this IS the layering; report
+  // it as-is if it differs from the game's current
+  // leftboot/leftarm/body/rightboot/rightarm/head order.
+  lines.push("-- Draw order (back to front): " + layers.map(l => l.name).join(", "));
+  lines.push("");
+  for (const l of layers) {
+    if (l.kind === "limb") {
+      lines.push(`${l.name}: x=${l.x}, y=${l.y}, jointX=${l.jointX}, jointY=${l.jointY}, ` +
+        `angle=${l.angleDeg}° (${degToRadExpr(l.angleDeg)}), flip=${l.flip}`);
+    } else if (l.kind === "body") {
+      lines.push(`${l.name}: y=${l.y}`);
+    } else if (l.kind === "head") {
+      lines.push(`${l.name}: y=${l.y}, pivotFraction=${l.pivotFraction}, ` +
+        `angle=${l.angleDeg}° (${degToRadExpr(l.angleDeg)})`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function degToRadExpr(deg) {
+  if (deg === 0) return "0";
+  return `${deg} * math.pi / 180`;
+}
+
+document.getElementById("logBtn").addEventListener("click", () => {
+  logMessage(buildReport());
+});
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const text = document.getElementById("log").textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    logMessage(text + "\n\n(copied to clipboard)");
+  } catch (e) {
+    logMessage(text + "\n\n(could not access clipboard — select the text above and copy manually)");
+  }
+});
+
+// ---------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------
+
+resizeCanvas();
+refreshPresetSelect();
+loadDefaults();
+</script>
+</body>
+</html>

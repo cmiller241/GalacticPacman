@@ -1,8 +1,8 @@
 -- lua/entities/Ooomba.lua
 --
--- A simple ground-patrol enemy: walks back and forth along the flat top
--- of a single JumpPlatform, turning around at the edges instead of
--- falling off. The edge-patrol movement itself is ported from
+-- A simple ground-patrol enemy: walks back and forth along a TiledTerrain
+-- TerrainShape's own arc-length path, turning around at either end
+-- instead of falling off. The edge-patrol movement itself is ported from
 -- js/entities/world/Goomba.js (see that file's own comment for why this
 -- is its own simple "walk to the edge, turn around" logic rather than
 -- routing through any orbit/jump AI system) — reskinned here with the
@@ -11,11 +11,18 @@
 -- cycled standing/walk-A/standing/walk-B rather than a plain 2-frame
 -- alternation.
 --
+-- Walking along arc length rather than a flat X range is what gets slope
+-- climbing for free: TerrainShape:worldPointAtArcPosition already handles
+-- both flat and 45-degree segments (and pushes the sprite straight up
+-- from the surface, same upright convention the player itself uses — see
+-- Player.lua's own worldPointAtArcPosition comment for why that matters),
+-- and TerrainShape:getArcSpeedMultiplier already slows walking on slopes
+-- — both reused here unchanged rather than reimplemented.
+--
 -- Deliberately has NO player collision/damage here — purely a
 -- patrolling decoration for now, not a hazard.
 
 local state = require("lua.state")
-local Vector2 = require("lua.vector2")
 
 local Ooomba = {}
 Ooomba.__index = Ooomba
@@ -46,27 +53,28 @@ local function ensureFrameQuads(img)
   end
 end
 
-function Ooomba.new(homePlanet, startX, options)
+function Ooomba.new(homeShape, startArcPos, options)
   options = options or {}
   local self = setmetatable({}, Ooomba)
 
-  self.homePlanet = homePlanet
+  self.homeShape = homeShape
 
   -- Draw size in world units — NOT a true radius (the source art is
-  -- 800x950, not square); halfWidth insets the edge-of-platform turn
-  -- bounds, halfHeight places the sprite's feet on the platform's own
-  -- top surface. Same two roles Goomba.js's single `radius` served
+  -- 800x950, not square); halfWidth insets the turn-around bounds near
+  -- either end of the shape's own path, halfHeight is the push-out
+  -- distance worldPointAtArcPosition uses to place the sprite's feet on
+  -- the surface. Same two roles Goomba.js's single `radius` served
   -- there, split in two here since this sprite isn't square.
   self.drawHeight = options.drawHeight or 90
   self.drawWidth = options.drawWidth or (self.drawHeight * 800 / 950)
   self.halfWidth = self.drawWidth / 2
   self.halfHeight = self.drawHeight / 2
 
-  self.speed = options.speed or 1.4       -- world units per frame — deliberately a bit slower than the player's own walk speed
-  self.direction = options.direction or -1 -- -1 = moving left, 1 = moving right; the art faces left by default, so -1 needs no flip
+  self.speed = options.speed or 1.4       -- arc-length units per frame — deliberately a bit slower than the player's own walk speed
+  self.direction = options.direction or -1 -- -1 = toward arc position 0, 1 = toward the far end; the art faces left by default, so -1 needs no flip
 
-  local topY = homePlanet.pos.y - homePlanet.halfHeight
-  self.pos = Vector2.new(startX, topY - self.halfHeight)
+  self.surfaceArcPos = startArcPos or 0
+  self.pos = homeShape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight).point
 
   self.walkCyclePhase = 0
   self.walkCycleSpeed = 0.12 -- how fast the 4-step stand/walk cycle advances
@@ -76,26 +84,25 @@ end
 
 function Ooomba:update()
   local timeScale = state.timeScale or 1
-  local planet = self.homePlanet
-  local coreHalfWidth = planet.halfWidth - planet.cornerRadius
-  -- Turn-around bounds are inset by this.halfWidth so the Ooomba's own
-  -- body stays fully on the platform when it turns, rather than
-  -- visually overhanging the edge before reversing.
-  local minX = planet.pos.x - coreHalfWidth + self.halfWidth
-  local maxX = planet.pos.x + coreHalfWidth - self.halfWidth
+  local shape = self.homeShape
+  local perimeter = shape:getPerimeter()
 
-  local desiredX = self.pos.x + self.direction * self.speed * timeScale
-  if desiredX < minX or desiredX > maxX then
-    self.direction = -self.direction -- reached the edge — turn around instead of falling off
-  else
-    self.pos.x = desiredX
+  local speedMultiplier = 1
+  if type(shape.getArcSpeedMultiplier) == "function" then
+    speedMultiplier = shape:getArcSpeedMultiplier(self.surfaceArcPos, self.direction)
   end
 
-  -- Stay glued to the platform's own top surface — matters if the
-  -- platform ever moved, though none currently do; cheap to keep
-  -- correct regardless.
-  local topY = planet.pos.y - planet.halfHeight
-  self.pos.y = topY - self.halfHeight
+  -- Turn-around bounds are inset by this.halfWidth so the Ooomba's own
+  -- body stays fully on the shape's own footprint when it turns, rather
+  -- than visually overhanging the end before reversing.
+  local desiredArcPos = self.surfaceArcPos + self.direction * self.speed * speedMultiplier * timeScale
+  if desiredArcPos < self.halfWidth or desiredArcPos > perimeter - self.halfWidth then
+    self.direction = -self.direction -- reached the end — turn around instead of falling off
+  else
+    self.surfaceArcPos = desiredArcPos
+  end
+
+  self.pos = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight).point
 
   self.walkCyclePhase = self.walkCyclePhase + self.walkCycleSpeed * timeScale
 end

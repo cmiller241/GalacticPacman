@@ -62,9 +62,14 @@ local function loadAssets(onComplete)
   -- Goomba enemy — 64x32, two 32x32 tiles (standing, walking).
   state.goombaTexture = love.graphics.newImage("img/goomba.png")
 
-  -- Ooomba enemy (patrols the sky dome's jump platforms) — 2400x950,
-  -- three 800x950 frames: standing, walk-forward-A, walk-forward-B.
+  -- Ooomba enemy (patrols the sky dome's terrain) — 2400x950, three
+  -- 800x950 frames: standing, walk-forward-A, walk-forward-B. Explicitly
+  -- kept smooth/"linear" rather than the game's pixel-art "nearest"
+  -- default (see love.load's setDefaultFilter) — this sprite reads
+  -- better with soft shading than as crisp pixel art, same reasoning
+  -- Planetoid's own canvas already overrides the default for.
   state.oombaTexture = love.graphics.newImage("img/Ooomba.png")
+  state.oombaTexture:setFilter("linear", "linear")
 
   -- SkyDomePlanetoid's grass cap — a single 32x16 tile, drawn as a
   -- thin strip right at the flat top line, on top of the metal base

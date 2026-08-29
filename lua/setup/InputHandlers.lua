@@ -154,10 +154,17 @@ local function attachInputHandlers()
     state.keys[key] = true
 
     if key == ' ' then
-      if state.player and state.player.onSurface and state.player.mode ~= "maze" then
-        state.player:jump()
-      elseif state.player and state.player.mode ~= "maze" then
-        state.player:tryGroundPound()
+      if state.player and state.player.mode ~= "maze" then
+        if state.player.onSurface or state.player.touchingWall then
+          -- Player:jump() itself branches on which of the two applies
+          -- (grounded launch vs. wall-jump kick) — routed here together
+          -- since both are "Space performs a jump," as opposed to the
+          -- ground-pound fallback below for plain mid-air Space with
+          -- nothing to jump off of.
+          state.player:jump()
+        else
+          state.player:tryGroundPound()
+        end
       end
     end
 

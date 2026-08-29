@@ -303,13 +303,13 @@ function SkyDomePlanetoid.new(x, y, options)
   self.domeInnerGlowReach = options.domeInnerGlowReach or 40
 
   self.domeHexSize = options.domeHexSize or 60
-  self.domeHexColor = parseRGBA(options.domeHexColor, { 1, 1, 1, 1 })
+  self.domeHexColor = parseRGBA(options.domeHexColor, { 0, 0, 0, 1 })
   self.domeHexOpacity = options.domeHexOpacity or 0.12
   self.domeHexScrollSpeed = options.domeHexScrollSpeed or 0.006
   self.domeHexLineWidth = options.domeHexLineWidth or 1
 
   self.domeForegroundHexSize = options.domeForegroundHexSize or (self.domeHexSize * 1.5)
-  self.domeForegroundHexOpacity = options.domeForegroundHexOpacity or math.min(1, self.domeHexOpacity * 4)
+  self.domeForegroundHexOpacity = options.domeForegroundHexOpacity or math.min(1, self.domeHexOpacity * 0.5)
   self.domeForegroundHexScrollSpeed = options.domeForegroundHexScrollSpeed or -0.01
   self.domeForegroundHexLineWidth = options.domeForegroundHexLineWidth or 2.5
   self.domeForegroundTintOpacity = options.domeForegroundTintOpacity or 2.0
