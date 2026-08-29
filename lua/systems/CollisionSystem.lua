@@ -91,6 +91,73 @@ function CollisionSystem:handlePlayerFireBarCollisions(player, fireBars)
   end
 end
 
+-- Solid axis-aligned walls (TiledTerrain's WallShape) — plain circle-vs-
+-- rectangle push-out, blocking the player from every side, unlike the
+-- one-way "stand on top of me" TerrainShape surfaces above. Runs every
+-- frame regardless of onSurface, since a wall should stop the player
+-- whether they're walking into it or jumping into it.
+function CollisionSystem:handlePlayerWallCollisions(player, walls)
+  if not walls then return end
+  for _, wall in ipairs(walls) do
+    local closestX = math.max(wall.pos.x - wall.halfWidth, math.min(player.pos.x, wall.pos.x + wall.halfWidth))
+    local closestY = math.max(wall.pos.y - wall.halfHeight, math.min(player.pos.y, wall.pos.y + wall.halfHeight))
+    local dx, dy = player.pos.x - closestX, player.pos.y - closestY
+    local distSq = dx * dx + dy * dy
+
+    if distSq < player.radius * player.radius then
+      local dist = math.sqrt(distSq)
+      local normal, penetration
+
+      if dist > 1e-6 then
+        normal = Vector2.new(dx / dist, dy / dist)
+        penetration = player.radius - dist
+      else
+        -- Player's center is exactly inside the rectangle (only reachable
+        -- by tunneling through in one big step) — push out along whichever
+        -- axis has the smaller overlap, the standard AABB-resolution
+        -- fallback for a zero-distance closest point.
+        local overlapX = (wall.halfWidth + player.radius) - math.abs(player.pos.x - wall.pos.x)
+        local overlapY = (wall.halfHeight + player.radius) - math.abs(player.pos.y - wall.pos.y)
+        if overlapX < overlapY then
+          normal = Vector2.new(player.pos.x >= wall.pos.x and 1 or -1, 0)
+          penetration = overlapX
+        else
+          normal = Vector2.new(0, player.pos.y >= wall.pos.y and 1 or -1)
+          penetration = overlapY
+        end
+      end
+
+      player.pos:add(normal:multiply(penetration))
+      local intoWall = player.vel:dot(normal)
+      if intoWall < 0 then
+        player.vel = player.vel:subtract(normal:multiply(intoWall))
+      end
+
+      -- Wall-jump contact: only for a genuine SIDE face (normal mostly
+      -- horizontal), not landing on top of a low wall block (normal
+      -- mostly vertical) — a wall jump only makes sense pushed against a
+      -- vertical surface. Reset every frame by main.lua before this pass
+      -- runs, so it only ever reflects contact from THIS frame, never a
+      -- wall the player has since drifted away from.
+      if math.abs(normal.x) > math.abs(normal.y) then
+        player.touchingWall = wall
+        player.wallContactNormal = normal:clone()
+      end
+
+      -- If this push moved the player while they're walking a TerrainShape
+      -- (arc-length position), resync surfaceArcPos to the corrected
+      -- position — otherwise the arc position keeps advancing every frame
+      -- the player walks into the wall while their actual pos stays
+      -- clamped at it, and walking back away only starts moving again
+      -- once that gap has been walked off first.
+      if player.onSurface and player.currentPlanet
+         and type(player.currentPlanet.arcPositionForWorldPoint) == "function" then
+        player.surfaceArcPos = player.currentPlanet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+      end
+    end
+  end
+end
+
 function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusProp1, radiusProp2, massProp1, massProp2)
   entities2 = entities2 or entities1
   radiusProp1 = radiusProp1 or "radius"
@@ -239,7 +306,17 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
         end
       end
 
-      player.pos = surface.point:clone():add(surface.normal:clone():multiply(player.radius))
+      -- forceUprightJump surfaces (TiledTerrain) always rest the player
+      -- straight up from the contact point, not along the segment's own
+      -- (possibly diagonal) normal — matches the vertical push
+      -- TerrainShape:worldPointAtArcPosition uses for walking, and the
+      -- forced-upright rotation in Player:visualDownDirection. Landing
+      -- with a normal-based push here while walking uses a vertical one
+      -- would itself be a one-frame position jolt right at touchdown.
+      local restOffset = planet.forceUprightJump
+        and Vector2.new(0, -player.radius)
+        or surface.normal:clone():multiply(player.radius)
+      player.pos = surface.point:clone():add(restOffset)
       player.onSurface = true
       player.currentPlanet = planet
       player.lastInfluencePlanet = planet
