@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<tileset version="1.9" tiledversion="1.9.2" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="45" columns="9">
+<tileset version="1.9" tiledversion="1.9.2" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="54" columns="9">
  <properties>
   <property name="role" value=""/>
  </properties>
- <image source="../img/platform.png" width="288" height="160"/>
+ <image source="../img/platform.png" width="288" height="192"/>
  <tile id="0">
   <properties>
    <property name="role" value="top"/>
@@ -126,43 +126,43 @@
  </tile>
  <tile id="20">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="21">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="22">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="23">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="24">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="25">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="26">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
@@ -180,43 +180,43 @@
  </tile>
  <tile id="29">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="30">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="31">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="32">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="33">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="34">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="35">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
@@ -234,13 +234,13 @@
  </tile>
  <tile id="38">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="39">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>

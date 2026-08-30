@@ -424,14 +424,28 @@ end
 -- Threads each column's top points into shapes: a list of open chains is
 -- carried left-to-right, each chain extended by whichever point in the
 -- next column is within one row (flat or 45-degree step) of its own last
--- point; a chain that finds no match ends (and is kept if it has more
--- than one point); any leftover points start new chains. This lets
--- several stacked layers (a plateau, a shelf below it, a staircase below
--- that) all run concurrently as independent shapes instead of only ever
+-- point; a chain that finds no match ends and is kept. This lets several
+-- stacked layers (a plateau, a shelf below it, a staircase below that)
+-- all run concurrently as independent shapes instead of only ever
 -- tracking the topmost one. Result: a list of vertex runs, each a list of
 -- {col, row, kind} points, same shape buildWorldSegments expects (kind
 -- carried straight through unchanged — it's per-tile, not derived from
 -- chain adjacency).
+--
+-- A length-1 chain (an isolated top tile with no same-row neighbor
+-- within one column on either side — e.g. a single-tile-wide pillar) is
+-- kept too, not discarded: buildWorldSegments turns even one vertex into
+-- a real segment (that tile's own left edge to its own right edge), so a
+-- length-1 chain is a perfectly good tiny platform, not a degenerate
+-- one. An earlier version discarded these (`#chain > 1`), which silently
+-- left standalone single-column tops (like a thin wall pillar's cap)
+-- with a solid WallShape body but NO walkable TerrainShape on top at
+-- all — the player could never actually land there: CollisionSystem's
+-- WallShape push-out (a plain circle-vs-rect resolution, not a "landing"
+-- that sets onSurface) was all that ever touched them, so onSurface
+-- stayed false and the airborne wall-slide branch kept running instead,
+-- which read as the player gliding in place on top of the pillar rather
+-- than standing on it.
 local function buildVertexRuns(pointsByColumn, width)
   local runs = {}
   local openChains = {}
@@ -456,7 +470,7 @@ local function buildVertexRuns(pointsByColumn, width)
         usedRow[best.row] = true
         table.insert(chain, { col = col, row = best.row, kind = best.kind })
         table.insert(newOpenChains, chain)
-      elseif #chain > 1 then
+      else
         table.insert(runs, chain)
       end
     end
@@ -471,7 +485,7 @@ local function buildVertexRuns(pointsByColumn, width)
   end
 
   for _, chain in ipairs(openChains) do
-    if #chain > 1 then table.insert(runs, chain) end
+    table.insert(runs, chain)
   end
   return runs
 end

@@ -66,8 +66,13 @@ function FireBar.new(x, y, options)
   -- with several differently-sized planetoids drifting through over
   -- time, that produced a visible clump/ring sitting right at the
   -- bar's edge. Shrinking just the collision radius means a planetoid
-  -- has to get much closer before being pushed out at all.
-  self.radius = options.collisionRadius or 2
+  -- has to get much closer before being pushed out at all. Shrunk
+  -- further still (2 -> 0.5): belt planetoids drifting near a bar's
+  -- pivot were still visibly pooling around it even at 2 -- the
+  -- smaller the overlap window, the less often the elastic bounce
+  -- here fights BeltOrbitSystem's own sun-centered restore force for
+  -- control of a passing planetoid.
+  self.radius = options.collisionRadius or 0.5
 
   self.barLength = options.barLength or 500
   self.numFireballs = options.numFireballs or 10
