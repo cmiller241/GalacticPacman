@@ -23,6 +23,9 @@ local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
+local LockOutline = require("lua.effects.LockOutline")
+local VatsOverlay = require("lua.effects.VatsOverlay")
+local Lava = require("lua.world.Lava")
 
 local collisionSystem
 
@@ -118,6 +121,7 @@ function love.load()
       table.insert(state.planetoids, shape)
     end
     state.tiledLevels = { terrainLevel }
+    state.lavas = terrainLevel.lavas
 
     -- Ooombas patrol the walkable terrain shapes (replacing the old
     -- JumpPlatform-based patrol) — one per shape with enough room to
@@ -250,6 +254,13 @@ function love.update(dt)
     end
   end
 
+  if state.lavas then
+    Lava.updateSharedClock()
+    for _, lava in ipairs(state.lavas) do
+      lava:update()
+    end
+  end
+
   state.player:move(state.keys)
 
   if state.player.pullTarget then
@@ -261,6 +272,18 @@ function love.update(dt)
   state.player:update()
 
   collisionSystem:handlePlayerPlanetCollisions(state.player)
+
+  -- Gamepad R2 fire: a continuous-hold flag (see GamePadInput.lua),
+  -- not an edge-triggered press — called every frame while held, same
+  -- as the mouse-click path (love.mousepressed -> shootFireball in
+  -- InputHandlers.lua). shootFireball()'s own fireCooldown/lastShotTime
+  -- check is what actually throttles the real fire rate; this is what
+  -- was missing before — GamePadInput.lua already set
+  -- state.gamepadFireHeld every frame from the trigger's analog value,
+  -- but nothing ever read it, so R2 silently did nothing.
+  if state.gamepadFireHeld and state.player then
+    state.player:shootFireball()
+  end
 
   if state.tiledLevels then
     -- Reset once per frame, before re-checking every level's walls below
@@ -507,6 +530,14 @@ function love.draw()
     end
   end
 
+  if state.lavas then
+    for _, lava in ipairs(state.lavas) do
+      if utils.isOnScreen(lava.pos.x, lava.pos.y, lava.radius, 50) then
+        lava:draw()
+      end
+    end
+  end
+
   if state.ooombas then
     for _, o in ipairs(state.ooombas) do
       if utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
@@ -561,6 +592,9 @@ function love.draw()
   if state.skyDomePlanet then
     state.skyDomePlanet:drawForegroundGlass()
   end
+
+  VatsOverlay.draw()
+  LockOutline.draw()
 
   love.graphics.pop()
 

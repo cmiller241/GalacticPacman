@@ -38,6 +38,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local Lava = require("lua.world.Lava")
 
 local TiledTerrain = {}
 
@@ -115,15 +116,17 @@ local function buildTilePropertyLookup(tilesets)
   return byGid
 end
 
--- Returns "flat", "riseRight", "riseLeft", "wall", "fill", or "empty",
--- straight from that tile's own `role`/`slope` properties. Untagged or
--- unrecognized-role tiles default to "fill" (matches the sheet's own
--- convention — undecorated background dirt needs no explicit tagging).
+-- Returns "flat", "riseRight", "riseLeft", "wall", "lava", "fill", or
+-- "empty", straight from that tile's own `role`/`slope` properties.
+-- Untagged or unrecognized-role tiles default to "fill" (matches the
+-- sheet's own convention — undecorated background dirt needs no
+-- explicit tagging).
 local function classifyGid(tileProps, gid)
   if gid == 0 then return "empty" end
   local props = tileProps[gid]
   local role = props and props.role
   if role == "wall" then return "wall" end
+  if role == "lava" then return "lava" end
   if role == "top" then
     local slope = props.slope
     if slope == "riseLeft" or slope == "riseRight" then return slope end
@@ -652,6 +655,31 @@ local function buildWallShapes(layer, tileProps, width, height, anchorX, anchorY
 end
 
 ----------------------------------------------------------------------
+-- Lava — see lua/world/Lava.lua for the actual entity (shader-drawn
+-- wavy surface + rising embers). One instance per lava-role tile, NOT
+-- merged into multi-tile strips — Lava.lua's own wave is driven by
+-- absolute world X, so independently-drawn adjacent tiles already line
+-- up with each other at their shared edge with no seam; merging them
+-- into wider quads would just be unneeded bookkeeping for no visual
+-- difference.
+----------------------------------------------------------------------
+
+local function buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
+  local lavas = {}
+  for row = 0, height - 1 do
+    for col = 0, width - 1 do
+      local gid = layer.data[row * width + col + 1]
+      if gid ~= 0 and classifyGid(tileProps, gid) == "lava" then
+        local x0 = anchorX + col * TILE_WORLD_SIZE
+        local y0 = anchorY + row * TILE_WORLD_SIZE
+        table.insert(lavas, Lava.new(x0, y0, TILE_WORLD_SIZE))
+      end
+    end
+  end
+  return lavas
+end
+
+----------------------------------------------------------------------
 -- Whole-level renderer — baked ONCE to a single canvas, never rebuilt
 -- per frame (see SkyDomePlanetoid's own foreground-hex-grid history for
 -- exactly why a per-frame rebuild of something static is worth avoiding).
@@ -699,9 +727,18 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- rather than TerrainShape instances.
   local walls = buildWallShapes(layer, tileProps, width, height, anchorX, anchorY)
 
+  -- Lava tiles — see buildLavaTiles above and lua/world/Lava.lua for
+  -- the shader-drawn entity itself.
+  local lavas = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
+
   -- Rendering: bake the ENTIRE grid (fill tiles included — rendering
   -- doesn't care about the walkable/fill/wall distinction, only collision
-  -- does) to one canvas, once.
+  -- does) to one canvas, once. Lava tiles are the one exception: skipped
+  -- here entirely, since Lava.lua draws its own animated shader quad
+  -- over that same area every frame instead — baking the sheet's own
+  -- flat tile art underneath would just sit there uselessly (visible
+  -- only through the shader's transparent-above-the-wave cutout, where
+  -- it isn't wanted either).
   local canvas = nil
   local img = state.platformTexture
   if img then
@@ -714,7 +751,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     for row = 0, height - 1 do
       for col = 0, width - 1 do
         local gid = layer.data[row * width + col + 1]
-        if gid ~= 0 then
+        if gid ~= 0 and classifyGid(tileProps, gid) ~= "lava" then
           local ts = findTileset(tilesets, gid)
           if ts then
             local localIndex = gid - ts.firstgid
@@ -736,6 +773,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   local level = setmetatable({
     shapes = shapes,
     walls = walls,
+    lavas = lavas,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

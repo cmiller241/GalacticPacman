@@ -25,4 +25,22 @@ function utils.isOnScreen(x, y, radius, margin)
   return x >= minX and x <= maxX and y >= minY and y <= maxY
 end
 
+-- A single bounding-circle radius for anything drawable in this game,
+-- regardless of which shape convention it actually uses: a plain
+-- `radius` if it has one (Planetoid, Asteroid, SkyDomePlanetoid, which
+-- all set this directly even when isRoundedRect), otherwise derived
+-- from `halfWidth`/`halfHeight` (Ooomba, which has neither `radius`
+-- nor isRoundedRect but does have those two). Used by TargetLock.lua
+-- (viewport/candidate checks) and the lock-on/VATS effects, mirroring
+-- js/systems/Raycast.js's getBoundingRadius but generalized to cover
+-- Ooomba too, since that one Lua-only entity has no JS equivalent with
+-- a matching shape.
+function utils.boundingRadius(obj)
+  if obj.radius then return obj.radius end
+  if obj.halfWidth and obj.halfHeight then
+    return math.sqrt(obj.halfWidth * obj.halfWidth + obj.halfHeight * obj.halfHeight)
+  end
+  return 0
+end
+
 return utils

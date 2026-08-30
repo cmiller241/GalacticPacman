@@ -393,20 +393,54 @@ end
 local SKYDOME_SPAWN_MARGIN = 200 -- extra clearance kept beyond the dome's own silhouette
 
 -- A generous bounding-circle exclusion zone around the sky dome's
--- WHOLE structure (dome + narrower base), used only to steer spawn
--- placement away from it — deliberately not shape-precise the way
--- actual collision response needs to be (see CollisionSystem.lua's
--- handleImmovableCollisions / handlePlanetAsteroidCollisions for that);
--- a little extra empty space kept clear around the dome for spawning
--- purposes is harmless, whereas under-covering it is the actual bug
--- (things spawning inside).
-local function isNearSkyDome(x, y)
+-- WHOLE structure (dome + narrower base) — deliberately not
+-- shape-precise the way actual collision response needs to be (see
+-- CollisionSystem.lua's handleImmovableCollisions /
+-- handlePlanetAsteroidCollisions for that); a little extra empty space
+-- kept clear around the dome is harmless, whereas under-covering it is
+-- the actual bug (things spawning inside/near it). Shared by
+-- isNearSkyDome (steers individual spawn POINTS away from the dome)
+-- and worldGen.cellIntersectsSkyDome below (skips generateCell
+-- entirely for any CELL the dome overlaps) — returns nil if there's no
+-- dome yet.
+local function skyDomeExclusionCircle()
   local dome = state.skyDomePlanet
-  if not dome then return false end
+  if not dome then return nil end
   local cy = dome.domeAnchorY and dome:domeAnchorY() or dome.pos.y
-  local dx, dy = x - dome.pos.x, y - cy
   local exclR = math.max(dome.domeRadiusX or 0, dome.domeRadiusY or 0, dome.halfWidth or 0)
     + (dome.baseRadiusY or 0) + SKYDOME_SPAWN_MARGIN
+  return dome.pos.x, cy, exclR
+end
+
+local function isNearSkyDome(x, y)
+  local cx, cy, exclR = skyDomeExclusionCircle()
+  if not cx then return false end
+  local dx, dy = x - cx, y - cy
+  return dx * dx + dy * dy < exclR * exclR
+end
+
+-- True if the given cell's own bounds come within the dome's
+-- exclusion circle at all — used to skip normal generateCell content
+-- for that cell ENTIRELY (not just steer individual spawn points away
+-- from it), since the dome's exterior footprint straddles more than
+-- one cell (it's centered near a cell boundary, not centered inside a
+-- single cell) and the player's own starting position sits inside the
+-- dome's interior, right where the 3x3 streaming window first
+-- activates — without this, cells that are mostly-but-not-entirely
+-- covered by the point-level exclusion above would still spawn
+-- ordinary planetoids/asteroids/fire bars in whatever fraction of
+-- their area falls outside that radius, visibly cluttering the area
+-- right around the dome the player starts next to.
+function worldGen.cellIntersectsSkyDome(col, row)
+  local cx, cy, exclR = skyDomeExclusionCircle()
+  if not cx then return false end
+  local x0 = col * worldGen.CELL_SIZE
+  local y0 = row * worldGen.CELL_SIZE
+  local x1 = x0 + worldGen.CELL_SIZE
+  local y1 = y0 + worldGen.CELL_SIZE
+  local nearestX = math.max(x0, math.min(cx, x1))
+  local nearestY = math.max(y0, math.min(cy, y1))
+  local dx, dy = cx - nearestX, cy - nearestY
   return dx * dx + dy * dy < exclR * exclR
 end
 
@@ -530,6 +564,15 @@ local function generateCell(col, row)
   local key = worldGen.cellKey(col, row)
   if state.activeCells[key] then return end
   state.activeCells[key] = true
+
+  -- The dome's exterior footprint straddles more than one cell (see
+  -- worldGen.cellIntersectsSkyDome) — any cell it touches at all is
+  -- left completely empty rather than generating its usual planetoids/
+  -- asteroids/fire bars, so nothing clutters the area right around
+  -- where the player starts. Deliberately checked BEFORE the belt
+  -- check below: the dome doesn't currently overlap the belt ring, but
+  -- if it ever did, staying dome-free should win.
+  if worldGen.cellIntersectsSkyDome(col, row) then return end
 
   local belt = worldGen.cellIntersectsBelt(col, row)
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL

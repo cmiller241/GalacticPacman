@@ -14,6 +14,7 @@ local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local Particle = require("lua.entities.Particle")
+local TargetLock = require("lua.systems.TargetLock")
 
 local Player = {}
 Player.__index = Player
@@ -644,6 +645,15 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
 
   local forwardAngle = dirSign > 0 and orientation or (orientation + math.pi)
 
+  -- Re-checked every frame — the moment a lock stops being valid
+  -- (destroyed, scrolled out of the viewport, or landed on), it's
+  -- cleared here and this frame just falls through to the normal aim
+  -- priority chain below instead, rather than needing a separate
+  -- per-frame watcher elsewhere.
+  if self.lockedTarget and not TargetLock.isValidLockTarget(self.lockedTarget) then
+    self.lockedTarget = nil
+  end
+
   local targetWorldX, targetWorldY
   if self.lockedTarget then
     targetWorldX = self.lockedTarget.pos.x
@@ -1000,8 +1010,35 @@ function Player:shootFireball()
   table.insert(state.fireballs, Fireball.new(originX, originY, angle))
 end
 
-function Player:tryLockTargetNext() end
-function Player:tryLockTargetPrevious() end
+-- ----------------------------
+-- HARD LOCK (gamepad R1 = next/clockwise, L1 = previous/counter-
+-- clockwise, Circle = release) — see GamePadInput.lua for the button
+-- wiring and lua/systems/TargetLock.lua for the actual candidate-
+-- gathering/sorting logic.
+-- ----------------------------
+-- Both cycle from wherever the blaster is currently aimed
+-- (self.aimWorldAngle — kept accurate every frame regardless of
+-- source, so this works whether there's no lock yet, starting from
+-- whatever the normal aim system currently has it pointed at, or an
+-- existing lock, since aimWorldAngle already equals the angle to the
+-- current lockedTarget by the time either of these runs again). The
+-- two are mirror images of each other, so in the common case a single
+-- R1 press followed by a single L1 press (or vice versa) lands back on
+-- whatever was locked before, reading as a genuine undo.
+function Player:tryLockTargetNext()
+  if self.mode ~= "space" or self.isDying or self.isTeleporting then return end
+  local originPos = self.aimShoulderPos or self.pos
+  local referenceAngle = self.aimWorldAngle or 0
+  self.lockedTarget = TargetLock.selectNextLockTarget(self.lockedTarget, referenceAngle, originPos)
+end
+
+function Player:tryLockTargetPrevious()
+  if self.mode ~= "space" or self.isDying or self.isTeleporting then return end
+  local originPos = self.aimShoulderPos or self.pos
+  local referenceAngle = self.aimWorldAngle or 0
+  self.lockedTarget = TargetLock.selectPreviousLockTarget(self.lockedTarget, referenceAngle, originPos)
+end
+
 function Player:clearLockTarget()
   self.lockedTarget = nil
 end
