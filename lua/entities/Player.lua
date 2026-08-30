@@ -1006,4 +1006,12 @@ function Player:clearLockTarget()
   self.lockedTarget = nil
 end
 
+-- Deliberate no-op stub -- death/teleport animations aren't ported yet
+-- (see the file-header comment). Several CollisionSystem call sites
+-- (lava, FireBar, etc.) call player:startDeath() unconditionally on a
+-- lethal hit; without this method existing at all, that was a nil-call
+-- crash straight to a blue screen. This just absorbs the call so a
+-- lethal hit is silently survived until real death handling is ported.
+function Player:startDeath() end
+
 return Player

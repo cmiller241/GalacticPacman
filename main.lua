@@ -304,7 +304,12 @@ function love.update(dt)
     if collisionSystem.handlePlayerFireBarCollisions then
       collisionSystem:handlePlayerFireBarCollisions(state.player, state.fireBars)
     end
-    collisionSystem:handleImmovableCollisions(state.fireBars, state.planetoids)
+    -- Deliberately no handleImmovableCollisions(state.fireBars, state.planetoids)
+    -- call -- planetoids used to bounce off a firebar's tiny pivot
+    -- collision radius, which fought BeltOrbitSystem's own sun-centered
+    -- restore force and visibly pooled belt planetoids around each bar.
+    -- FireBars are only meant to be a hazard for the player; asteroids
+    -- (free physics, not orbit-scripted) still collide with them below.
     if state.asteroids and #state.asteroids > 0 then
       collisionSystem:handleImmovableCollisions(state.fireBars, state.asteroids)
     end
@@ -404,6 +409,12 @@ function love.update(dt)
   if state.cellCheckCounter >= worldGen.CELL_CHECK_INTERVAL then
     state.cellCheckCounter = 0
     worldGen.updateActiveCells()
+  end
+
+  state.beltSpawnCounter = (state.beltSpawnCounter or 0) + 1
+  if state.beltSpawnCounter >= worldGen.BELT_SPAWN_INTERVAL then
+    state.beltSpawnCounter = 0
+    worldGen.updateBeltSpawning()
   end
 
   if state.keys['+'] or state.keys['='] then

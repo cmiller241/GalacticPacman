@@ -16,8 +16,8 @@
             "scale": 1.5,
             "selectedLayer": 0,
             "viewCenter": {
-                "x": 443,
-                "y": 616.6666666666667
+                "x": 514,
+                "y": 578
             }
         },
         "Level1.tmx#Grass Tiles": {
@@ -36,8 +36,8 @@
     ],
     "project": "AsteroidBoy - Level One.tiled-project",
     "recentFiles": [
-        "Grass Tiles.tsx",
-        "Level1.tmx"
+        "Level1.tmx",
+        "Grass Tiles.tsx"
     ],
     "tileset.lastUsedFormat": "tsx"
 }

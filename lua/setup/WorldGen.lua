@@ -9,6 +9,7 @@ local Planetoid = require("lua.world.Planetoid")
 local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
 local FireBar = require("lua.world.FireBar")
+local utils = require("lua.utils")
 
 local worldGen = {}
 
@@ -20,6 +21,40 @@ worldGen.CELL_CHECK_INTERVAL = 30
 worldGen.BELT_INNER_CELLS = 2
 worldGen.BELT_OUTER_CELLS = 3
 worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5   -- 2.7
+
+-- Ongoing belt "drip" spawning: the one-time establish burst in
+-- generateCell() (see BELT_PLANETOIDS_PER_CELL below) only fills a
+-- cell once, the first time it activates. Planetoids in it orbit the
+-- sun and drift out over time; if the player just sits in one 3x3
+-- window, that cell never gets topped up again (generateCell won't
+-- re-fire for a cell that's still active) and the belt visibly empties
+-- out from under them. worldGen.updateBeltSpawning() (called on its
+-- own cadence from main.lua) fixes this with a steady drip: spawn a
+-- planetoid upstream (counter-clockwise) of the player, pushed back
+-- along the belt ring until it's confirmed off-screen, so it drifts
+-- into view over the following seconds instead of popping in.
+worldGen.BELT_SPAWN_INTERVAL = 6        -- frames between drip checks (~0.1s @60fps)
+worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500
+local BELT_SPAWN_ARC_SPACING = 300      -- target arc-length (world units) between consecutive drip spawns
+local BELT_DRIFT_RADIUS_MIN = 28
+local BELT_DRIFT_RADIUS_MAX = 64
+local BELT_HIDE_MARGIN = 350            -- extra buffer beyond the camera's exact edge before a pushed-back spawn counts as "hidden"
+local BELT_HIDE_STEP = 150              -- arc-length (world units) each upstream push-back iteration moves
+local BELT_HIDE_MAX_STEPS = 35          -- safety cap -- 35*150 = 5250 units of push. Must stay well under BELT_CULL_RADIUS_CELLS*CELL_SIZE below, or a freshly hidden spawn gets deleted the instant after being created
+local BELT_EXTRA_STAGGER_FRAC = 0.4     -- extra randomized push (fraction of CELL_SIZE) on top of "just barely hidden", so arrivals stagger instead of all crossing into view in lockstep
+
+-- How far (in cell-widths, straight-line distance from the player) a
+-- belt planetoid is allowed to drift before it's culled. Belt
+-- planetoids are culled by DISTANCE, not by grid-cell membership like
+-- every other object (see cullDistantObjects) -- a cell-based cull
+-- would delete a freshly hidden drip spawn on the very next pass,
+-- since it was deliberately pushed to a cell outside the active 3x3.
+-- Must stay comfortably larger than the maximum possible spawn
+-- distance from the player: an establish-burst spawn can land up to
+-- ~2.12 cells away (3x3 half-diagonal), and a drip spawn's hide
+-- push-back adds up to ~2.15 more cells on top of that -- 4 cells
+-- leaves ample margin on both.
+worldGen.BELT_CULL_RADIUS_CELLS = 4
 
 worldGen.FIREBAR_COUNT = 36      -- spread across the belt's radial width
 worldGen.FIREBAR_EDGE_COUNT = 10 -- extra, hugging the inner/outer edges specifically
@@ -208,6 +243,153 @@ local function applyBeltOrbit(planet)
   planet.beltOrbitRadius = dist
 end
 
+----------------------------------------------------------------------
+-- Ongoing belt drip -- see worldGen.BELT_SPAWN_INTERVAL comment above
+----------------------------------------------------------------------
+
+-- Starting at angle `theta` (radians, standard atan2 convention) and
+-- fixed radius `r` from the sun, walks backwards along the belt ring
+-- (opposite the orbit's direction of motion -- see applyBeltOrbit's
+-- velocity formula, whose tangent is the direction of INCREASING
+-- theta) until the resulting point is confirmed off-screen, then adds
+-- a little extra randomized push so arrivals stagger over time.
+-- Stepping in angle rather than a straight world-space line keeps the
+-- point exactly on the ring throughout, which a fixed-direction linear
+-- push-back can't do at these radii (thousands of units) without
+-- drifting noticeably off the ring.
+local function pushUpstreamUntilHidden(theta, r, radius)
+  local sunX, sunY = worldGen.sunPos()
+  local x = sunX + math.cos(theta) * r
+  local y = sunY + math.sin(theta) * r
+  local steps = 0
+  while utils.isOnScreen(x, y, radius, BELT_HIDE_MARGIN) and steps < BELT_HIDE_MAX_STEPS do
+    theta = theta - (BELT_HIDE_STEP / r)
+    x = sunX + math.cos(theta) * r
+    y = sunY + math.sin(theta) * r
+    steps = steps + 1
+  end
+
+  local extra = math.random() * worldGen.CELL_SIZE * BELT_EXTRA_STAGGER_FRAC
+  theta = theta - (extra / r)
+  x = sunX + math.cos(theta) * r
+  y = sunY + math.sin(theta) * r
+  return x, y
+end
+
+-- Radius is sampled uniformly across the belt's FULL width, not
+-- jittered around the player's own current distance from the sun.
+-- An earlier version jittered around the player's (clamped) distance,
+-- which looked fine once the player was actually inside the ring --
+-- but the moment they approached from outside it (e.g. coming from
+-- the sky dome, well inside the inner edge), that clamp pinned every
+-- spawn's reference radius to the same boundary value, and jitter
+-- alone couldn't spread them back out: any offset that undershot the
+-- clamp just got clamped straight back to it. The result was a dense
+-- streak of planetoids piled up right on the inner (or outer) edge,
+-- tracking the player's angular position, with the belt's middle left
+-- empty until the player was fully inside it. Sampling the full width
+-- has no boundary to pile up against.
+local function spawnDriftingBeltPlanetoid(refTheta)
+  local inner, outer = worldGen.beltRadii()
+  local r = inner + 10 + math.random() * (outer - inner - 20)
+  local radius = BELT_DRIFT_RADIUS_MIN + math.random() * (BELT_DRIFT_RADIUS_MAX - BELT_DRIFT_RADIUS_MIN)
+
+  local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
+
+  local p = Planetoid.new(x, y, radius, randomColor())
+  p:createRingCanvas()
+  applyBeltOrbit(p)
+  table.insert(state.planetoids, p)
+
+  -- Same coin density formula as createCoinsForPlanetoids (halved for
+  -- belt planetoids) -- duplicated rather than shared since that
+  -- helper is defined later in this file, after createPlanetoidsInCell.
+  local numCoins = math.max(1, math.floor((COINS_PER_PLANET_BASE + math.floor(radius / 10)) / 2))
+  for i = 1, numCoins do
+    local coin = Coin.new(p)
+    coin.angle = (i / numCoins) * math.pi * 2 + math.random() * 0.2
+    if coin.updatePosition then coin:updatePosition() end
+    table.insert(state.coins, coin)
+  end
+
+  return p
+end
+
+local function countBeltPlanetoids()
+  local count = 0
+  for _, p in ipairs(state.planetoids) do
+    if p.isBeltPlanetoid then count = count + 1 end
+  end
+  return count
+end
+
+-- Same 3x3 neighborhood updateActiveCells() streams, checked directly
+-- from the player's live position so the drip can start the instant
+-- they're near belt territory rather than waiting on activeCells.
+local function playerNearBelt()
+  if not state.player then return false end
+  local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+  for dRow = -1, 1 do
+    for dCol = -1, 1 do
+      if worldGen.cellIntersectsBelt(playerCell.col + dCol, playerCell.row + dRow) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local lastPlayerBeltTheta = nil
+
+-- Called on its own cadence (worldGen.BELT_SPAWN_INTERVAL, from
+-- main.lua) rather than piggybacking on updateActiveCells -- the drip
+-- needs to run much more often than the cell-generation pass to read
+-- as a steady trickle instead of periodic bursts.
+function worldGen.updateBeltSpawning()
+  if not playerNearBelt() then
+    lastPlayerBeltTheta = nil
+    return
+  end
+
+  local sunX, sunY = worldGen.sunPos()
+  local dx = state.player.pos.x - sunX
+  local dy = state.player.pos.y - sunY
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist < 1 then dist = 1 end
+  local theta = math.atan2(dy, dx)
+
+  local inner, outer = worldGen.beltRadii()
+  -- Only used below to pace HOW MANY planetoids to spawn (arc length =
+  -- angle * radius) -- clamping here is fine for that estimate even
+  -- when the player is outside the ring. Deliberately NOT passed to
+  -- spawnDriftingBeltPlanetoid as a target radius; see that function's
+  -- comment for why.
+  local pacingR = math.max(inner + 10, math.min(outer - 10, dist))
+
+  -- Pace the spawn count by how far the player has actually traveled
+  -- around the ring since the last check (arc length = angle * radius)
+  -- rather than by elapsed time alone -- a player sweeping through the
+  -- belt fast would otherwise outrun a purely time-based trickle and
+  -- see it thin out, same reasoning as the distance-paced drip in the
+  -- diagonal-corridor belt (js/world/CellManifest.js).
+  local spawnsNeeded = 1
+  if lastPlayerBeltTheta ~= nil then
+    local d = theta - lastPlayerBeltTheta
+    while d > math.pi do d = d - 2 * math.pi end
+    while d < -math.pi do d = d + 2 * math.pi end
+    local arcMoved = math.abs(d) * pacingR
+    spawnsNeeded = math.max(1, math.ceil(arcMoved / BELT_SPAWN_ARC_SPACING))
+  end
+  lastPlayerBeltTheta = theta
+
+  local total = countBeltPlanetoids()
+  for _ = 1, spawnsNeeded do
+    if total >= worldGen.BELT_MAX_TOTAL_PLANETOIDS then break end
+    spawnDriftingBeltPlanetoid(theta)
+    total = total + 1
+  end
+end
+
 local SKYDOME_SPAWN_MARGIN = 200 -- extra clearance kept beyond the dome's own silhouette
 
 -- A generous bounding-circle exclusion zone around the sky dome's
@@ -362,13 +544,28 @@ local function generateCell(col, row)
 end
 
 local function cullDistantObjects(activeCellKeys)
+  local playerX = state.player and state.player.pos.x
+  local playerY = state.player and state.player.pos.y
+  local beltCullRadius = worldGen.BELT_CULL_RADIUS_CELLS * worldGen.CELL_SIZE
+
   for i = #state.planetoids, 1, -1 do
     local p = state.planetoids[i]
     if not p.isPermanent then
-      local cell = worldGen.cellCoordFor(p.pos.x, p.pos.y)
-      local key = worldGen.cellKey(cell.col, cell.row)
-      if not activeCellKeys[key] then
-        table.remove(state.planetoids, i)
+      if p.isBeltPlanetoid then
+        -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
+        -- comment above for why cell membership doesn't work here.
+        if playerX then
+          local dx, dy = p.pos.x - playerX, p.pos.y - playerY
+          if dx * dx + dy * dy > beltCullRadius * beltCullRadius then
+            table.remove(state.planetoids, i)
+          end
+        end
+      else
+        local cell = worldGen.cellCoordFor(p.pos.x, p.pos.y)
+        local key = worldGen.cellKey(cell.col, cell.row)
+        if not activeCellKeys[key] then
+          table.remove(state.planetoids, i)
+        end
       end
     end
   end
@@ -394,7 +591,10 @@ local function cullDistantObjects(activeCellKeys)
       local c = state.coins[i]
       if not c.planet or not survivingPlanetoids[c.planet] then
         table.remove(state.coins, i)
-      else
+      elseif not c.planet.isBeltPlanetoid then
+        -- Belt-planetoid coins are covered by survivingPlanetoids
+        -- above -- their planet already went through the distance
+        -- based cull, not this cell-based one.
         local cell = worldGen.cellCoordFor(c.planet.pos.x, c.planet.pos.y)
         local key = worldGen.cellKey(cell.col, cell.row)
         if not activeCellKeys[key] then
