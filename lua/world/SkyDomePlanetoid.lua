@@ -140,6 +140,17 @@ local bulgeShader = nil
 -- cover the dome's full box without ever re-rendering it), and the GPU
 -- sampler tiles it automatically. See drawForegroundGlass's own
 -- comment for why this replaced a per-frame full-canvas rebuild.
+--
+-- Also carries a ripple distortion — the Love2D port of the JS
+-- version's looping PixiJS ShockwaveFilter pair on the foreground
+-- container (see js/world/SkyDomePlanetoid.js's shockwaveFilter/
+-- shockwaveFilter2). Rather than a literal expanding ring that has to
+-- be manually reset every ~2 seconds (Pixi's own approach), this uses
+-- a plain standing sine wave in radial distance-from-center MINUS
+-- time: since sin() is already periodic, the "rings" travel outward
+-- forever with no reset bookkeeping needed, and it's one extra radial
+-- displacement folded into the SAME warp pass the bulge already does
+-- (no second shader/render pass, unlike Pixi's separate filter).
 local function getBulgeShader()
   if bulgeShader then return bulgeShader end
 
@@ -150,6 +161,37 @@ local function getBulgeShader()
     extern number radius;
     extern vec2 tileSize;
     extern number scroll;
+    extern vec2 rippleCenter1;
+    extern vec2 rippleCenter2;
+    extern number rippleAmplitude;
+    extern number rippleWidth;
+    extern number rippleSpeed;
+    extern number rippleMaxRadius;
+    extern number rippleTime;
+
+    // One ring-shaped band of displacement, expanding outward from
+    // ringCenter (a radius that grows over time, wrapping via mod()
+    // once past rippleMaxRadius — set a bit beyond the dome's own edge,
+    // ~1.0 in this normalized space, so the ring fully exits before the
+    // next one starts, with no visible pop at the wrap). "dist" is how
+    // far p is from the ring's CURRENT radius; the Gaussian envelope
+    // confines the effect to a narrow band around it, and the sin()
+    // inside that band gives one small raised crest next to one small
+    // trough — reading as an actual ripple ring, not a flat bulge donut.
+    // phaseOffset stands one ring's own clock apart from another's, so
+    // two calls sharing the same rippleTime can still be out of sync
+    // with each other.
+    vec2 ringDisplacement(vec2 p, vec2 ringCenter, float phaseOffset) {
+      vec2 fromCenter = p - ringCenter;
+      float d = length(fromCenter);
+      if (d <= 0.0001) return vec2(0.0);
+      vec2 dir = fromCenter / d;
+      float ringRadius = mod(rippleTime * rippleSpeed + phaseOffset, rippleMaxRadius);
+      float dist = d - ringRadius;
+      float envelope = exp(-(dist * dist) / (2.0 * rippleWidth * rippleWidth));
+      float ripple = sin(dist / rippleWidth * 3.14159265) * envelope;
+      return dir * ripple;
+    }
 
     vec4 effect(vec4 color, Image tex, vec2 texture_coords, vec2 screen_coords) {
       vec2 pixel = texture_coords * tileSize;
@@ -161,6 +203,16 @@ local function getBulgeShader()
         t = t * t * (3.0 - 2.0 * t);
         p /= (1.0 + strength * t);
       }
+
+      // Two independent ripple SOURCES (not one center emitting two
+      // concentric rings) — same idea as the JS version's two
+      // ShockwaveFilters, each with its own center point on the dome.
+      // Phase-offset from each other too (half a period apart), so
+      // even where their rings cross paths they don't stay permanently
+      // in lockstep.
+      vec2 disp = ringDisplacement(p, rippleCenter1, 0.0)
+                + ringDisplacement(p, rippleCenter2, rippleMaxRadius * 0.5);
+      p += disp * rippleAmplitude;
 
       vec2 warpedPixel = center + p * radii;
 
@@ -319,6 +371,25 @@ function SkyDomePlanetoid.new(x, y, options)
 
   self.domeBulgeStrength = options.domeBulgeStrength or 0.55
   self.domeBulgeRadius = options.domeBulgeRadius or 2.0
+
+  -- Subtle forcefield ripple — a single ring-shaped band of distortion
+  -- expanding outward from the dome's own center, looping — see
+  -- getBulgeShader's own comment for how this maps to the JS version's
+  -- looping ShockwaveFilter pair. All distances are in the bulge
+  -- shader's own normalized (radii-divided) space, where the dome's
+  -- own edge sits at ~1.0.
+  self.domeForegroundRippleAmplitude = options.domeForegroundRippleAmplitude or 0.01  -- how far a pixel gets displaced at the ring's peak
+  self.domeForegroundRippleWidth = options.domeForegroundRippleWidth or 0.05         -- how wide (radially) the ring band is
+  self.domeForegroundRippleSpeed = options.domeForegroundRippleSpeed or 0.3          -- how fast the ring's own radius grows, per second
+  self.domeForegroundRippleMaxRadius = options.domeForegroundRippleMaxRadius or 1.3  -- radius the ring wraps back to 0 at — past the dome's own edge (~1.0), so it fully exits before restarting
+
+  -- Two independent ripple SOURCES, not two concentric rings sharing
+  -- the dome's own center — matches the JS version's two
+  -- ShockwaveFilters, each with its own off-center point. Each {x, y}
+  -- is an offset from the dome's true center, in the same normalized
+  -- space as everything above (edge is ~1.0 away).
+  self.domeForegroundRippleCenter1 = options.domeForegroundRippleCenter1 or { -0.3, -0.2 }
+  self.domeForegroundRippleCenter2 = options.domeForegroundRippleCenter2 or { 0.3, -0.2 }
 
   self.hexGridCanvas = nil
   self.hexGridForegroundCanvas = nil
@@ -819,6 +890,13 @@ function SkyDomePlanetoid:drawForegroundGlass()
     shader:send("radius", self.domeBulgeRadius)
     shader:send("tileSize", { self.hexGridForegroundTileW, self.hexGridForegroundTileH })
     shader:send("scroll", self:fgScroll())
+    shader:send("rippleCenter1", self.domeForegroundRippleCenter1)
+    shader:send("rippleCenter2", self.domeForegroundRippleCenter2)
+    shader:send("rippleAmplitude", self.domeForegroundRippleAmplitude)
+    shader:send("rippleWidth", self.domeForegroundRippleWidth)
+    shader:send("rippleSpeed", self.domeForegroundRippleSpeed)
+    shader:send("rippleMaxRadius", self.domeForegroundRippleMaxRadius)
+    shader:send("rippleTime", love.timer.getTime())
 
     love.graphics.setShader(shader)
     love.graphics.setColor(1, 1, 1, zoomFactor * 0.95)
