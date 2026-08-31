@@ -19,8 +19,8 @@
             "scale": 1.5,
             "selectedLayer": 0,
             "viewCenter": {
-                "x": 922.6666666666665,
-                "y": 576
+                "x": 1402,
+                "y": 699.3333333333333
             }
         },
         "Level1.tmx#Grass Tiles": {
@@ -30,6 +30,7 @@
     "last.exportedFilePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/tiled",
     "last.externalTilesetPath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/tiled",
     "last.imagePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/img",
+    "lastUsedTilesetExportFilter": "All Files (*)",
     "map.height": 30,
     "map.lastUsedExportFilter": "Lua files (*.lua)",
     "map.lastUsedFormat": "tmx",
@@ -43,5 +44,6 @@
         "Grass Tiles.tsx",
         "Level1.tmx"
     ],
+    "tileset.lastUsedFilter": "Tiled tileset files (*.tsx *.xml)",
     "tileset.lastUsedFormat": "tsx"
 }

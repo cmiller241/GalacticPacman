@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<tileset version="1.9" tiledversion="1.9.2" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="54" columns="9">
+<tileset version="1.9" tiledversion="1.9.2" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="81" columns="9">
+ <editorsettings>
+  <export target="Grass Tiles.tsx" format="tsx"/>
+ </editorsettings>
  <properties>
   <property name="role" value=""/>
  </properties>
- <image source="../img/platform.png" width="288" height="192"/>
+ <image source="../img/platform.png" width="288" height="288"/>
  <tile id="0">
   <properties>
    <property name="role" value="top"/>
@@ -198,7 +201,7 @@
  </tile>
  <tile id="32">
   <properties>
-   <property name="role" value="wall"/>
+   <property name="role" value="lava"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
@@ -272,6 +275,30 @@
   <properties>
    <property name="role" value="fill"/>
    <property name="slope" value="flat"/>
+  </properties>
+ </tile>
+ <tile id="55">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="ceilingRight"/>
+  </properties>
+ </tile>
+ <tile id="56">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="ceilingLeft"/>
+  </properties>
+ </tile>
+ <tile id="64">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="rampLeft"/>
+  </properties>
+ </tile>
+ <tile id="65">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="rampRight"/>
   </properties>
  </tile>
 </tileset>

@@ -49,6 +49,20 @@ function Player.new(x, y)
   self.airControlAccel = 0.3
   self.airControlMaxSpeed = 4
   self.edgeFallCarryFraction = 0.35
+  -- How hard the player peels off a wall-climb shape (see
+  -- TiledTerrain.lua's buildRampClimbShape) when they stop actively
+  -- climbing — applied along the current segment's own normal, so it
+  -- reads as falling AWAY from the wall/curve rather than just
+  -- dropping straight down through it. A bit more assertive than
+  -- edgeFallCarryFraction's own gentle edge-of-ledge carry, since this
+  -- is meant to visibly sell "you just detached," not a subtle nudge.
+  self.wallClimbDetachPush = constants.PLAYER_LINEAR_SPEED * 0.6
+  -- Which way (1 = the shape's "forward"/climbing arc-length direction,
+  -- -1 = the reverse) the player was last moving while on a wall-face
+  -- segment — see Player:move()'s onWallFace handling. nil whenever not
+  -- currently on one, so stepping onto a fresh wall always starts from
+  -- a clean slate rather than remembering some earlier, unrelated wall.
+  self.wallClimbDir = nil
 
   -- Wall jump: which wall (if any) was touched THIS FRAME, set fresh
   -- every frame by CollisionSystem:handlePlayerWallCollisions — never
@@ -419,43 +433,112 @@ function Player:move(keys)
         self.pos = Vector2.new(desiredX, topY - self.radius)
       end
     else
-      -- Optional per-surface speed scaling (e.g. TiledTerrain slowing the
-      -- player down climbing a 45-degree slope, speeding up descending
-      -- one) — looked up at the CURRENT arc position, before stepping,
-      -- since the segment the player is standing on right now is what
-      -- should govern this step's speed. ds itself (still its
-      -- pre-multiplied, direction-only value here) tells the surface
-      -- which way along the segment this step is heading, which is what
-      -- separates uphill from downhill. Duck-typed: surfaces without this
-      -- method (every existing one) behave exactly as before.
-      if type(planet.getArcSpeedMultiplier) == "function" then
-        ds = ds * planet:getArcSpeedMultiplier(self.surfaceArcPos, ds)
+      -- rampLeft's wall sits on the opposite side from rampRight's, so
+      -- its arc-length-increasing direction is physically leftward
+      -- instead of rightward (see buildRampClimbShape's own comment on
+      -- controlsReversed) — flip ds here, once, before anything below
+      -- reads it, so "climbing" always lines up with the key that
+      -- visually walks the player into the ramp.
+      if planet.isWallClimb and planet.controlsReversed then ds = -ds end
+
+      -- Wall-climb shapes (see TiledTerrain.lua's buildRampClimbShape)
+      -- detach the player if they REVERSE direction on the actual wall
+      -- face — Sonic-loop style, but two-way: a wall can be run up OR
+      -- down (e.g. one loop's up-wall and a separate loop's down-wall,
+      -- both built as ordinary wall-climb shapes off their own ramp
+      -- tile), and either is fine to commit to and ride the whole way.
+      -- What isn't allowed is changing your mind partway — going up
+      -- then reversing to go down, or vice versa — which peels the
+      -- player off instead of letting them awkwardly backtrack.
+      -- Standing still (releasing input, ds == 0) does NOT detach —
+      -- only an actual opposite-direction press does. (An earlier
+      -- version detached on ds <= 0 outright, which made descending a
+      -- wall impossible — any downward step, even the first, read as
+      -- "not climbing" and detached immediately.)
+      --
+      -- Only applies on the actual WALL FACE segment (isWallFace, set
+      -- once by buildRampClimbShape on exactly the one segment
+      -- spanning the vertical wall stack) — not the curve leading into
+      -- it, not the slope leading out of it, and not the flat ledge
+      -- past that (see buildRampClimbShape's own flat-run absorption).
+      -- Turning around on the curve/slope/ledge is perfectly normal
+      -- footing, same as any other ramp in the game; it's specifically
+      -- reversing on the sheer wall itself that detaches. self.wallClimbDir
+      -- resets to nil off the wall face, so entering a wall fresh always
+      -- accepts whichever direction you arrive with as the baseline.
+      local currentSeg = planet.isWallClimb and planet:segmentAtArcPosition(self.surfaceArcPos) or nil
+      local onWallFace = currentSeg ~= nil and currentSeg.isWallFace
+
+      local wallReversal = false
+      if onWallFace then
+        if ds ~= 0 then
+          local dirSign = ds > 0 and 1 or -1
+          if self.wallClimbDir and self.wallClimbDir ~= dirSign then
+            wallReversal = true
+          else
+            self.wallClimbDir = dirSign
+          end
+        end
+      else
+        self.wallClimbDir = nil
       end
 
-      local desiredArcPos = self.surfaceArcPos + ds
-
-      -- isOpenPath surfaces (e.g. TiledTerrain — a hill has two ends, not
-      -- a closed loop like RoundedRectPlanetoid) fall off the end instead
-      -- of wrapping around, same "carry momentum into a fall" pattern
-      -- SkyDome's own edge-of-deck check above already uses.
-      if planet.isOpenPath and (desiredArcPos < 0 or desiredArcPos > planet:getPerimeter()) then
-        -- Snap to the exact edge vertex before falling, rather than
-        -- leaving self.pos wherever last frame's walk step landed (which
-        -- can be up to one whole step short of the true end). Landing
-        -- back on this same shape is decided purely by geometry from here
-        -- on (CollisionSystem's swept crossing test) — starting exactly
-        -- at the edge is what lets that test exclude a re-land on the
-        -- very next frame instead of only after several more steps'
-        -- worth of horizontal drift.
-        local edgeArcPos = desiredArcPos < 0 and 0 or planet:getPerimeter()
-        self.pos = planet:worldPointAtArcPosition(edgeArcPos, self.radius).point
+      if wallReversal then
         self.onSurface = false
         self.currentPlanet = nil
-        self.vel = Vector2.new(ds * self.edgeFallCarryFraction, 0)
+        self.vel = currentSeg.normal:multiply(self.wallClimbDetachPush)
       else
-        self.surfaceArcPos = desiredArcPos
-        local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
-        self.pos = worldSurface.point
+        -- Optional per-surface speed scaling (e.g. TiledTerrain slowing
+        -- the player down climbing a 45-degree slope, speeding up
+        -- descending one) — looked up at the CURRENT arc position,
+        -- before stepping, since the segment the player is standing on
+        -- right now is what should govern this step's speed. ds itself
+        -- (still its pre-multiplied, direction-only value here) tells
+        -- the surface which way along the segment this step is heading,
+        -- which is what separates uphill from downhill. Duck-typed:
+        -- surfaces without this method (every existing one) behave
+        -- exactly as before.
+        if type(planet.getArcSpeedMultiplier) == "function" then
+          ds = ds * planet:getArcSpeedMultiplier(self.surfaceArcPos, ds)
+        end
+
+        local desiredArcPos = self.surfaceArcPos + ds
+
+        -- isOpenPath surfaces (e.g. TiledTerrain — a hill has two ends, not
+        -- a closed loop like RoundedRectPlanetoid) fall off the end instead
+        -- of wrapping around, same "carry momentum into a fall" pattern
+        -- SkyDome's own edge-of-deck check above already uses.
+        if planet.isOpenPath and (desiredArcPos < 0 or desiredArcPos > planet:getPerimeter()) then
+          -- Snap to the exact edge vertex before falling, rather than
+          -- leaving self.pos wherever last frame's walk step landed (which
+          -- can be up to one whole step short of the true end). Landing
+          -- back on this same shape is decided purely by geometry from here
+          -- on (CollisionSystem's swept crossing test) — starting exactly
+          -- at the edge is what lets that test exclude a re-land on the
+          -- very next frame instead of only after several more steps'
+          -- worth of horizontal drift.
+          local edgeArcPos = desiredArcPos < 0 and 0 or planet:getPerimeter()
+          self.pos = planet:worldPointAtArcPosition(edgeArcPos, self.radius).point
+          self.onSurface = false
+          self.currentPlanet = nil
+          -- Carried along the path's ACTUAL tangent at the edge, not
+          -- assumed purely horizontal — ds is an arc-length rate, and
+          -- "forward along the path" only equals "rightward in world
+          -- space" for a shape whose tangent never really turns (an
+          -- ordinary hill). A wall-climb shape's ceiling stretch runs
+          -- backwards in world-x relative to its own ground/wall
+          -- portions (same ds sign throughout, opposite dx) — carrying
+          -- with plain (ds, 0) sent the player skidding back the way
+          -- they came instead of on through, missing the neighboring
+          -- shape they were supposed to fall onto and catch.
+          local edgeSeg = planet.segmentAtArcPosition and planet:segmentAtArcPosition(edgeArcPos)
+          local carryDir = edgeSeg and edgeSeg.tangent or Vector2.new(1, 0)
+          self.vel = carryDir:multiply(ds * self.edgeFallCarryFraction)
+        else
+          self.surfaceArcPos = desiredArcPos
+          local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
+          self.pos = worldSurface.point
+        end
       end
     end
 

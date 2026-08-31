@@ -324,7 +324,11 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
       -- arcPosition only if the planet implements it (full rounded-rect).
       -- SkyDome may only expose a minimal stub or none at all.
       if type(planet.arcPositionForWorldPoint) == "function" then
-        player.surfaceArcPos = planet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+        -- excludeWallFace=true: see TerrainShape:arcPositionForWorldPoint's
+        -- own comment — landing should never resolve onto the wall face
+        -- itself (findLandingCrossing already refused to land there; this
+        -- keeps the arc-position lookup that follows in agreement with it).
+        player.surfaceArcPos = planet:arcPositionForWorldPoint(player.pos.x, player.pos.y, true)
       elseif planet.isSkyDome then
         local minX = planet.pos.x - planet.halfWidth
         player.surfaceArcPos = player.pos.x - minX
