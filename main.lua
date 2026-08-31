@@ -127,11 +127,17 @@ function love.load()
     -- JumpPlatform-based patrol) — one per shape with enough room to
     -- actually walk back and forth; a shorter shape would put its two
     -- inset turn-around bounds past each other, so it'd just flip
-    -- direction in place every frame instead of patrolling.
+    -- direction in place every frame instead of patrolling. Ramp-climb
+    -- shapes (isWallClimb — see TiledTerrain.lua's buildRampClimbShape)
+    -- are skipped entirely: an ordinary edge-patrolling Ooomba plopped
+    -- onto one would just walk straight up the wall along with the
+    -- player, since Ooomba's own patrol logic has no concept of "this
+    -- surface needs active momentum to stay attached" the way
+    -- Player.lua's own isWallClimb check now does.
     local OOMBA_MIN_SHAPE_LENGTH = 200
     state.ooombas = {}
     for i, shape in ipairs(terrainLevel.shapes) do
-      if shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH then
+      if not shape.isWallClimb and shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH then
         local startArcPos = shape:getPerimeter() / 2
         local direction = (i % 2 == 0) and 1 or -1
         table.insert(state.ooombas, Ooomba.new(shape, startArcPos, { direction = direction }))

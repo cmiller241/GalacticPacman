@@ -116,11 +116,20 @@ local function buildTilePropertyLookup(tilesets)
   return byGid
 end
 
--- Returns "flat", "riseRight", "riseLeft", "wall", "lava", "fill", or
--- "empty", straight from that tile's own `role`/`slope` properties.
--- Untagged or unrecognized-role tiles default to "fill" (matches the
--- sheet's own convention — undecorated background dirt needs no
--- explicit tagging).
+-- Returns "flat", "riseRight", "riseLeft", "wall", "lava", "rampRight",
+-- "rampLeft", "fill", or "empty", straight from that tile's own
+-- `role`/`slope` properties. Untagged or unrecognized-role tiles
+-- default to "fill" (matches the sheet's own convention — undecorated
+-- background dirt needs no explicit tagging).
+--
+-- rampRight/rampLeft are deliberately NOT isTopRole (see below) — they
+-- never go through the ordinary per-column walkable-top scan at all.
+-- That scan can only ever describe one floor height per column (a
+-- hill/ramp profile), which caps any chain it builds at 45 degrees of
+-- average rise; a ramp tile whose own art curves all the way from flat
+-- ground to a vertical wall face needs more than that. See
+-- buildRampClimbShape below, which builds an explicit hand-computed
+-- path for these instead.
 local function classifyGid(tileProps, gid)
   if gid == 0 then return "empty" end
   local props = tileProps[gid]
@@ -130,6 +139,21 @@ local function classifyGid(tileProps, gid)
   if role == "top" then
     local slope = props.slope
     if slope == "riseLeft" or slope == "riseRight" then return slope end
+    -- rampRight/rampLeft are authored as role="top" + slope="rampRight"/
+    -- "rampLeft" — the same convention as the ordinary riseLeft/riseRight
+    -- 45-degree slopes, not a distinct role of their own. isTopRole
+    -- below deliberately does NOT recognize these two return values, so
+    -- they still never enter the ordinary per-column scan despite role
+    -- being "top" — see buildRampClimbShape for why they need their own
+    -- shape builder instead.
+    if slope == "rampRight" or slope == "rampLeft" then return slope end
+    -- ceilingLeft/ceilingRight: a second curve capping a wall-climb
+    -- shape's wall stack, continuing PAST vertical into a ceiling
+    -- instead of stopping at a 45-degree slope — see
+    -- buildRampClimbShape's own comment on the cap-curve branch. Same
+    -- "not isTopRole" treatment as rampRight/rampLeft: never enters
+    -- the ordinary per-column scan.
+    if slope == "ceilingLeft" or slope == "ceilingRight" then return slope end
     return "flat"
   end
   return "fill"
@@ -231,20 +255,34 @@ end
 function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
   local best = nil
   for _, seg in ipairs(self.segments) do
-    local dx, dy = seg.b.x - seg.a.x, seg.b.y - seg.a.y
-    local lenSq = dx * dx + dy * dy
-    if lenSq > 1e-9 then
-      local nx, ny = seg.normal.x, seg.normal.y
-      local prevSigned = (prevX - seg.a.x) * nx + (prevY - seg.a.y) * ny
-      local curSigned = (curX - seg.a.x) * nx + (curY - seg.a.y) * ny
-      if prevSigned >= 0 and curSigned <= prevSigned then
-        local t = ((curX - seg.a.x) * dx + (curY - seg.a.y) * dy) / lenSq
-        if t >= 0 and t <= 1 then
-          local px, py = seg.a.x + dx * t, seg.a.y + dy * t
-          local ddx, ddy = curX - px, curY - py
-          local dist = math.sqrt(ddx * ddx + ddy * ddy)
-          if not best or dist < best.distance then
-            best = { point = Vector2.new(px, py), normal = seg.normal, distance = dist }
+    -- isWallFace segments (see buildRampClimbShape) are never a valid
+    -- landing target — jumping straight at the wall and getting
+    -- swept-crossing "caught" on it here is exactly what let a player
+    -- run up the wall without ever going through the ramp, bypassing
+    -- the ramp/curve entry point (and Player.lua's own isWallFace
+    -- detach check) entirely. The wall's own separate WallShape (see
+    -- buildWallShapes) still pushes the player out and enables an
+    -- ordinary wall-jump for this exact same physical surface — this
+    -- only blocks TerrainShape's own "walk up it" attachment via a
+    -- direct jump; walking onto it continuously from the ramp (which
+    -- never calls findLandingCrossing at all — see Player.lua's
+    -- move()) is completely unaffected.
+    if not seg.isWallFace then
+      local dx, dy = seg.b.x - seg.a.x, seg.b.y - seg.a.y
+      local lenSq = dx * dx + dy * dy
+      if lenSq > 1e-9 then
+        local nx, ny = seg.normal.x, seg.normal.y
+        local prevSigned = (prevX - seg.a.x) * nx + (prevY - seg.a.y) * ny
+        local curSigned = (curX - seg.a.x) * nx + (curY - seg.a.y) * ny
+        if prevSigned >= 0 and curSigned <= prevSigned then
+          local t = ((curX - seg.a.x) * dx + (curY - seg.a.y) * dy) / lenSq
+          if t >= 0 and t <= 1 then
+            local px, py = seg.a.x + dx * t, seg.a.y + dy * t
+            local ddx, ddy = curX - px, curY - py
+            local dist = math.sqrt(ddx * ddx + ddy * ddy)
+            if not best or dist < best.distance then
+              best = { point = Vector2.new(px, py), normal = seg.normal, distance = dist }
+            end
           end
         end
       end
@@ -294,29 +332,53 @@ function TerrainShape:worldPointAtArcPosition(s, pushDistance)
   local seg, point = self:segmentAtArcPosition(s)
   local normal = seg.normal
   if pushDistance ~= 0 then
-    -- Always straight up, never along the segment's own (possibly
-    -- diagonal) normal — this surface forces the player upright
-    -- regardless of slope (see Player:visualDownDirection), so the
-    -- resting offset has to match or the player's CENTER jumps sideways
-    -- by a chunk of pushDistance the instant a walk crosses from a flat
-    -- segment (normal straight up) onto a 45-degree one (normal
-    -- diagonal) or back. Since the camera tracks player.pos directly
-    -- with no smoothing, that jump reads as a camera jolt.
-    point = point:clone():add(Vector2.new(0, -pushDistance))
+    -- forceUprightJump shapes (ordinary hills/ramps) push straight up,
+    -- never along the segment's own (possibly diagonal) normal — this
+    -- surface forces the player upright regardless of slope (see
+    -- Player:visualDownDirection), so the resting offset has to match
+    -- or the player's CENTER jumps sideways by a chunk of pushDistance
+    -- the instant a walk crosses from a flat segment (normal straight
+    -- up) onto a 45-degree one (normal diagonal) or back. Since the
+    -- camera tracks player.pos directly with no smoothing, that jump
+    -- reads as a camera jolt.
+    --
+    -- Shapes with forceUprightJump = false (see buildRampClimbShape)
+    -- push along the segment's TRUE normal instead — required for
+    -- those specifically, since a shape whose orientation is meant to
+    -- rotate with the surface (running up a wall, sideways-on) needs
+    -- its resting offset to point sideways there too, not straight up
+    -- into empty air.
+    local pushDir = self.forceUprightJump and Vector2.new(0, -1) or normal
+    point = point:clone():add(pushDir:multiply(pushDistance))
   end
   return { point = point, normal = normal }
 end
 
-function TerrainShape:arcPositionForWorldPoint(worldX, worldY)
+-- excludeWallFace: skip the wall-face segment (see buildRampClimbShape)
+-- when picking the nearest one. Only passed true from the LANDING path
+-- (CollisionSystem:tryLandOnPlanet) — findLandingCrossing already
+-- refuses to land ON the wall face itself, but without this, this
+-- function's own separate nearest-segment search (used right after, to
+-- turn that landing point into an arc position) could still resolve to
+-- it anyway: near a corner like a ceiling cap, the wall face sits
+-- geometrically close to the cap-arc/ceiling segments a player actually
+-- lands on, so "nearest segment" and "the segment they landed on" can
+-- disagree. Left false for the OTHER caller (CollisionSystem's
+-- wall-push resync, every frame the player is shoved by touching a
+-- WallShape) — that one fires legitimately while genuinely walking the
+-- wall face itself, and needs to keep resolving to it.
+function TerrainShape:arcPositionForWorldPoint(worldX, worldY, excludeWallFace)
   local traveled = 0
   local bestArc, bestDistSq = 0, math.huge
   for _, seg in ipairs(self.segments) do
-    local t, px, py = projectOntoSegment(seg, worldX, worldY)
-    local ddx, ddy = worldX - px, worldY - py
-    local distSq = ddx * ddx + ddy * ddy
-    if distSq < bestDistSq then
-      bestDistSq = distSq
-      bestArc = traveled + t * seg.length
+    if not (excludeWallFace and seg.isWallFace) then
+      local t, px, py = projectOntoSegment(seg, worldX, worldY)
+      local ddx, ddy = worldX - px, worldY - py
+      local distSq = ddx * ddx + ddy * ddy
+      if distSq < bestDistSq then
+        bestDistSq = distSq
+        bestArc = traveled + t * seg.length
+      end
     end
     traveled = traveled + seg.length
   end
@@ -339,6 +401,16 @@ end
 -- therefore positive when walking WITH that descent (downhill) and
 -- negative when walking AGAINST it (uphill).
 function TerrainShape:getArcSpeedMultiplier(s, direction)
+  -- Wall-climb shapes (see buildRampClimbShape) are exempt entirely —
+  -- every segment past the initial curve is steep by design (that's
+  -- the whole point), so the ordinary uphill penalty below would slow
+  -- the player down through practically the whole feature. This is
+  -- meant to run at full, Sonic-style speed instead — see also
+  -- Player.lua's own isWallClimb check, which detaches the player from
+  -- these shapes entirely rather than just slowing them down further
+  -- once they stop actively climbing.
+  if self.isWallClimb then return 1.0 end
+
   local seg = self:segmentAtArcPosition(s)
   if math.abs(seg.tangent.y) <= 0.01 then
     return 1.0
@@ -390,13 +462,24 @@ end
 -- above them. Applying the wall-only check to these too briefly made
 -- every such ledge silently vanish from collision despite still
 -- rendering fine.
-local function computeTopPointsByColumn(layer, tileProps, width, height)
+-- claimedCells (optional): a set of row*width+col keys to skip entirely
+-- — used so tiles already absorbed into a ramp-climb shape (see
+-- buildRampClimbShape) aren't ALSO picked up here as their own,
+-- separate ordinary shape. Without this, a ramp's slope tile and the
+-- flat ledge past it would exist as TWO overlapping shapes covering
+-- the same physical space, and walking from the ramp-climb shape onto
+-- the ordinary one they overlap with would hit the exact "fall off an
+-- open path's end, briefly airborne, then re-land" sequence that
+-- reads as a hop — the same mechanism a real gap between two
+-- genuinely separate shapes triggers on purpose, just here from a
+-- seam that shouldn't exist at all.
+local function computeTopPointsByColumn(layer, tileProps, width, height, claimedCells)
   local pointsByColumn = {}
   for col = 0, width - 1 do
     local rows = {}
     for row = 0, height - 1 do
       local gid = layer.data[row * width + col + 1] -- Lua 1-based, row-major
-      if gid ~= 0 then
+      if gid ~= 0 and not (claimedCells and claimedCells[row * width + col]) then
         local role = classifyGid(tileProps, gid)
         if isTopRole(role) then
           -- Exposure check applies ONLY to "wall" — the one role that
@@ -603,6 +686,330 @@ local function newShape(segments)
 end
 
 ----------------------------------------------------------------------
+-- Ramp-to-wall climbs (rampRight/rampLeft)
+----------------------------------------------------------------------
+-- See classifyGid's own comment for why these need a shape builder of
+-- their own instead of just being more "top" tiles: the ordinary
+-- per-column scan above can only ever describe one floor height per
+-- column (a hill/ramp profile), capping any chain it produces at 45
+-- degrees of average rise — nowhere near enough for a curve that ends
+-- up fully vertical. This builds one explicit, hand-computed path per
+-- authored ramp tile instead: a quarter-circle arc exactly inscribed
+-- in that ONE tile's own 64x64 box (matching the tile's own art,
+-- confirmed against how it's actually drawn — see buildRampClimbShape
+-- below for exactly which corner the arc centers on), continuing
+-- straight up whatever "wall"-role stack sits directly above it, then
+-- picking up one ordinary 45-degree slope tile if one caps that stack.
+-- Past that point, flat ledge tiles are picked up by the ordinary scan
+-- above just fine on their own — the hand-off is seamless because
+-- flat ground's own normal (straight up) is identical whether this
+-- shape or the ordinary ("forceUprightJump") one computed it.
+--
+-- forceUprightJump is explicitly turned OFF on these shapes (unlike
+-- every ordinary TerrainShape) — see Player:visualDownDirection and
+-- TerrainShape:worldPointAtArcPosition, both of which branch on it —
+-- so orientation and the walking push-offset both follow the path's
+-- true local normal instead of staying locked vertical: upright on
+-- the flat approach, rotating through the curve, fully sideways
+-- climbing the wall, tilting back through the slope, and upright
+-- again the instant it reaches flat ground — all as a direct
+-- consequence of the geometry, no special-cased snap anywhere.
+--
+-- The "wall"-role tiles this climbs are completely unaffected by any
+-- of this — buildWallShapes still turns them into their own solid
+-- rects exactly as it always has, so jumping into one from the side
+-- and wall-jumping off it keeps working independently of this
+-- walkable path sharing the same physical space.
+----------------------------------------------------------------------
+
+local RAMP_ARC_SEGMENTS = 10 -- straight segments approximating the quarter-circle — fine enough that the rotation (see above) reads as a smooth sweep, not a visible facet
+
+-- Builds the full climb path for one ramp tile at (col, row). dir = 1
+-- for rampRight (ledge below-left, wall above-right, path runs overall
+-- left-to-right), dir = -1 for rampLeft (mirrored: ledge below-right,
+-- wall above-left, path runs overall right-to-left).
+--
+-- The arc is centered on whichever corner of the tile's own box sits
+-- on the curve's "inside" (open-air) side — top-left for rampRight,
+-- top-right for rampLeft — sweeping from the tangent-HORIZONTAL point
+-- (matching the flat ledge below) to the tangent-VERTICAL point
+-- (matching the wall above). Its normal is derived straight from the
+-- true circle center (always points TOWARD it — that's the open-air
+-- side, verified directly against the geometry: the corner the arc
+-- centers on is exactly the corner left empty in the tile's own art).
+-- That "toward center" rule is direction-agnostic, so unlike the
+-- straight wall/slope segments past the arc it needs no `dir`
+-- adjustment of its own.
+--
+-- The straight portions (wall, and the one slope tile if present)
+-- reuse the same rotate-the-tangent convention every other
+-- TerrainShape segment uses (buildWorldSegments) — but mirrored by
+-- `dir`, since walking rampLeft's path traverses each tile's own
+-- left/right edges in the OPPOSITE order the ordinary left-to-right
+-- column scan assumes, and rotating a reversed tangent by the
+-- standard formula gives the reversed (wrong-side) normal unless that
+-- reversal is compensated for here.
+-- Returns shape, claimedCells — claimedCells is a set (row*width+col ->
+-- true) of every tile this shape absorbed (wall stack, slope, and the
+-- flat ledge run past it), for the caller to exclude from
+-- computeTopPointsByColumn. See that function's own comment for why:
+-- without this, a tile like the slope (unconditionally picked up by
+-- the ordinary column scan, no exposure check the way "wall" gets)
+-- would end up covered by TWO overlapping shapes, and the seam between
+-- them reads as a hop.
+local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+  local T = TILE_WORLD_SIZE
+  local x0 = anchorX + col * T
+  local y0 = anchorY + row * T
+  local claimedCells = {}
+
+  local centerX = dir > 0 and x0 or (x0 + T)
+  local centerY = y0
+  local center = Vector2.new(centerX, centerY)
+
+  local thetaLedge = math.pi / 2
+  local thetaWall = dir > 0 and 0 or math.pi
+
+  local points = {}
+  for i = 0, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = thetaLedge + (thetaWall - thetaLedge) * t
+    table.insert(points, Vector2.new(centerX + T * math.cos(theta), centerY + T * math.sin(theta)))
+  end
+  local arcSegmentCount = #points - 1
+
+  -- Wall column: directly above-right (rampRight) or above-left
+  -- (rampLeft) of the ramp tile, per this feature's own authoring
+  -- convention (see this file's header comment / classifyGid). Walks
+  -- upward counting contiguous "wall"-role tiles to find where the
+  -- stack actually ends.
+  local wallCol = dir > 0 and (col + 1) or (col - 1)
+  local wallTopRow = nil
+  do
+    local r = row - 1
+    while r >= 0 do
+      local gid = layer.data[r * width + wallCol + 1]
+      if gid == 0 or classifyGid(tileProps, gid) ~= "wall" then break end
+      wallTopRow = r
+      claimedCells[r * width + wallCol] = true
+      r = r - 1
+    end
+  end
+
+  local wallSegIndex = nil
+  -- Set only when a ceilingLeft/ceilingRight cap is found below — a
+  -- SECOND arc, with its own center, distinct from the base arc above.
+  local capCenter, capArcStart, capArcEnd = nil, nil, nil
+
+  if wallTopRow then
+    local wallEdgeX = dir > 0 and (anchorX + wallCol * T) or (anchorX + (wallCol + 1) * T)
+    table.insert(points, Vector2.new(wallEdgeX, anchorY + wallTopRow * T))
+    -- The segment this point just closed off (from the arc's own last
+    -- point to here) is THE wall face — exactly one segment, however
+    -- many tiles tall the stack actually is. Recorded now, by index,
+    -- rather than inferred later from steepness — the slope segment
+    -- right after this is ALSO steep (nonzero tangent.y), and detach
+    -- (see Player.lua's own isWallFace check) needs to apply to the
+    -- wall specifically, not the curve or the slope.
+    wallSegIndex = #points - 1
+
+    -- Where the run that follows (absorbed below) starts from:
+    -- directly above the wall stack, same column, ONE row up, unless a
+    -- slope or ceiling cap is found (handled just below, which
+    -- overrides these to wherever that cap's own "continuing" edge
+    -- lands instead).
+    local flatCol, flatRow = wallCol, wallTopRow - 1
+    local absorbRole = "flat"  -- what the run's tiles need to classify as; "wall" once past a ceiling cap
+    local absorbDir = dir      -- which way the run continues; flips (-dir) past a ceiling cap
+
+    -- One ordinary 45-degree slope tile (same column as the wall stack,
+    -- wallCol), OR a ceilingLeft/ceilingRight cap (one column BACK
+    -- toward the base ramp instead — wallCol - dir — matching how the
+    -- ramp tile itself sits diagonally off its own wall rather than
+    -- stacked on it).
+    local capRow = wallTopRow - 1
+    local capCol = wallCol - dir
+    if capRow >= 0 then
+      local slopeGid = layer.data[capRow * width + wallCol + 1]
+      local slopeRole = slopeGid ~= 0 and classifyGid(tileProps, slopeGid) or "empty"
+      local ceilGid = layer.data[capRow * width + capCol + 1]
+      local ceilRole = ceilGid ~= 0 and classifyGid(tileProps, ceilGid) or "empty"
+      local capRole = (slopeRole == "riseLeft" or slopeRole == "riseRight") and slopeRole or ceilRole
+
+      if capRole == "riseLeft" or capRole == "riseRight" then
+        -- Reuses the exact same left/right-edge convention
+        -- buildWorldSegments uses for riseLeft/riseRight, so it
+        -- behaves identically to any other slope tile in the map. A
+        -- slope tile's "high" edge lands at ITS OWN row (not the row
+        -- above — a 45 tile's art reaches the same height as the row
+        -- it's drawn in on one side), in the NEXT column over, which
+        -- is where the run below actually starts from in this branch.
+        claimedCells[capRow * width + wallCol] = true
+        local leftRow, rightRow
+        if capRole == "riseLeft" then
+          leftRow, rightRow = capRow, capRow + 1
+        else
+          leftRow, rightRow = capRow + 1, capRow
+        end
+        local leftPt = Vector2.new(anchorX + wallCol * T, anchorY + leftRow * T)
+        local rightPt = Vector2.new(anchorX + (wallCol + 1) * T, anchorY + rightRow * T)
+        if dir > 0 then
+          table.insert(points, leftPt)
+          table.insert(points, rightPt)
+          flatCol, flatRow = wallCol + 1, rightRow
+        else
+          table.insert(points, rightPt)
+          table.insert(points, leftPt)
+          flatCol, flatRow = wallCol, leftRow
+        end
+
+      elseif capRole == "ceilingLeft" or capRole == "ceilingRight" then
+        -- Continues the wall PAST vertical into a ceiling, instead of
+        -- stopping at a 45-degree slope. Unlike the base arc, this
+        -- curve's center is NOT one of the cap tile's own four corners
+        -- — a quarter-circle that (a) starts EXACTLY at the wall's own
+        -- established climbing point (wallEdgeX, set above, already
+        -- fixed) with a vertical tangent there, and (b) has the same
+        -- open-air side the wall already does, only works out to a
+        -- center one full tile-width off to the side, in the direction
+        -- the ceiling continues (opposite `dir` — a wall climbed via
+        -- rampRight naturally continues into a ceiling running back
+        -- to the left, i.e. "ceilingLeft"). That center, and both ends
+        -- of this arc, land exactly on this cap tile's (capCol, capRow)
+        -- own corners — see the run absorption below, which starts
+        -- from the far corner.
+        claimedCells[capRow * width + capCol] = true
+        local ccx = wallEdgeX - dir * T
+        local ccy = anchorY + wallTopRow * T
+        capCenter = Vector2.new(ccx, ccy)
+        capArcStart = #points
+        -- Continues sweeping in the SAME angular direction the base arc
+        -- above was already sweeping (thetaLedge -> thetaWall) — another
+        -- quarter turn past thetaWall. That sweep is -pi/2 (decreasing)
+        -- for rampRight/ceilingLeft (dir>0) but +pi/2 (increasing) for
+        -- rampLeft/ceilingRight (dir<0), so this has to mirror by dir
+        -- the same way the base arc's own thetaWall does — a hardcoded
+        -- -pi/2 here only ever swept the right way for one of the two.
+        for i = 1, RAMP_ARC_SEGMENTS do
+          local t = i / RAMP_ARC_SEGMENTS
+          local theta = thetaWall + (thetaWall - thetaLedge) * t
+          table.insert(points, Vector2.new(ccx + T * math.cos(theta), ccy + T * math.sin(theta)))
+        end
+        capArcEnd = #points
+
+        -- The ceiling material is ABOVE the walkway line now, not
+        -- below it — the run's own row is one above where the curve
+        -- landed, and it's tagged "wall" (this project's usual
+        -- solid-on-every-side role — see classifyGid), not "flat".
+        -- Continues opposite the original climb direction, starting
+        -- one column past the cap tile itself (capCol - dir).
+        flatCol, flatRow = capCol - dir, capRow - 1
+        absorbRole = "wall"
+        absorbDir = -dir
+      end
+    end
+
+    -- Absorb the run that follows, all the way to its TRUE end (a gap,
+    -- wall, or other feature) — not just a tile or two. This shape
+    -- needs to BE the complete continuation for that stretch, so
+    -- nothing is left over for the ordinary scan to pick up separately
+    -- (which would just relocate the seam a few tiles down instead of
+    -- removing it). Same absorption loop for the ordinary ground-flat
+    -- case and the ceiling case above — only which role counts as
+    -- "still going" (absorbRole), which way it continues (absorbDir),
+    -- and which edge of the checked row the line actually sits on
+    -- differ: "flat" ground is walked ON TOP of (line at the row's own
+    -- top edge, flatRow * T), while "wall" ceiling material is walked
+    -- UNDER (line at the row's bottom edge, (flatRow+1) * T — the same
+    -- edge the cap arc's own last point already landed on).
+    if flatRow >= 0 then
+      local rowEdge = (absorbRole == "wall") and (flatRow + 1) or flatRow
+      local fc = flatCol
+      while fc >= 0 and fc < width do
+        local fgid = layer.data[flatRow * width + fc + 1]
+        if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then break end
+        claimedCells[flatRow * width + fc] = true
+        local edgeCol = absorbDir > 0 and (fc + 1) or fc
+        table.insert(points, Vector2.new(anchorX + edgeCol * T, anchorY + rowEdge * T))
+        fc = fc + absorbDir
+      end
+    end
+  end
+
+  if #points < 2 then return nil end
+
+  local segments = {}
+  for i = 1, #points - 1 do
+    local a, b = points[i], points[i + 1]
+    local tangent = b:subtract(a):normalize()
+    local normal
+    if i <= arcSegmentCount then
+      local mid = (a + b) * 0.5
+      normal = center:subtract(mid):normalize()
+    elseif capArcStart and i >= capArcStart and i < capArcEnd then
+      local mid = (a + b) * 0.5
+      normal = capCenter:subtract(mid):normalize()
+    else
+      normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
+    end
+    table.insert(segments, {
+      a = a, b = b, tangent = tangent, normal = normal,
+      length = b:subtract(a):length(),
+      isWallFace = (i == wallSegIndex),
+    })
+  end
+
+  local shape = newShape(segments)
+  shape.forceUprightJump = false
+  -- Marks this as a ramp-climb shape for every other system that needs
+  -- to treat it differently from ordinary terrain: getArcSpeedMultiplier
+  -- (no uphill penalty — this is meant to run at full speed), main.lua's
+  -- Ooomba-spawning loop (skipped — see that file's own comment), and
+  -- Player.lua's own move() (detaches the player if they're not
+  -- actively climbing, Sonic-loop style, instead of leaving them glued
+  -- to a wall regardless of input).
+  shape.isWallClimb = true
+  -- Arc length increases in the direction the path was swept above,
+  -- which is always "toward the wall" — but which PHYSICAL key drives
+  -- that depends on which side the wall is on. rampRight's wall sits to
+  -- the right of its ground entry, so increasing arc length already
+  -- means moving right — matching ds>0 (ArrowRight) with no help
+  -- needed. rampLeft is the mirror image: its wall sits to the LEFT of
+  -- its ground entry, so increasing arc length there means moving
+  -- LEFT — the opposite of what ds>0 (ArrowRight) means everywhere
+  -- else. Player.lua flips ds for this shape specifically so that
+  -- "the key that visually walks you into the ramp" is always the one
+  -- that climbs it, regardless of which way the ramp faces.
+  shape.controlsReversed = dir < 0
+  return shape, claimedCells
+end
+
+-- Returns shapes, claimedCells — claimedCells merges every individual
+-- shape's own claimed set (see buildRampClimbShape), for
+-- TiledTerrain.load to pass into computeTopPointsByColumn.
+local function buildRampShapes(layer, tileProps, width, height, anchorX, anchorY)
+  local shapes = {}
+  local claimedCells = {}
+  for row = 0, height - 1 do
+    for col = 0, width - 1 do
+      local gid = layer.data[row * width + col + 1]
+      if gid ~= 0 then
+        local role = classifyGid(tileProps, gid)
+        local dir = (role == "rampRight" and 1) or (role == "rampLeft" and -1) or nil
+        if dir then
+          local shape, shapeClaimed = buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+          if shape then
+            table.insert(shapes, shape)
+            for key in pairs(shapeClaimed) do claimedCells[key] = true end
+          end
+        end
+      end
+    end
+  end
+  return shapes, claimedCells
+end
+
+----------------------------------------------------------------------
 -- WallShape — a solid axis-aligned rectangle, blocking the player from
 -- every side. Unlike TerrainShape (a one-way "stand on top of me"
 -- surface with its own arc-length walking API), a wall has no surface to
@@ -711,8 +1118,14 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   local tilesets = mapData.tilesets
   local tileProps = buildTilePropertyLookup(tilesets)
 
+  -- Ramp-to-wall climbs (rampRight/rampLeft) — built BEFORE the
+  -- ordinary column scan below, so its own claimed cells (see
+  -- buildRampShapes/buildRampClimbShape) can be excluded from that
+  -- scan rather than being picked up twice.
+  local rampShapes, rampClaimedCells = buildRampShapes(layer, tileProps, width, height, anchorX, anchorY)
+
   -- Collision: derive shapes from the walkable-top height profile.
-  local pointsByColumn = computeTopPointsByColumn(layer, tileProps, width, height)
+  local pointsByColumn = computeTopPointsByColumn(layer, tileProps, width, height, rampClaimedCells)
   local runs = buildVertexRuns(pointsByColumn, width)
   local shapes = {}
   for _, run in ipairs(runs) do
@@ -720,6 +1133,16 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     if #segments > 0 then
       table.insert(shapes, newShape(segments))
     end
+  end
+
+  -- Appended into the same `shapes` list as the ordinary ones above,
+  -- since the result is a perfectly normal TerrainShape as far as
+  -- every other system (main.lua's state.planetoids, collision,
+  -- drawing) is concerned — see buildRampClimbShape's own comment on
+  -- shape.isWallClimb for the few places that DO need to tell it apart
+  -- from ordinary terrain.
+  for _, shape in ipairs(rampShapes) do
+    table.insert(shapes, shape)
   end
 
   -- Collision: solid walls, entirely separate from the walkable shapes

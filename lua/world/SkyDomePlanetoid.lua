@@ -378,7 +378,7 @@ function SkyDomePlanetoid.new(x, y, options)
   -- looping ShockwaveFilter pair. All distances are in the bulge
   -- shader's own normalized (radii-divided) space, where the dome's
   -- own edge sits at ~1.0.
-  self.domeForegroundRippleAmplitude = options.domeForegroundRippleAmplitude or 0.01  -- how far a pixel gets displaced at the ring's peak
+  self.domeForegroundRippleAmplitude = options.domeForegroundRippleAmplitude or 0  -- how far a pixel gets displaced at the ring's peak
   self.domeForegroundRippleWidth = options.domeForegroundRippleWidth or 0.05         -- how wide (radially) the ring band is
   self.domeForegroundRippleSpeed = options.domeForegroundRippleSpeed or 0.3          -- how fast the ring's own radius grows, per second
   self.domeForegroundRippleMaxRadius = options.domeForegroundRippleMaxRadius or 1.3  -- radius the ring wraps back to 0 at — past the dome's own edge (~1.0), so it fully exits before restarting
