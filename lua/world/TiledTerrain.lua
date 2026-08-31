@@ -800,6 +800,13 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   -- Set only when a ceilingLeft/ceilingRight cap is found below — a
   -- SECOND arc, with its own center, distinct from the base arc above.
   local capCenter, capArcStart, capArcEnd = nil, nil, nil
+  -- Set only alongside a ceiling cap too — the point index the flat-run
+  -- absorption starts inserting from, when (and only when) that run is
+  -- the ceiling's own solid backing (absorbRole == "wall") rather than
+  -- an ordinary ground-level ledge (absorbRole == "flat"). Segments from
+  -- here to the end of the shape, PLUS the cap arc itself, are "the
+  -- ceiling" for Player.lua's own isCeiling detach check below.
+  local ceilingRunStart = nil
 
   if wallTopRow then
     local wallEdgeX = dir > 0 and (anchorX + wallCol * T) or (anchorX + (wallCol + 1) * T)
@@ -924,6 +931,7 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     -- edge the cap arc's own last point already landed on).
     if flatRow >= 0 then
       local rowEdge = (absorbRole == "wall") and (flatRow + 1) or flatRow
+      if absorbRole == "wall" then ceilingRunStart = #points end
       local fc = flatCol
       while fc >= 0 and fc < width do
         local fgid = layer.data[flatRow * width + fc + 1]
@@ -952,10 +960,19 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     else
       normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
     end
+    local isCapArc = capArcStart and i >= capArcStart and i < capArcEnd
+    local isCeilingRun = ceilingRunStart and i >= ceilingRunStart
     table.insert(segments, {
       a = a, b = b, tangent = tangent, normal = normal,
       length = b:subtract(a):length(),
       isWallFace = (i == wallSegIndex),
+      -- The ceiling cap arc (the ceilingLeft/ceilingRight tile itself)
+      -- AND the flat run past it (the ceiling's own solid backing) —
+      -- see Player.lua's own isCeiling check, which detaches on a stop
+      -- OR a reversal here (unlike the wall face, which only detaches
+      -- on a reversal — standing still on a WALL is fine, standing on
+      -- open ceiling with nothing but a curve holding you up isn't).
+      isCeiling = isCapArc or isCeilingRun,
     })
   end
 

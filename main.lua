@@ -65,7 +65,7 @@ function love.load()
   state.timeScale = 1
   state.timeScaleTarget = 1
   state.vatsMultiplier = 1
-  state.showCollisionDebug = true
+  state.showCollisionDebug = false
   state.vatsActive = false
   state.vatsAutoEnterOnLock = true
   state.vatsTimeScale = VATS_TIME_SCALE
