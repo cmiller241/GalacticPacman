@@ -58,11 +58,24 @@ function Player.new(x, y)
   -- is meant to visibly sell "you just detached," not a subtle nudge.
   self.wallClimbDetachPush = constants.PLAYER_LINEAR_SPEED * 0.6
   -- Which way (1 = the shape's "forward"/climbing arc-length direction,
-  -- -1 = the reverse) the player was last moving while on a wall-face
-  -- segment — see Player:move()'s onWallFace handling. nil whenever not
-  -- currently on one, so stepping onto a fresh wall always starts from
-  -- a clean slate rather than remembering some earlier, unrelated wall.
+  -- -1 = the reverse) the player was last moving while on a wall-climb
+  -- shape's wall face or ceiling — see Player:move()'s onClimbZone
+  -- handling. nil whenever not currently on either, so stepping onto a
+  -- fresh one always starts from a clean slate rather than remembering
+  -- some earlier, unrelated climb.
   self.wallClimbDir = nil
+  -- Which PLANET (TerrainShape) self.wallClimbDir was recorded against.
+  -- Its sign is only meaningful relative to THAT shape's own
+  -- controlsReversed convention (see buildRampClimbShape) — a full loop
+  -- built from a rampRight tile on one side and a rampLeft tile on the
+  -- other uses two separate shapes with OPPOSITE conventions, and the
+  -- ceiling in between only ever belongs to whichever shape absorbed
+  -- that stretch, not both. The player can fall off the end of one onto
+  -- the other mid-ceiling (see the isOpenPath handling below) while
+  -- still holding the same key the whole time — without this check,
+  -- that same held key flips sign across the swap and reads as an
+  -- instant, unearned reversal the moment they land.
+  self.wallClimbDirPlanet = nil
 
   -- Wall jump: which wall (if any) was touched THIS FRAME, set fresh
   -- every frame by CollisionSystem:handlePlayerWallCollisions — never
@@ -442,39 +455,50 @@ function Player:move(keys)
       if planet.isWallClimb and planet.controlsReversed then ds = -ds end
 
       -- Wall-climb shapes (see TiledTerrain.lua's buildRampClimbShape)
-      -- detach the player if they REVERSE direction on the actual wall
-      -- face — Sonic-loop style, but two-way: a wall can be run up OR
-      -- down (e.g. one loop's up-wall and a separate loop's down-wall,
-      -- both built as ordinary wall-climb shapes off their own ramp
-      -- tile), and either is fine to commit to and ride the whole way.
-      -- What isn't allowed is changing your mind partway — going up
-      -- then reversing to go down, or vice versa — which peels the
-      -- player off instead of letting them awkwardly backtrack.
-      -- Standing still (releasing input, ds == 0) does NOT detach —
-      -- only an actual opposite-direction press does. (An earlier
-      -- version detached on ds <= 0 outright, which made descending a
-      -- wall impossible — any downward step, even the first, read as
-      -- "not climbing" and detached immediately.)
+      -- detach the player if they STOP or REVERSE direction on the
+      -- actual wall face OR the ceiling (isWallFace / isCeiling — see
+      -- that file's own comments on each) — Sonic-loop style: nothing
+      -- but committed momentum holds you to either, so easing off or
+      -- changing your mind peels you off instead of leaving you glued
+      -- in place. Not the curve leading into the wall, not the slope
+      -- leading out of it, and not an ordinary flat ledge — turning
+      -- around or standing still there is perfectly normal footing,
+      -- same as any other ramp in the game. (Stopping used to be
+      -- allowed on the wall face specifically, to let the player rest
+      -- mid-climb — but the wall is just as sheer standing still as it
+      -- is moving, so that exception is gone; both zones share the same
+      -- rule now.)
       --
-      -- Only applies on the actual WALL FACE segment (isWallFace, set
-      -- once by buildRampClimbShape on exactly the one segment
-      -- spanning the vertical wall stack) — not the curve leading into
-      -- it, not the slope leading out of it, and not the flat ledge
-      -- past that (see buildRampClimbShape's own flat-run absorption).
-      -- Turning around on the curve/slope/ledge is perfectly normal
-      -- footing, same as any other ramp in the game; it's specifically
-      -- reversing on the sheer wall itself that detaches. self.wallClimbDir
-      -- resets to nil off the wall face, so entering a wall fresh always
-      -- accepts whichever direction you arrive with as the baseline.
+      -- self.wallClimbDir resets to nil once off BOTH zones, so entering
+      -- either fresh always accepts whichever direction you arrive with
+      -- as the baseline — but NOT when crossing from one into the
+      -- other, since arc-length direction is one continuous thing
+      -- across the whole climb; a commitment made on the wall still
+      -- counts once you're over onto the ceiling. It ALSO resets on a
+      -- planet swap (self.wallClimbDirPlanet — see that field's own
+      -- comment): a fall off the end of one wall-climb shape can land
+      -- the player on a DIFFERENT one mid-ceiling, and that shape may
+      -- read the same held key with the opposite sign.
       local currentSeg = planet.isWallClimb and planet:segmentAtArcPosition(self.surfaceArcPos) or nil
-      local onWallFace = currentSeg ~= nil and currentSeg.isWallFace
+      local onClimbZone = currentSeg ~= nil and (currentSeg.isWallFace or currentSeg.isCeiling)
+      if planet ~= self.wallClimbDirPlanet then
+        self.wallClimbDir = nil
+        self.wallClimbDirPlanet = planet
+      end
 
-      local wallReversal = false
-      if onWallFace then
-        if ds ~= 0 then
+      local shouldDetach = false
+      if onClimbZone then
+        -- Requires the run button (state.gamepadRunHeld — Square on a
+        -- PS5 pad), the same flag that already gates the run-speed
+        -- multiplier on `speed` above: an ordinary walking pace isn't
+        -- committed enough to hold either zone, matching stopping and
+        -- reversing as things that peel the player off.
+        if ds == 0 or not state.gamepadRunHeld then
+          shouldDetach = true
+        else
           local dirSign = ds > 0 and 1 or -1
           if self.wallClimbDir and self.wallClimbDir ~= dirSign then
-            wallReversal = true
+            shouldDetach = true
           else
             self.wallClimbDir = dirSign
           end
@@ -483,7 +507,7 @@ function Player:move(keys)
         self.wallClimbDir = nil
       end
 
-      if wallReversal then
+      if shouldDetach then
         self.onSurface = false
         self.currentPlanet = nil
         self.vel = currentSeg.normal:multiply(self.wallClimbDetachPush)
