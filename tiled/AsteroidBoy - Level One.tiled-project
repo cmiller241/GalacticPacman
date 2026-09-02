@@ -1,0 +1,39 @@
+{
+    "automappingRulesFile": "",
+    "commands": [
+    ],
+    "extensionsPath": "extensions",
+    "folders": [
+        "."
+    ],
+    "propertyTypes": [
+        {
+            "color": "#ffa0a0a4",
+            "id": 1,
+            "members": [
+                {
+                    "name": "role",
+                    "type": "string",
+                    "value": "fill"
+                },
+                {
+                    "name": "slope",
+                    "type": "string",
+                    "value": "flat"
+                }
+            ],
+            "name": "TileData",
+            "type": "class",
+            "useAs": [
+                "property",
+                "map",
+                "layer",
+                "object",
+                "tile",
+                "tileset",
+                "wangcolor",
+                "wangset"
+            ]
+        }
+    ]
+}
