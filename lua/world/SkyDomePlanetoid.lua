@@ -11,6 +11,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local constants = require("lua.constants")
 
 local SkyDomePlanetoid = {}
 SkyDomePlanetoid.__index = SkyDomePlanetoid
@@ -61,8 +62,13 @@ local function setGlassUniforms(self, cx, cy)
 
   shader:send("center", { (cx - cam.x) * zoom, (cy - cam.y) * zoom })
   shader:send("radii", { self.domeRadiusX * zoom, self.domeRadiusY * zoom })
-  shader:send("colorInner", { 0.85, 0.95, 1.0, 0.50 })
-  shader:send("colorOuter", { 0.30, 0.60, 0.95, 0.16 })
+  -- Swapped from the original (0.85,0.95,1.0,0.50) / (0.30,0.60,0.95,0.16)
+  -- pair: colorInner still applies at the dome's own center (t=0 in the
+  -- shader below) and colorOuter still at its rim (t=1) — only WHICH
+  -- color/alpha each name holds changed, so the center is now the more
+  -- transparent one and the rim the more opaque, the reverse of before.
+  shader:send("colorInner", { 0.30, 0.60, 0.95, 0.16 })
+  shader:send("colorOuter", { 0.85, 0.95, 1.0, 0.50 })
   shader:send("highlightCenter", { -0.32, -0.48 })
   shader:send("highlightRadius", 0.55)
   shader:send("highlightStrength", 0.40)
@@ -331,6 +337,26 @@ function SkyDomePlanetoid.new(x, y, options)
   self.isSkyDome     = true
   self.isRoundedRect = true
   self.noSunShading  = true
+
+  -- Stronger than the game's default gravity (GravitySystem:applyTo
+  -- checks this per-planet override before falling back to
+  -- constants.GRAVITY_STRENGTH) — a Mario-style snappy jump/fall inside
+  -- the dome instead of the floaty, long-hang-time arc the default
+  -- value gives everywhere else. Only affects entities whose dominant
+  -- planet is this dome; asteroid belts, round planetoids, etc. are
+  -- untouched.
+  self.gravityStrength = options.gravityStrength or (constants.GRAVITY_STRENGTH * 1.6)
+
+  -- Compensates for the stronger gravity above — Player:jump() checks
+  -- this per-planet override (self.currentPlanet.jumpStrength) before
+  -- falling back to constants.JUMP_STRENGTH, same pattern as
+  -- gravityStrength. Applies on every Tiled tile's own TerrainShape too
+  -- (not just the dome's bare deck — see main.lua's own propagation of
+  -- this value). 12 is 15 (the previously-confirmed STANDING jump
+  -- height) reduced ~20%, per explicit request. Running jumps still go
+  -- higher on top of this via Player.lua's own runJumpMultiplier, and
+  -- further via the separate horizontal groundMoveSpeedX carry.
+  self.jumpStrength = options.jumpStrength or 12
 
   self.domeRadiusX = options.domeRadiusX or halfWidth
   self.domeRadiusY = options.domeRadiusY or halfWidth

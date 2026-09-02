@@ -174,7 +174,7 @@ local function pollGamepad(dt)
   -- jump," as opposed to the ground-pound fallback for mid-air with
   -- nothing to jump off of.
   local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
-  if xPressed and not lastXPressed and state.player and state.player.mode ~= "maze" then
+  if xPressed and not lastXPressed and state.player and state.player.mode ~= "maze" and not state.introLocked then
     if state.player.onSurface or state.player.touchingWall then state.player:jump()
     else state.player:tryGroundPound() end
   end

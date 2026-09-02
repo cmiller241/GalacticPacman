@@ -99,7 +99,12 @@ function GravitySystem:applyTo(entity)
     dir = dominant.pos:subtract(entity.pos):normalize()
   end
 
-  local grav = entity.GRAVITY_STRENGTH or constants.GRAVITY_STRENGTH or 0.35
+  -- Per-planet override (e.g. SkyDomePlanetoid's own stronger,
+  -- less-floaty gravityStrength) takes priority over the per-entity /
+  -- global defaults — falling toward a specific planet should use
+  -- THAT planet's own feel, not whatever the falling entity happens to
+  -- carry.
+  local grav = dominant.gravityStrength or entity.GRAVITY_STRENGTH or constants.GRAVITY_STRENGTH or 0.35
   if entity.isGroundPounding then
     grav = grav * (entity.GROUND_POUND_GRAV_MULTIPLIER
       or constants.GROUND_POUND_GRAV_MULTIPLIER

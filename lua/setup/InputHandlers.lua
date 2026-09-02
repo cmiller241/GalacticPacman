@@ -154,7 +154,7 @@ local function attachInputHandlers()
     state.keys[key] = true
 
     if key == ' ' then
-      if state.player and state.player.mode ~= "maze" then
+      if state.player and state.player.mode ~= "maze" and not state.introLocked then
         if state.player.onSurface or state.player.touchingWall then
           -- Player:jump() itself branches on which of the two applies
           -- (grounded launch vs. wall-jump kick) — routed here together

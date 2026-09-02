@@ -76,6 +76,17 @@ local function loadAssets(onComplete)
   -- (see SkyDomePlanetoid.drawGrassCap).
   state.grassTexture = love.graphics.newImage("img/grass.png")
 
+  -- Astronaut's home shelter — a single static background structure on
+  -- the sky dome's own deck (see lua/world/SpaceShelter.lua). 4880x3404.
+  state.spaceShelterTexture = love.graphics.newImage("img/spaceshelter.png")
+  state.spaceShelterTexture:setFilter("linear", "linear")
+
+  -- One half of the shelter's own double door (551x1873) — the other
+  -- half is this same image mirrored, not a separate source file (see
+  -- SpaceShelter.lua's own drawDoor).
+  state.spaceShelterDoorTexture = love.graphics.newImage("img/spaceshelter_door.png")
+  state.spaceShelterDoorTexture:setFilter("linear", "linear")
+
   for key, src in pairs(CHARACTER_IMAGE_SOURCES) do
     state.characterImages[key] = love.graphics.newImage(src)
   end

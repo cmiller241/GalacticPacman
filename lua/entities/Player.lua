@@ -19,6 +19,12 @@ local TargetLock = require("lua.systems.TargetLock")
 local Player = {}
 Player.__index = Player
 
+-- How long, once the door-opening intro ends (state.introLocked flips
+-- false), the rigid intro pose (arms/head — see drawFullBody's own
+-- poseBlend) takes to ease back into whatever the normal pose would
+-- be, rather than snapping there in one frame.
+local INTRO_POSE_TRANSITION_SECONDS = 0.6
+
 function Player.new(x, y)
   local self = setmetatable({}, Player)
 
@@ -43,11 +49,40 @@ function Player.new(x, y)
   self.lastWalkBobT = 0
   self.walkBobStrength = 3
 
-  self.jumpHorizontalCarry = 0.6
+  -- Scales the ground-speed-carried horizontal jump velocity (see
+  -- move()'s own groundMoveSpeedX and jump()'s use of it) — purely
+  -- additive to vel.x. 1.0 would be an exact carry (jumping matches
+  -- whatever speed you were already moving at); 0.5 is confirmed, felt
+  -- in actual play, as the right amount of "jump friction" — a jump
+  -- carries noticeably less horizontal speed than covering the same
+  -- ground on foot would. (This used to also stack with a SEPARATE
+  -- fixed launch-direction tilt — getOutwardLaunchDirection's own
+  -- former jumpHorizontalCarry — which is what made even a plain
+  -- walking jump launch at roughly 3x normal speed; that mechanism is
+  -- gone now, so this is the only horizontal-carry knob left.)
+  self.jumpMomentumCarryScale = 0.3
   self.runSpeedMultiplier = 1.8
-  self.runJumpMultiplier = 1.3
+  -- Dialed back down from 1.3*1.1=1.43 — that was tuned back when
+  -- SkyDomePlanetoid's own jumpStrength was 11 (running height ~15.7),
+  -- but once jumpStrength was raised to 15 (and made to apply on every
+  -- Tiled tile, not just the dome's bare deck), the SAME multiplier
+  -- pushed a running jump up to ~21.5 — noticeably too high. 1.2 keeps
+  -- running jumps clearly higher than standing ones (15 -> 18) without
+  -- repeating that. Best-guess starting point, not a confirmed value —
+  -- an easy single-number retune once it's been felt in play.
+  self.runJumpMultiplier = 1.2
   self.airControlAccel = 0.3
-  self.airControlMaxSpeed = 4
+  -- Also doubles as the hard ceiling jump()'s own momentum carry clamps
+  -- to (see jumpMomentumCarryScale's own use there) — raised from the
+  -- original 4 (which crushed a running jump's ~12.6 natural carry down
+  -- to almost nothing) to comfortably fit one single running jump's
+  -- worth of speed (rawSpeed 9 * jumpMomentumCarryScale 1.4 = 12.6)
+  -- without clamping it, while still capping REPEATED jumps (e.g.
+  -- rapid bunny-hopping) from compounding past this — that carry is
+  -- ADDED to whatever vel.x a jump already has, so without a ceiling
+  -- at the launch point itself (not just air control afterward),
+  -- successive jumps could stack indefinitely.
+  self.airControlMaxSpeed = 13
   self.edgeFallCarryFraction = 0.35
   -- How hard the player peels off a wall-climb shape (see
   -- TiledTerrain.lua's buildRampClimbShape) when they stop actively
@@ -235,27 +270,54 @@ function Player:getOutwardLaunchDirection()
     if self.currentPlanet.forceUprightJump then
       direction = Vector2.new(0, -1)
     end
-    if self.currentPlanet.isSkyDome or self.currentPlanet.forceUprightJump then
-      local horizontalInput = 0
-      if state.keys["ArrowLeft"] then horizontalInput = -1 end
-      if state.keys["ArrowRight"] then horizontalInput = 1 end
-      if horizontalInput ~= 0 then
-        direction = Vector2.new(
-          direction.x + horizontalInput * self.jumpHorizontalCarry,
-          direction.y
-        ):normalize()
-      end
-    end
+    -- Used to also tilt this direction sideways by a fixed fraction
+    -- (jumpHorizontalCarry) whenever a direction key was held — but
+    -- that tilt gets multiplied by the FULL jumpStrength once
+    -- normalized, and jump()'s own groundMoveSpeedX carry (added
+    -- separately, AFTER this direction is turned into a velocity) now
+    -- covers the same "carry your speed into the jump" need more
+    -- precisely (it actually distinguishes walking from running,
+    -- rather than a single fixed lean regardless of speed). The two
+    -- stacking together is what made even a plain walking jump launch
+    -- at roughly 3x normal walking speed — removed here rather than
+    -- retuned, since keeping both around invites this same conflict
+    -- again the next time either one gets adjusted.
     return direction
   end
   return self.pos:subtract(self.currentPlanet.pos):normalize()
 end
 
 function Player:jump()
-  local jumpBoost = state.gamepadRunHeld and self.runJumpMultiplier or 1
+  -- Requires actually MOVING at run speed, not just holding the run
+  -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
+  -- (set each frame in move(), see its own comment) is 0 whenever no
+  -- direction key is held, so holding Square in place no longer gives
+  -- the same jump-height boost as an actual running jump.
+  local isRunningAndMoving = state.gamepadRunHeld and (self.groundMoveSpeedX or 0) ~= 0
+  local jumpBoost = isRunningAndMoving and self.runJumpMultiplier or 1
   if self.onSurface and self.currentPlanet then
     local direction = self:getOutwardLaunchDirection()
-    self.vel = direction:multiply(constants.JUMP_STRENGTH * jumpBoost)
+    -- Per-planet override (e.g. SkyDomePlanetoid's own stronger
+    -- jumpStrength, compensating for its heavier gravityStrength — see
+    -- that file's own comment) takes priority over the global default.
+    -- Still scaled by jumpBoost — running SHOULD jump higher, not just
+    -- farther — but see runJumpMultiplier's own comment for why that
+    -- multiplier itself came back down once jumpStrength was raised.
+    local jumpStrength = self.currentPlanet.jumpStrength or constants.JUMP_STRENGTH
+    self.vel = direction:multiply(jumpStrength * jumpBoost)
+    -- Carries current ground speed into the jump (see move()'s own
+    -- self.groundMoveSpeedX) — conventional platformer behavior: a
+    -- running jump launches you forward as well as up, instead of
+    -- discarding all horizontal momentum the instant you leave the
+    -- ground. 0 whenever no direction key was held, so a standing jump
+    -- is unaffected. Clamped to airControlMaxSpeed (see that field's
+    -- own comment) — this is ADDED to whatever vel.x already has, so
+    -- without a ceiling here specifically, rapid repeat jumps (bunny-
+    -- hopping) could stack this every single time and compound into an
+    -- ever-increasing "leapfrog" instead of settling at one running
+    -- jump's own natural speed.
+    local carriedVelX = self.vel.x + (self.groundMoveSpeedX or 0) * self.jumpMomentumCarryScale
+    self.vel.x = math.max(-self.airControlMaxSpeed, math.min(self.airControlMaxSpeed, carriedVelX))
     self.onSurface = false
     self.currentPlanet = nil
     if state.audioManager then state.audioManager:playJump() end
@@ -426,10 +488,20 @@ function Player:move(keys)
     local planet = self.currentPlanet
     self.isWalking = false
     local ds = 0
-    local speed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * state.timeScale
+    local rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1)
+    local speed = rawSpeed * state.timeScale
 
-    if keys["ArrowLeft"] then ds = -speed; self.facingDirection = -1; self.isWalking = true end
-    if keys["ArrowRight"] then ds = speed; self.facingDirection = 1; self.isWalking = true end
+    -- Unscaled (no state.timeScale) current ground speed+direction —
+    -- Player:jump() carries this into the jump's own vel.x, same
+    -- convention as every other platformer (a running jump launches you
+    -- forward, not just straight up). Kept separate from ds/speed above
+    -- specifically because self.vel gets state.timeScale applied again,
+    -- on its own, during airborne integration — folding an
+    -- already-timeScale'd value in here would double-apply it.
+    self.groundMoveSpeedX = 0
+
+    if keys["ArrowLeft"] then ds = -speed; self.facingDirection = -1; self.isWalking = true; self.groundMoveSpeedX = -rawSpeed end
+    if keys["ArrowRight"] then ds = speed; self.facingDirection = 1; self.isWalking = true; self.groundMoveSpeedX = rawSpeed end
 
     if planet.isSkyDome then
       local coreHalfWidth = planet.halfWidth - (planet.cornerRadius or 0)
@@ -601,12 +673,23 @@ function Player:move(keys)
   elseif (not self.onSurface) and self.lastInfluencePlanet
       and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump) then
     local lockedDir = self.wallJumpLockTimer > 0 and self.wallJumpLockBlockedDir or nil
+    -- Nudges vel.x toward (and up to) airControlMaxSpeed in the held
+    -- direction — but never REDUCES it if momentum carried from a
+    -- running jump (see jump()'s own groundMoveSpeedX carry) already
+    -- exceeds that cap. The plain math.max/math.min clamp used to snap
+    -- straight down to airControlMaxSpeed the instant this ran with a
+    -- faster vel.x already in flight — which happens on essentially
+    -- every running jump, since the same direction key held to run is
+    -- still held going into the jump — reading as sudden air friction
+    -- killing the jump's own distance. The outer math.min/math.max
+    -- keeps the accelerated value only when it doesn't walk speed back
+    -- DOWN toward the cap from above.
     if keys["ArrowLeft"] and lockedDir ~= -1 then
-      self.vel.x = math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed)
+      self.vel.x = math.min(self.vel.x, math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed))
       self.facingDirection = -1
     end
     if keys["ArrowRight"] and lockedDir ~= 1 then
-      self.vel.x = math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed)
+      self.vel.x = math.max(self.vel.x, math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed))
       self.facingDirection = 1
     end
   end
@@ -619,6 +702,26 @@ function Player:update()
   -- ordinary platformer tile collision uses instead of a plain distance
   -- check. See TerrainShape:findLandingCrossing.
   self.prevPos = self.pos:clone()
+
+  -- Marks the moment the shelter door reaches fully open
+  -- (state.spaceShelter.playerInFront flips true — see
+  -- SpaceShelter.lua's own intro state machine) so drawFullBody can
+  -- ease the rigid intro pose back to normal over
+  -- INTRO_POSE_TRANSITION_SECONDS instead of snapping there in one
+  -- frame. Deliberately keyed off playerInFront, not
+  -- state.introLocked/introDone (movement stays locked through the
+  -- door closing behind him too) — the ONLY reason the arm was held
+  -- rigid was to avoid poking out past the door's still-closing frame,
+  -- and that concern is already gone the moment he's drawn in front of
+  -- it. self.wasPlayerInFront starts nil specifically so the very
+  -- first call just establishes a baseline rather than firing a false
+  -- transition.
+  local playerInFront = state.spaceShelter and state.spaceShelter.playerInFront or false
+  if self.wasPlayerInFront == nil then self.wasPlayerInFront = playerInFront end
+  if (not self.wasPlayerInFront) and playerInFront then
+    self.introPoseBlendStart = love.timer.getTime()
+  end
+  self.wasPlayerInFront = playerInFront
 
   if self.wallJumpLockTimer > 0 then
     self.wallJumpLockTimer = self.wallJumpLockTimer - state.timeScale
@@ -679,6 +782,15 @@ end
 
 function Player:updateOrientationAndFacing()
   if self.mode ~= "space" then return end
+
+  -- Locked facing right for the door-opening intro (see main.lua's
+  -- state.introLocked and drawFullBody's own poseBlend) — skips the
+  -- normal mouse-tracking facing logic below entirely, so moving the
+  -- mouse during the cutscene can't turn him around mid-reveal.
+  if state.introLocked then
+    self.facingDirection = 1
+    return
+  end
 
   local lastMove = state.lastMouseMoveTime or 0
   local lastWheel = state.lastWheelTime or 0
@@ -912,6 +1024,26 @@ function Player:drawFullBody(orientation, originPos)
   local leftArmAngle, rightArmAngle
   local rightArmFlipped = false
 
+  -- Held rigidly at attention (both arms straight down, no aim/sway/
+  -- head-tilt) while standing behind the shelter's still-closed/opening
+  -- door (see main.lua's state.introLocked and SpaceShelter.lua's own
+  -- intro state machine) — the blaster arm's own aim pose is wide
+  -- enough to poke out past the door's clipped frame otherwise (see
+  -- SpaceShelter.lua's drawDoor). poseBlend (1 = fully forced, 0 =
+  -- fully normal) eases this back to the normal pose over
+  -- INTRO_POSE_TRANSITION_SECONDS starting the moment the door reaches
+  -- fully open (self.introPoseBlendStart, set in update()'s own
+  -- playerInFront edge detection) — NOT once the whole intro finishes
+  -- closing back up; he's already drawn in front of the door by then,
+  -- so there's nothing left for the rigid pose to protect against.
+  local poseBlend = 0
+  if state.spaceShelter and not state.spaceShelter.playerInFront then
+    poseBlend = 1
+  elseif self.introPoseBlendStart then
+    local elapsed = love.timer.getTime() - self.introPoseBlendStart
+    poseBlend = math.max(0, 1 - elapsed / INTRO_POSE_TRANSITION_SECONDS)
+  end
+
   local aimAngle = self:computeLeftArmAimAngle(orientation, dirSign, originPos)
   if self.mouseIdle and not self.pullTarget then
     local swayAngle = (self.onSurface and self.isWalking)
@@ -924,7 +1056,26 @@ function Player:drawFullBody(orientation, originPos)
     rightArmAngle = walkAngle * self.armSwingScale
   end
 
-  if not self.onSurface then
+  if poseBlend > 0 then
+    -- The right arm's own rest art already hangs down naturally at 0
+    -- local rotation — but the left (blaster) arm's local 0 points it
+    -- straight out in front (that's its AIMING rest, not an idle one:
+    -- world-angle 0 == "forwardAngle" is what computeLeftArmAimAngle's
+    -- own 0-relative aim means). Rotating it to world-angle pi/2
+    -- (straight down, same "down" atan2 gives for a downDir of (0,1))
+    -- brings it down to its side to match, via the same world-to-local
+    -- conversion every other world-angle-driven pose here already uses.
+    -- Nudged 5 degrees further counterclockwise from dead-straight-down
+    -- (world angle increases clockwise in this atan2/y-down convention,
+    -- so counterclockwise means subtracting) — a small stylistic tweak,
+    -- not a correctness fix.
+    local blasterRestWorldAngle = math.pi / 2 - (5 * math.pi / 180)
+    local forcedLeftArmAngle = self:worldAngleToLocalRotation(blasterRestWorldAngle, orientation, dirSign)
+    leftArmAngle = leftArmAngle + (forcedLeftArmAngle - leftArmAngle) * poseBlend
+    rightArmAngle = rightArmAngle * (1 - poseBlend)
+  end
+
+  if not self.onSurface and poseBlend <= 0 then
     leftBootAngle = -0.7
     rightBootAngle = 0.7
     local raisedWorldAngle = -math.pi / 2 - (math.pi * 0.75) * dirSign
@@ -951,8 +1102,9 @@ function Player:drawFullBody(orientation, originPos)
     local headW, headH = images.head:getDimensions()
     local headWX = -cfg.headY * sinO
     local headWY = cfg.headY * cosO
-    local headBob = (self.onSurface and self.isWalking) and (math.sin(self.walkTime * 2) * 0.03) or 0
-    local headLookTilt = self.mouseIdle and 0 or self:computeHeadLookTilt(orientation, dirSign)
+    local headBob = (poseBlend <= 0 and self.onSurface and self.isWalking) and (math.sin(self.walkTime * 2) * 0.03) or 0
+    local normalHeadLookTilt = self.mouseIdle and 0 or self:computeHeadLookTilt(orientation, dirSign)
+    local headLookTilt = normalHeadLookTilt * (1 - poseBlend)
     local headTilt = headBob + headLookTilt
     local pivotY = headH * s * self.headPivotFraction
 
