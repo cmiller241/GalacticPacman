@@ -48,7 +48,7 @@ initCellManifest(CELL_SIZE);
 // neighborhood size, so the worst case (all 9 cells populated) lands
 // back near the original totals instead of ~9x them. Tune independently
 // once you've seen it in play — no need to match the old numbers exactly.
-const PLANETOIDS_PER_CELL = 20;
+const PLANETOIDS_PER_CELL = 10;
 const SPIKEY_PER_CELL = 0;
 const ASTEROIDS_PER_CELL = 0;
 const MAX_ENEMIES_PER_CELL = 0;
