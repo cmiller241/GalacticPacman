@@ -20,6 +20,7 @@ local gamepadInput = require("lua.setup.gamepadInput")
 local worldGen = require("lua.setup.worldGen")
 local MiniMap = require("lua.ui.MiniMap")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
+local SpaceShelter = require("lua.world.SpaceShelter")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
@@ -41,6 +42,13 @@ local HOME_CELL_ROW = 9
 
 function love.load()
   love.window.setTitle("Asteroid Bob")
+
+  -- Starts large (filling the screen) without going into actual
+  -- fullscreen mode — conf.lua's window stays resizable with its normal
+  -- title bar/chrome (minimize, maximize, close, drag-to-resize) rather
+  -- than a borderless takeover; this just maximizes that ordinary
+  -- window on launch, exactly like clicking its own maximize button.
+  love.window.maximize()
 
   -- Pixel-art default: LÖVE's own default is "linear" filtering, which
   -- blends neighboring texels — including across tile boundaries in a
@@ -99,6 +107,14 @@ function love.load()
   })
   dome.isPermanent = true
   table.insert(state.planetoids, dome)
+
+  -- Astronaut's home shelter — purely decorative background scenery on
+  -- the dome's own deck, toward the left side of it. Drawn separately
+  -- (see love.draw below), right after the dome itself and before the
+  -- Tiled interior terrain, so the terrain's own hills draw over it
+  -- wherever the two happen to overlap rather than the shelter clipping
+  -- on top of gameplay geometry.
+  state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome:trueSurfaceY())
   state.skyDomePlanet = dome
 
   -- === TILED HILL TERRAIN above the sky dome's ground ===
@@ -118,6 +134,20 @@ function love.load()
     local terrainLevel = TiledTerrain.load(levelData, anchorX, anchorY)
 
     for _, shape in ipairs(terrainLevel.shapes) do
+      -- Every tile inside the dome should feel like standing on the
+      -- dome's own deck, jump-wise — Player:jump()'s launch speed reads
+      -- self.currentPlanet.jumpStrength directly, and self.currentPlanet
+      -- while standing on ordinary Tiled ground is the specific
+      -- TerrainShape tile itself, not the dome — so without this it
+      -- silently fell back to constants.JUMP_STRENGTH's plain global
+      -- value instead of the dome's own stronger, Mario-style one (see
+      -- SkyDomePlanetoid.lua's own jumpStrength comment), making jumps
+      -- noticeably weaker on ordinary tiles than on the bare deck.
+      -- gravityStrength doesn't need the same treatment: TerrainShape's
+      -- own isOpenPath flag excludes it from ever being picked as the
+      -- FALLING gravity source (see GravitySystem:findDominantPlanet) —
+      -- that's always the dome itself, tile or no tile underfoot.
+      shape.jumpStrength = dome.jumpStrength
       table.insert(state.planetoids, shape)
     end
     state.tiledLevels = { terrainLevel }
@@ -145,12 +175,20 @@ function love.load()
     end
   end
 
+  -- Spawns at the shelter's own doorway, not dome center — the opening
+  -- beat (see SpaceShelter.lua's own intro state machine) has the
+  -- player standing behind its closed door when the game starts, the
+  -- door sliding open around them, then closing again once they've
+  -- stepped out. state.introLocked (checked in love.update) keeps
+  -- movement input from interrupting that sequence.
   local topY = dome:trueSurfaceY()
-  state.player = Player.new(dome.pos.x, topY - constants.PLAYER_RADIUS)
+  local doorwayX = state.spaceShelter and (state.spaceShelter:getDoorwayPosition()) or dome.pos.x
+  state.player = Player.new(doorwayX, topY - constants.PLAYER_RADIUS)
   state.player.onSurface = true
   state.player.currentPlanet = dome
   state.player.lastInfluencePlanet = dome
   state.player.angle = -math.pi / 2
+  state.introLocked = true
 
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
@@ -267,7 +305,18 @@ function love.update(dt)
     end
   end
 
-  state.player:move(state.keys)
+  if state.spaceShelter then
+    state.spaceShelter:update(dt)
+    if state.introLocked and state.spaceShelter.introDone then
+      state.introLocked = false
+    end
+  end
+
+  -- Empty keys while the opening cutscene is running — the player
+  -- still stands on the deck normally (gravity/collision below are
+  -- untouched), just with no WALKING input read, so they don't wander
+  -- off mid-sequence before the door's finished its own choreography.
+  state.player:move(state.introLocked and {} or state.keys)
 
   if state.player.pullTarget then
     state.player:applyPullForce()
@@ -482,6 +531,25 @@ function love.draw()
     state.skyDomePlanet:draw()
   end
 
+  -- In front of the background hex canvas (baked scrolling grid, drawn
+  -- INSIDE :draw() -> drawDome()) but behind the foreground hex canvas
+  -- (the larger bulging/rippled one, drawn separately much later via
+  -- drawForegroundGlass — see below) — sandwiched between the two
+  -- layers, not in front of both.
+  --
+  -- The door itself is drawn HERE only once state.spaceShelter.playerInFront
+  -- is true (opening cutscene reached fully-open — see
+  -- SpaceShelter.lua's own intro state machine) — the player then draws
+  -- on top of it further down. Until then it's drawn later instead,
+  -- right after the player (see below), so the closed/opening door
+  -- covers the player standing behind it.
+  if state.spaceShelter then
+    state.spaceShelter:drawBody()
+    if state.spaceShelter.playerInFront then
+      state.spaceShelter:drawDoor()
+    end
+  end
+
   if state.sun then
     state.sun:draw()
   end
@@ -506,7 +574,14 @@ function love.draw()
   end
 
   for _, p in ipairs(state.planetoids) do
-    if utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+    -- The dome is ALSO in this list (for gravity/physics bookkeeping —
+    -- see GravitySystem.new(state.planetoids)), but already drew
+    -- explicitly above; drawing it again here would re-paint the whole
+    -- background hex layer on top of everything sandwiched between the
+    -- two explicit dome draw calls (the shelter — see above — and
+    -- anything else meant to sit behind the foreground hex but in
+    -- front of the background one).
+    if p ~= state.skyDomePlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
     end
   end
@@ -569,6 +644,15 @@ function love.draw()
   end
 
   state.player:draw()
+
+  -- Drawn HERE, on top of the just-drawn player, only while the
+  -- opening-cutscene door is still closed/opening — see the matching
+  -- comment up by drawBody() above for the other half of this z-order
+  -- swap.
+  if state.spaceShelter and not state.spaceShelter.playerInFront then
+    state.spaceShelter:drawDoor()
+  end
+
   PullBeam.draw()
 
   if state.fireballs then
