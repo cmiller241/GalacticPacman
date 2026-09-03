@@ -37,6 +37,31 @@ function Vector2:add(v)
   return self
 end
 
+-- Not present in the JS version. Mutates self, returns self — equivalent
+-- to `self:add(v:clone():multiply(s))` but without allocating the two
+-- throwaway Vector2 tables that chain would create. Added specifically
+-- for hot per-frame loops that run once per entity, per frame, across
+-- potentially hundreds of entities (planetoid/asteroid/fireball/particle
+-- position integration: `pos:addScaled(vel, timeScale)` in place of
+-- `pos:add(vel:clone():multiply(timeScale))`) — see main.lua's
+-- updatePlanetoidsPhysics for the original pattern this replaces.
+function Vector2:addScaled(v, s)
+  self.x = self.x + v.x * s
+  self.y = self.y + v.y * s
+  return self
+end
+
+-- Not present in the JS version. Mutates self, returns self — equivalent
+-- to `self = self:multiply(s)` but without allocating a new Vector2 and
+-- reassigning the field that held it. Same hot-loop motivation as
+-- addScaled above (e.g. drag: `vel:scale(drag ^ ts)` in place of
+-- `vel = vel:multiply(drag ^ ts)`).
+function Vector2:scale(s)
+  self.x = self.x * s
+  self.y = self.y * s
+  return self
+end
+
 -- Returns a NEW Vector2, does NOT mutate self — matches: subtract(v) { return new Vector2(this.x - v.x, this.y - v.y); }
 function Vector2:subtract(v)
   return Vector2.new(self.x - v.x, self.y - v.y)

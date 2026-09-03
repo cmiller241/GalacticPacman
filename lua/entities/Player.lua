@@ -764,8 +764,8 @@ function Player:update()
       end
     end
 
-    self.vel = self.vel:multiply(constants.DRAG ^ state.timeScale)
-    self.pos:add(self.vel:clone():multiply(state.timeScale))
+    self.vel:scale(constants.DRAG ^ state.timeScale)
+    self.pos:addScaled(self.vel, state.timeScale)
 
     if self.pos.x - self.radius < 0 then self.pos.x = self.radius; self.vel.x = -self.vel.x end
     if self.pos.x + self.radius > state.sceneWidth then self.pos.x = state.sceneWidth - self.radius; self.vel.x = -self.vel.x end

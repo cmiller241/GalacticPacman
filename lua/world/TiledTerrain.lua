@@ -807,6 +807,19 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   -- here to the end of the shape, PLUS the cap arc itself, are "the
   -- ceiling" for Player.lua's own isCeiling detach check below.
   local ceilingRunStart = nil
+  -- This shape's OWN cap tile position (row*width+col), set only when a
+  -- ceilingLeft/ceilingRight cap was actually built above. Exposed on
+  -- the finished shape so linkAndMergeWallClimbShapes (below) can look
+  -- up "which shape owns the cap tile at this grid position" when some
+  -- OTHER shape's ceiling run runs straight into it.
+  local ownCapTileKey = nil
+  -- Set only when this shape's OWN ceiling-backing absorption run (see
+  -- below) stops because it ran straight into ANOTHER wall-climb
+  -- shape's cap tile, rather than a genuine gap or unrelated feature —
+  -- i.e. two ramps authored to form one continuous loop, meeting
+  -- mid-ceiling (see linkAndMergeWallClimbShapes). Grid position
+  -- (row*width+col) of that OTHER shape's own cap tile.
+  local continuesAtKey = nil
 
   if wallTopRow then
     local wallEdgeX = dir > 0 and (anchorX + wallCol * T) or (anchorX + (wallCol + 1) * T)
@@ -886,6 +899,7 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
         -- own corners — see the run absorption below, which starts
         -- from the far corner.
         claimedCells[capRow * width + capCol] = true
+        ownCapTileKey = capRow * width + capCol
         local ccx = wallEdgeX - dir * T
         local ccy = anchorY + wallTopRow * T
         capCenter = Vector2.new(ccx, ccy)
@@ -935,7 +949,27 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
       local fc = flatCol
       while fc >= 0 and fc < width do
         local fgid = layer.data[flatRow * width + fc + 1]
-        if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then break end
+        if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then
+          -- Ceiling backing (never the ordinary ground-level "flat" run)
+          -- stopping here because the tile directly BELOW this scan row
+          -- is another ceilingLeft/ceilingRight cap means this shape's
+          -- own ceiling run has reached exactly where a second wall-climb
+          -- shape's cap begins — the two were authored to meet here and
+          -- continue as one loop. Recording that cap's grid position lets
+          -- linkAndMergeWallClimbShapes stitch the two shapes into a
+          -- single continuous path afterward, once every shape in the
+          -- level exists to look up.
+          if absorbRole == "wall" then
+            local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
+            if belowGid and belowGid ~= 0 then
+              local belowRole = classifyGid(tileProps, belowGid)
+              if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
+                continuesAtKey = (flatRow + 1) * width + fc
+              end
+            end
+          end
+          break
+        end
         claimedCells[flatRow * width + fc] = true
         local edgeCol = absorbDir > 0 and (fc + 1) or fc
         table.insert(points, Vector2.new(anchorX + edgeCol * T, anchorY + rowEdge * T))
@@ -978,6 +1012,18 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
 
   local shape = newShape(segments)
   shape.forceUprightJump = false
+  -- See linkAndMergeWallClimbShapes below: ownCapTileKey lets another
+  -- shape's ceiling run find and merge into THIS one; continuesAtKey is
+  -- the reverse — set when THIS shape's own ceiling run ran into some
+  -- other shape's cap. ceilingRunStartSegment marks where this shape's
+  -- own absorbed ceiling backing begins (in segment-index terms, same
+  -- convention isCeilingRun above already uses) — the part that gets
+  -- discarded, not duplicated, when this shape is merged in as the
+  -- "other" side of a seam (its own backing run would just retrace
+  -- ground the first shape's run already covered from the far end).
+  shape.ownCapTileKey = ownCapTileKey
+  shape.continuesAtKey = continuesAtKey
+  shape.ceilingRunStartSegment = ceilingRunStart
   -- Marks this as a ramp-climb shape for every other system that needs
   -- to treat it differently from ordinary terrain: getArcSpeedMultiplier
   -- (no uphill penalty — this is meant to run at full speed), main.lua's
@@ -999,6 +1045,92 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   -- that climbs it, regardless of which way the ramp faces.
   shape.controlsReversed = dir < 0
   return shape, claimedCells
+end
+
+-- Two ramps authored to meet mid-ceiling (e.g. a rampRight climb capped
+-- with ceilingLeft, whose own ceiling run stops exactly where a rampLeft
+-- climb's ceilingRight cap begins — see buildRampClimbShape's own
+-- continuesAtKey/ownCapTileKey comments) are, up to this point, still two
+-- separate TerrainShape objects with a hard edge between them: reaching
+-- the end of one's own arc length is an ordinary isOpenPath boundary,
+-- which Player:move() falls off of. That's fine for a genuine dead end,
+-- but wrong here — the two were drawn as one continuous loop, and gravity
+-- can't carry a falling player INTO a ceiling the way it can a floor (see
+-- Player.lua's own move(), the isOpenPath edge-carry comment), so a player
+-- who reaches this particular kind of "edge" would just fall every time,
+-- regardless of direction, instead of continuing onto the second wall the
+-- art clearly promises.
+--
+-- Fixes that by literally splicing the two shapes into one before the
+-- player ever sees either: shapeA keeps its own segments as-is, and
+-- shapeB's own PRE-absorption segments (its base arc, wall, and cap arc —
+-- everything up to but not including its own ceiling backing run) are
+-- appended in REVERSE. Reversed, because shapeB's own arc length runs
+-- ground-to-ceiling, the opposite direction shapeA is arriving from.
+-- shapeB's own absorption run itself is deliberately dropped, not
+-- reversed-and-kept: both shapes' ceiling runs independently absorb
+-- toward each other's cap along the SAME backing row (that's how
+-- shapeA's own run found shapeB's cap tile to link to in the first
+-- place), so shapeB's run just retraces ground shapeA's own run already
+-- covered from the far end — appending it too would double back over the
+-- whole ceiling a second time instead of continuing through the wall.
+local function mergeWallClimbShapes(shapeA, shapeB)
+  local cut = shapeB.ceilingRunStartSegment or (#shapeB.segments + 1)
+  for i = cut - 1, 1, -1 do
+    local seg = shapeB.segments[i]
+    table.insert(shapeA.segments, {
+      a = seg.b,
+      b = seg.a,
+      tangent = seg.tangent:clone():multiply(-1),
+      normal = seg.normal,
+      length = seg.length,
+      isWallFace = seg.isWallFace,
+      isCeiling = seg.isCeiling,
+    })
+  end
+  shapeA.totalLength = 0
+  for _, seg in ipairs(shapeA.segments) do
+    shapeA.totalLength = shapeA.totalLength + seg.length
+  end
+end
+
+-- Runs after every individual ramp-climb shape already exists (a shape's
+-- own continuesAtKey may point at a cap tile belonging to a shape built
+-- LATER in the raster scan, so this can't happen inline during that scan)
+-- — looks up, for each shape whose ceiling run ran into another shape's
+-- cap, that owning shape, and merges them (see mergeWallClimbShapes).
+-- Loops until a full pass makes no further merges, so a shape freshly
+-- extended by one merge is still eligible to be found (as either side)
+-- by another — the general case for any chain longer than two, even
+-- though the only shape this level currently has forms just one pair.
+local function linkAndMergeWallClimbShapes(shapes)
+  local capOwnerByKey = {}
+  for _, shape in ipairs(shapes) do
+    if shape.ownCapTileKey then capOwnerByKey[shape.ownCapTileKey] = shape end
+  end
+
+  local absorbed = {}
+  local mergedAny = true
+  while mergedAny do
+    mergedAny = false
+    for _, shapeA in ipairs(shapes) do
+      if not absorbed[shapeA] and shapeA.continuesAtKey then
+        local shapeB = capOwnerByKey[shapeA.continuesAtKey]
+        if shapeB and shapeB ~= shapeA and not absorbed[shapeB] then
+          mergeWallClimbShapes(shapeA, shapeB)
+          absorbed[shapeB] = true
+          shapeA.continuesAtKey = nil
+          mergedAny = true
+        end
+      end
+    end
+  end
+
+  local result = {}
+  for _, shape in ipairs(shapes) do
+    if not absorbed[shape] then table.insert(result, shape) end
+  end
+  return result
 end
 
 -- Returns shapes, claimedCells — claimedCells merges every individual
@@ -1023,6 +1155,7 @@ local function buildRampShapes(layer, tileProps, width, height, anchorX, anchorY
       end
     end
   end
+  shapes = linkAndMergeWallClimbShapes(shapes)
   return shapes, claimedCells
 end
 

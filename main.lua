@@ -209,7 +209,7 @@ local function updatePlanetoidsPhysics()
     if p.isImmovable then
       p.vel.x, p.vel.y = 0, 0
     else
-      p.pos:add(p.vel:clone():multiply(state.timeScale))
+      p.pos:addScaled(p.vel, state.timeScale)
 
       if p.pos.x - p.radius < 0 then
         p.pos.x = p.radius
@@ -353,7 +353,25 @@ function love.update(dt)
     end
   end
 
-  collisionSystem:handleElasticCollisions(state.planetoids)
+  -- Belt planetoids alone can number in the hundreds
+  -- (worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500), and almost all of them
+  -- sit outside the camera at any given moment. Bouncing off each other
+  -- (or off an asteroid/fireball) is purely a background physics detail
+  -- with no visible payoff when it happens off-screen, so any belt
+  -- planetoid the player can't currently see is left out of every
+  -- planetoid-involved collision pass below — built once per frame and
+  -- reused by all of them. Regular planets and the dome/hill shapes are
+  -- never filtered out here: they're comparatively few, and (for the
+  -- immovable ones) always meant to react precisely regardless of
+  -- visibility.
+  local collidablePlanetoids = {}
+  for _, p in ipairs(state.planetoids) do
+    if not p.isBeltPlanetoid or utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+      table.insert(collidablePlanetoids, p)
+    end
+  end
+
+  collisionSystem:handleElasticCollisions(collidablePlanetoids)
 
   -- Any planetoid tagged isImmovable (the sky dome and its TiledTerrain
   -- hill shapes are the current examples) gets the same surface-accurate
@@ -370,11 +388,11 @@ function love.update(dt)
   -- too would be redundant with that.
   do
     local immovablePlanetoids = {}
-    for _, p in ipairs(state.planetoids) do
+    for _, p in ipairs(collidablePlanetoids) do
       if p.isImmovable then table.insert(immovablePlanetoids, p) end
     end
     if #immovablePlanetoids > 0 then
-      collisionSystem:handleImmovableCollisions(immovablePlanetoids, state.planetoids)
+      collisionSystem:handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids)
     end
   end
 
@@ -397,7 +415,7 @@ function love.update(dt)
     collisionSystem:handlePlayerAsteroidCollisions(state.player, state.asteroids)
     collisionSystem:handleElasticCollisions(state.asteroids)
 
-    local toBreak = collisionSystem:handlePlanetAsteroidCollisions(state.planetoids, state.asteroids)
+    local toBreak = collisionSystem:handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids)
     if next(toBreak) then
       for i = #state.asteroids, 1, -1 do
         if toBreak[state.asteroids[i]] then
@@ -422,7 +440,7 @@ function love.update(dt)
 
     if #state.fireballs > 0 and state.asteroids then
       local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
-        state.fireballs, state.planetoids, state.asteroids
+        state.fireballs, collidablePlanetoids, state.asteroids
       )
       if next(toBreakAsteroids) then
         for i = #state.asteroids, 1, -1 do
@@ -521,6 +539,7 @@ function love.update(dt)
 end
 
 function love.draw()
+  Planetoid.beginFrame()
   state.starfield:draw(state.camera, state.visibleWidth, state.visibleHeight)
 
   love.graphics.push()
@@ -591,11 +610,19 @@ function love.draw()
       if utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50) then
         level:draw()
         if state.showCollisionDebug then
-          love.graphics.setColor(1, 0, 0, 1)
           love.graphics.setLineWidth(4)
+          -- Ordinary ground/ramp shapes (red) first, then the solid wall
+          -- blocks (blue), then wall-climb loop shapes (green) LAST —
+          -- see this file's own note on why the wall-climb path and the
+          -- solid wall blocks legitimately overlap in the same tiles.
+          -- Drawing green last keeps that overlapping stretch of path
+          -- visible on top instead of buried under the wall rectangles.
+          love.graphics.setColor(1, 0, 0, 1)
           for _, shape in ipairs(level.shapes) do
-            for _, seg in ipairs(shape.segments) do
-              love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
+            if not shape.isWallClimb then
+              for _, seg in ipairs(shape.segments) do
+                love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
+              end
             end
           end
           love.graphics.setColor(0.2, 0.6, 1, 1)
@@ -603,6 +630,21 @@ function love.draw()
             love.graphics.rectangle("line",
               wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
               wall.halfWidth * 2, wall.halfHeight * 2)
+          end
+          -- Wall-climb shapes (ramp-to-wall-to-ceiling loops — see
+          -- TiledTerrain.lua's buildRampClimbShape/
+          -- linkAndMergeWallClimbShapes) draw green, so a multi-tile
+          -- path like a full loop is visibly distinct from plain
+          -- ground/ramp shapes at a glance, same red/blue/green
+          -- convention this debug view already uses to tell top vs wall
+          -- shapes apart.
+          love.graphics.setColor(0.2, 1, 0.2, 1)
+          for _, shape in ipairs(level.shapes) do
+            if shape.isWallClimb then
+              for _, seg in ipairs(shape.segments) do
+                love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
+              end
+            end
           end
           love.graphics.setColor(1, 1, 1, 1)
           love.graphics.setLineWidth(1)

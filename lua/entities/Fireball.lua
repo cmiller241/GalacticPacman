@@ -87,7 +87,7 @@ end
 
 function Fireball:update()
   local ts = state.timeScale or 1
-  self.pos:add(self.vel:clone():multiply(ts))
+  self.pos:addScaled(self.vel, ts)
   self.life = self.life - ts
 
   -- Trail

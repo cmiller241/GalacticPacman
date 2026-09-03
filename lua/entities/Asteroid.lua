@@ -63,9 +63,9 @@ function Asteroid:update()
 
   -- Drag (same exponential reasoning as the JS version)
   local drag = constants.DRAG or 0.995
-  self.vel = self.vel:multiply(drag ^ ts)
+  self.vel:scale(drag ^ ts)
 
-  self.pos:add(self.vel:clone():multiply(ts))
+  self.pos:addScaled(self.vel, ts)
   self.angle = self.angle + self.angularSpeed * ts
 
   -- Bounce off world edges
