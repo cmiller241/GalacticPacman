@@ -82,49 +82,36 @@ function Planetoid.new(x, y, radius, color)
   self.isSpikey = false
   self.bodyCanvas = nil
   self.bodyCanvasPadding = 0
-  self.ringCanvas = nil
   self.interiorType = nil
   self.eclipseMesh = nil
   return self
 end
 
-function Planetoid:createRingCanvas()
-  local r = self.influenceRadius
-  local dashLen, gapLen = 10, 5
-  local cycleLen = dashLen + gapLen
-  local circumference = 2 * math.pi * r
-  local segments = math.max(64, math.floor(circumference / 4))
+-- Baking a body canvas (glow layers + stencil + tiled texture draw, at
+-- 2x supersampling) is real GPU/CPU work that's actually rendered every
+-- frame afterward. Left uncapped, a single frame where many
+-- never-before-seen planetoids all become visible at once (e.g.
+-- scrolling into a freshly generated belt cell, up to 36 planetoids)
+-- bakes all of them synchronously in that one love.draw() call, which
+-- is exactly the kind of one-frame stall that reads as an intermittent
+-- FPS drop. Capping how many NEW bakes happen per frame spreads that
+-- burst across a handful of frames instead — draw()'s existing
+-- fallback (a plain red circle) covers the gap until a planet's own
+-- turn comes up, same as it already did while waiting on
+-- state.planetTexture to load. Planetoid.beginFrame() resets the
+-- counter once per frame, from love.draw() in main.lua.
+Planetoid.MAX_BODY_CANVAS_BAKES_PER_FRAME = 3
+local bodyCanvasBakesThisFrame = 0
 
-  local canvas = love.graphics.newCanvas(r * 2, r * 2)
-  love.graphics.push()
-  love.graphics.origin()
-  love.graphics.setCanvas(canvas)
-  love.graphics.clear(0, 0, 0, 0)
-  love.graphics.setColor(173/255, 216/255, 230/255, 1)
-  love.graphics.setLineWidth(3)
-
-  for i = 0, segments - 1 do
-    local t0 = i / segments
-    local t1 = (i + 1) / segments
-    local arcPos = t0 * circumference
-    if (arcPos % cycleLen) < dashLen then
-      local a0 = t0 * math.pi * 2
-      local a1 = t1 * math.pi * 2
-      local x0, y0 = r + r * math.cos(a0), r + r * math.sin(a0)
-      local x1, y1 = r + r * math.cos(a1), r + r * math.sin(a1)
-      love.graphics.line(x0, y0, x1, y1)
-    end
-  end
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.setCanvas()
-  love.graphics.pop()
-  self.ringCanvas = canvas
+function Planetoid.beginFrame()
+  bodyCanvasBakesThisFrame = 0
 end
 
 function Planetoid:ensureBodyCanvas()
   if self.bodyCanvas then return end
   if not state.planetTexture then return end
+  if bodyCanvasBakesThisFrame >= Planetoid.MAX_BODY_CANVAS_BAKES_PER_FRAME then return end
+  bodyCanvasBakesThisFrame = bodyCanvasBakesThisFrame + 1
 
   local r = self.radius
   local padding = Planetoid.SHADOW_PADDING

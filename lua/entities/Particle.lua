@@ -34,8 +34,8 @@ end
 
 function Particle:update()
   local timeScale = state.timeScale or 1
-  self.pos:add(self.vel:clone():multiply(timeScale))
-  self.vel = self.vel:multiply(self.drag ^ timeScale)
+  self.pos:addScaled(self.vel, timeScale)
+  self.vel:scale(self.drag ^ timeScale)
   self.radius = self.radius + self.growRate * timeScale
   self.life = self.life - timeScale
 end

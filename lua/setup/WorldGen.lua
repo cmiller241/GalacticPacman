@@ -64,6 +64,20 @@ local BELT_PLANETOIDS_PER_CELL = 36
 local ASTEROIDS_PER_CELL  = 2
 local COINS_PER_PLANET_BASE = 4
 
+-- Belt planetoids are dense (up to BELT_MAX_TOTAL_PLANETOIDS=500 of them
+-- alive at once) and every coin is its own per-frame Coin:update() call
+-- -- the old radius-scaled density formula (same as regular planets,
+-- just halved) meant a large, steady coin population out there for no
+-- real gameplay reason. A small random count instead -- some belt
+-- planetoids bare, none with more than BELT_COIN_MAX -- cuts that
+-- per-frame population substantially. Shared by both belt coin spawn
+-- sites below (the cell-generation burst and the ongoing drip spawn)
+-- so the range only needs tuning in one place.
+local BELT_COIN_MAX = 2
+local function randomBeltCoinCount()
+  return math.random(0, BELT_COIN_MAX)
+end
+
 local PLANET_COLORS = {
   { 0.75, 0.78, 0.85, 1 },
   { 0.95, 0.45, 0.40, 1 },
@@ -297,14 +311,10 @@ local function spawnDriftingBeltPlanetoid(refTheta)
   local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
 
   local p = Planetoid.new(x, y, radius, randomColor())
-  p:createRingCanvas()
   applyBeltOrbit(p)
   table.insert(state.planetoids, p)
 
-  -- Same coin density formula as createCoinsForPlanetoids (halved for
-  -- belt planetoids) -- duplicated rather than shared since that
-  -- helper is defined later in this file, after createPlanetoidsInCell.
-  local numCoins = math.max(1, math.floor((COINS_PER_PLANET_BASE + math.floor(radius / 10)) / 2))
+  local numCoins = randomBeltCoinCount()
   for i = 1, numCoins do
     local coin = Coin.new(p)
     coin.angle = (i / numCoins) * math.pi * 2 + math.random() * 0.2
@@ -525,7 +535,6 @@ local function createPlanetoidsInCell(col, row, count, belt)
       x, y = randomPointInCell(col, row, radius)
     end
     local p = Planetoid.new(x, y, radius, randomColor())
-    p:createRingCanvas()
     if belt then
       applyBeltOrbit(p)
     end
@@ -545,9 +554,11 @@ end
 
 local function createCoinsForPlanetoids(planetoids)
   for _, planet in ipairs(planetoids) do
-    local numCoins = COINS_PER_PLANET_BASE + math.floor(planet.radius / 10)
+    local numCoins
     if planet.isBeltPlanetoid then
-      numCoins = math.max(1, math.floor(numCoins / 2))
+      numCoins = randomBeltCoinCount()
+    else
+      numCoins = COINS_PER_PLANET_BASE + math.floor(planet.radius / 10)
     end
     for i = 1, numCoins do
       local coin = Coin.new(planet)
