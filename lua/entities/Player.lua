@@ -73,16 +73,19 @@ function Player.new(x, y)
   self.runJumpMultiplier = 1.2
   self.airControlAccel = 0.3
   -- Also doubles as the hard ceiling jump()'s own momentum carry clamps
-  -- to (see jumpMomentumCarryScale's own use there) — raised from the
-  -- original 4 (which crushed a running jump's ~12.6 natural carry down
-  -- to almost nothing) to comfortably fit one single running jump's
-  -- worth of speed (rawSpeed 9 * jumpMomentumCarryScale 1.4 = 12.6)
-  -- without clamping it, while still capping REPEATED jumps (e.g.
-  -- rapid bunny-hopping) from compounding past this — that carry is
-  -- ADDED to whatever vel.x a jump already has, so without a ceiling
-  -- at the launch point itself (not just air control afterward),
-  -- successive jumps could stack indefinitely.
-  self.airControlMaxSpeed = 13
+  -- to (see jumpMomentumCarryScale's own use there), so a jump's launch
+  -- speed can never exceed this either, not just air control afterward.
+  -- Pinned to the player's own max ground running speed (PLAYER_LINEAR_SPEED
+  -- * runSpeedMultiplier) rather than some larger fixed number — this
+  -- used to be a flat 13, well above the ~9 you can ever reach by
+  -- running, which meant holding a direction through a jump let you
+  -- keep accelerating past your own top running speed every single
+  -- jump (compounding further on repeated/bunny-hop jumps). Mario-style
+  -- platformers never let jumping outrun running like that — a jump
+  -- carries and lets you maintain your ground speed in the air, it
+  -- doesn't add to it — so this caps air speed at exactly that ceiling
+  -- instead of letting it run higher.
+  self.airControlMaxSpeed = constants.PLAYER_LINEAR_SPEED * self.runSpeedMultiplier
   self.edgeFallCarryFraction = 0.35
   -- How hard the player peels off a wall-climb shape (see
   -- TiledTerrain.lua's buildRampClimbShape) when they stop actively

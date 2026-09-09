@@ -233,7 +233,8 @@ local function pollGamepad(dt)
   end
   lastL2Pressed = l2Pressed
 
-  -- --- Right stick: aim ---
+  -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
+  -- own on-screen cursor instead — see that file) ---
   local rightX = gp:getGamepadAxis("rightx") or 0
   local rightY = gp:getGamepadAxis("righty") or 0
   local rightMag = math.sqrt(rightX * rightX + rightY * rightY)
@@ -241,8 +242,17 @@ local function pollGamepad(dt)
     state.gamepadAimActive = true
     state.gamepadAimX = rightX / rightMag
     state.gamepadAimY = rightY / rightMag
+    -- Raw (NOT unit-normalized) deflection, deadzone applied but actual
+    -- push distance preserved — gamepadAimX/Y above throw that away on
+    -- purpose (a fixed-length aim ray only cares about direction), but
+    -- VatsCursor.lua's cursor wants proportional speed: a light nudge
+    -- should crawl, a full push should move at full speed.
+    state.gamepadRightStickX = rightX
+    state.gamepadRightStickY = rightY
   else
     state.gamepadAimActive = false
+    state.gamepadRightStickX = 0
+    state.gamepadRightStickY = 0
   end
 
   -- --- Tracks whether the gamepad is the player's CURRENTLY
