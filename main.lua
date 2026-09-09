@@ -26,6 +26,7 @@ local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
 local LockOutline = require("lua.effects.LockOutline")
 local VatsOverlay = require("lua.effects.VatsOverlay")
+local VatsCursor = require("lua.effects.VatsCursor")
 local Lava = require("lua.world.Lava")
 
 local collisionSystem
@@ -237,6 +238,7 @@ function love.update(dt)
   end
 
   gamepadInput.pollGamepad(dt)
+  VatsCursor.update(dt)
 
   -- Normalizes this frame's real elapsed time to "how many 60fps-baseline
   -- frames this update represents" (1.0 at exactly 60fps) — clamped so a
@@ -729,6 +731,8 @@ function love.draw()
   LockOutline.draw()
 
   love.graphics.pop()
+
+  VatsCursor.drawReticle()
 
   if state.minimap then
     state.minimap:draw()

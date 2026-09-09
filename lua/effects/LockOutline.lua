@@ -24,11 +24,12 @@ local LockOutline = {}
 -- version, isn't implemented there either) — keeping both outlines
 -- circle-based is what keeps them visually consistent with each other
 -- rather than one being rounded-rect-shaped and the other not.
-function LockOutline.draw()
-  local player = state.player
-  if not player or not player.lockedTarget or player.mode ~= "space" then return end
-  local target = player.lockedTarget
-
+-- Shared by draw() below (the actual L1/R1 hard lock) and
+-- VatsCursor.lua's own hover ring (the right-stick cursor, while in
+-- V.A.T.S., pointing at a planet without necessarily having locked it
+-- yet) — both want the exact same "this is a valid target" visual, just
+-- driven by a different target each.
+function LockOutline.drawRingAround(target)
   -- Gentle pulse, same technique PullBeam.lua uses, but a slower/subtler
   -- one — this needs to read as "steady, holding a lock," not "actively
   -- channeling energy" the way the pull beam's own faster pulse does.
@@ -52,6 +53,12 @@ function LockOutline.draw()
 
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.setLineWidth(1)
+end
+
+function LockOutline.draw()
+  local player = state.player
+  if not player or not player.lockedTarget or player.mode ~= "space" then return end
+  LockOutline.drawRingAround(player.lockedTarget)
 end
 
 return LockOutline
