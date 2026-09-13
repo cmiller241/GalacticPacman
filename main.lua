@@ -21,6 +21,7 @@ local worldGen = require("lua.setup.worldGen")
 local MiniMap = require("lua.ui.MiniMap")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local SpaceShelter = require("lua.world.SpaceShelter")
+local RobotButler = require("lua.entities.RobotButler")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
@@ -117,6 +118,15 @@ function love.load()
   -- on top of gameplay geometry.
   state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome:trueSurfaceY())
   state.skyDomePlanet = dome
+
+  -- Robot butler NPC — paces back and forth just to the right of the
+  -- shelter's own footprint (see RobotButler.lua). Positioned off the
+  -- shelter's own right edge (pos.x + half its drawn width) plus a
+  -- small gap, rather than a hardcoded offset, so it stays adjacent
+  -- even if the shelter's own scale ever changes.
+  local ROBOT_GAP_FROM_SHELTER = 60
+  local robotHomeX = state.spaceShelter.pos.x + state.spaceShelter.drawWidth / 2 + ROBOT_GAP_FROM_SHELTER
+  state.robotButler = RobotButler.new(robotHomeX, dome:trueSurfaceY())
 
   -- === TILED HILL TERRAIN above the sky dome's ground ===
   -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
@@ -312,6 +322,10 @@ function love.update(dt)
     if state.introLocked and state.spaceShelter.introDone then
       state.introLocked = false
     end
+  end
+
+  if state.robotButler then
+    state.robotButler:update()
   end
 
   -- Empty keys while the opening cutscene is running — the player
@@ -671,6 +685,14 @@ function love.draw()
     end
   end
 
+  if state.robotButler then
+    local r = state.robotButler
+    if utils.isOnScreen(r.pos.x, r.pos.y, math.max(r.halfWidth, r.halfHeight), 20) then
+      r:draw()
+      r:drawTooltip()
+    end
+  end
+
   if state.coins then
     for _, c in ipairs(state.coins) do
       if utils.isOnScreen(c.pos.x, c.pos.y, c.radius, 20) then
@@ -733,6 +755,10 @@ function love.draw()
   love.graphics.pop()
 
   VatsCursor.drawReticle()
+
+  if state.robotButler then
+    state.robotButler:drawDialogue()
+  end
 
   if state.minimap then
     state.minimap:draw()

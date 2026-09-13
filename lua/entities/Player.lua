@@ -13,7 +13,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
-local Particle = require("lua.entities.Particle")
+local DustPuff = require("lua.effects.DustPuff")
 local TargetLock = require("lua.systems.TargetLock")
 
 local Player = {}
@@ -380,48 +380,6 @@ function Player:tryGroundPound()
   end
 end
 
--- h in degrees [0,360), s/l in [0,1] -> r,g,b in [0,1]. LÖVE has no CSS
--- color parsing (unlike the original's `hsl(...)` fillStyle string), so
--- the same random-hue-in-a-dusty-tan-range trick needs converting by
--- hand to feed Particle.color's plain {r,g,b} table.
-local function hslToRgb(h, s, l)
-  if s == 0 then return l, l, l end
-  local function hueToRgb(p, q, t)
-    if t < 0 then t = t + 1 end
-    if t > 1 then t = t - 1 end
-    if t < 1 / 6 then return p + (q - p) * 6 * t end
-    if t < 1 / 2 then return q end
-    if t < 2 / 3 then return p + (q - p) * (2 / 3 - t) * 6 end
-    return p
-  end
-  local q = l < 0.5 and (l * (1 + s)) or (l + s - l * s)
-  local p = 2 * l - q
-  local hNorm = h / 360
-  return hueToRgb(p, q, hNorm + 1 / 3), hueToRgb(p, q, hNorm), hueToRgb(p, q, hNorm - 1 / 3)
-end
-
--- Shared dust-puff spawner: `count` particles at `pos`, scattered along
--- `sideDir` and drifting AWAY from `intoSurfaceDir` (the direction
--- pointing INTO whatever surface the dust is kicking off of — "down" for
--- a footstep, "into the wall" for a wall-jump kick) at a random speed
--- between driftMin/driftMax. Shared by spawnWalkDust and
--- spawnWallJumpEffects so the dusty tan/beige look (color, radius, drag,
--- growRate) only needs tuning in one place.
-local function spawnDustPuff(pos, intoSurfaceDir, sideDir, count, sideSpreadScale, driftMin, driftMax)
-  for _ = 1, count do
-    local sideSpread = (math.random() - 0.5) * sideSpreadScale
-    local driftSpeed = driftMin + math.random() * (driftMax - driftMin)
-    local vel = sideDir:clone():multiply(sideSpread):add(intoSurfaceDir:clone():multiply(-driftSpeed))
-
-    local particle = Particle.new(pos, vel, 22 + math.random() * 14)
-    particle.color = { hslToRgb(35 + math.random() * 15, (30 + math.random() * 15) / 100, (55 + math.random() * 15) / 100) } -- dusty tan/beige
-    particle.radius = 2 + math.random() * 1.5
-    particle.drag = 0.9      -- slows down rather than drifting at constant speed forever, like real dust settling
-    particle.growRate = 0.06 -- gently expands over its life, like a puff dispersing rather than staying a fixed-size dot
-    table.insert(state.particles, particle)
-  end
-end
-
 -- Spawns an occasional dust puff at the player's feet while actively
 -- walking on a surface — a gentle scatter-and-drift-up, as opposed to
 -- spawnWallJumpEffects' bigger outward burst. Called from all three
@@ -460,7 +418,7 @@ function Player:spawnWalkDust()
   -- the extra per-footstep volume on top of that.
   local running = state.gamepadRunHeld
   local puffCount = (running and 4 or 2) + math.floor(math.random() * (running and 3 or 2))
-  spawnDustPuff(feetPos, downDir, sideDir, puffCount, 2.5, 0.2, 0.6)
+  DustPuff.spawn(feetPos, downDir, sideDir, puffCount, 2.5, 0.2, 0.6)
 end
 
 -- Visual feedback for a wall-jump kick-off: a dust burst (roughly double
@@ -478,7 +436,7 @@ function Player:spawnWallJumpEffects()
   local intoWallDir = normal:clone():multiply(-1)
 
   local puffCount = 4 + math.floor(math.random() * 3) -- ~double spawnWalkDust's 2-3 walking baseline
-  spawnDustPuff(self.pos, intoWallDir, sideDir, puffCount, 3.5, 0.6, 1.2)
+  DustPuff.spawn(self.pos, intoWallDir, sideDir, puffCount, 3.5, 0.6, 1.2)
 
   if state.wallContactPulses then
     local WallContactPulse = require("lua.entities.WallContactPulse")
