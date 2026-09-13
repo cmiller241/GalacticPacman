@@ -23,6 +23,8 @@
 -- patrolling decoration for now, not a hazard.
 
 local state = require("lua.state")
+local Vector2 = require("lua.vector2")
+local DustPuff = require("lua.effects.DustPuff")
 
 local Ooomba = {}
 Ooomba.__index = Ooomba
@@ -79,6 +81,15 @@ function Ooomba.new(homeShape, startArcPos, options)
   self.walkCyclePhase = 0
   self.walkCycleSpeed = 0.12 -- how fast the 4-step stand/walk cycle advances
 
+  -- Footstep-dust timing — same distance-driven "just planted" detection
+  -- Player.lua's own spawnWalkDust and RobotButler.lua use (see
+  -- DustPuff.lua): walkTime advances by actual arc-length distance
+  -- covered this frame, and a footfall is the moment sin(walkTime)^2
+  -- crosses back above 0.85 (once per leg, twice per full stride).
+  self.walkTime = 0
+  self.lastWalkBobT = 0
+  self.strideLength = 90
+
   return self
 end
 
@@ -95,6 +106,7 @@ function Ooomba:update()
   -- Turn-around bounds are inset by this.halfWidth so the Ooomba's own
   -- body stays fully on the shape's own footprint when it turns, rather
   -- than visually overhanging the end before reversing.
+  local prevArcPos = self.surfaceArcPos
   local desiredArcPos = self.surfaceArcPos + self.direction * self.speed * speedMultiplier * timeScale
   if desiredArcPos < self.halfWidth or desiredArcPos > perimeter - self.halfWidth then
     self.direction = -self.direction -- reached the end — turn around instead of falling off
@@ -102,9 +114,29 @@ function Ooomba:update()
     self.surfaceArcPos = desiredArcPos
   end
 
-  self.pos = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight).point
+  local surface = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
+  self.pos = surface.point
 
   self.walkCyclePhase = self.walkCyclePhase + self.walkCycleSpeed * timeScale
+
+  -- Actual distance covered THIS frame, not the attempted step above —
+  -- 0 on the very frame he turns around at an end, so that frame
+  -- correctly spawns no footstep dust for a step he didn't actually take.
+  local actualDs = self.surfaceArcPos - prevArcPos
+  self.walkTime = self.walkTime + (math.abs(actualDs) / self.strideLength) * math.pi * 2
+  local bobT = math.sin(self.walkTime) ^ 2
+  local justPlanted = bobT > 0.85 and self.lastWalkBobT <= 0.85
+  self.lastWalkBobT = bobT
+  if justPlanted then
+    -- shape.forceUprightJump (every shape an Ooomba ever patrols — see
+    -- main.lua's own spawn loop, which skips wall-climb shapes entirely)
+    -- means "down" is always straight down here, same override
+    -- Player:visualDownDirection uses for the same kind of surface.
+    local downDir = shape.forceUprightJump and Vector2.new(0, 1) or surface.normal:clone():multiply(-1)
+    local feetPos = self.pos:clone():add(downDir:clone():multiply(self.halfHeight))
+    local sideDir = Vector2.new(-downDir.y, downDir.x)
+    DustPuff.spawn(feetPos, downDir, sideDir, 2 + math.floor(math.random() * 2), 2.5, 0.2, 0.6)
+  end
 end
 
 function Ooomba:draw()

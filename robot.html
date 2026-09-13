@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Sprite Animation</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(to bottom, #2b2f38, #4a5160);
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: #eee;
+            margin-bottom: 10px;
+        }
+        canvas {
+            border: 8px solid #7d8896;
+            border-radius: 16px;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
+        }
+        .info {
+            margin-top: 15px;
+            color: #ccc;
+            font-size: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 Robot Butler Animation</h1>
+    <canvas id="canvas" width="600" height="750"></canvas>
+    <div class="info">4-frame walking cycle • 200ms per frame • 0.45× scale • smoothed (not pixel art)</div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Smoothed (bilinear) scaling, deliberately NOT nearest-neighbor —
+        // this sprite is high-res source art being scaled DOWN
+        // significantly (0.45x), not a low-res pixel-art sheet being
+        // scaled up. Nearest-neighbor on a large downscale just throws
+        // away detail unevenly (aliasing/moire on fine edges) instead of
+        // blending it smoothly.
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        // Sprite settings — 4000x1200 sheet, 4 frames of 1000x1200 each,
+        // all in a single row.
+        const spriteWidth = 1000;
+        const spriteHeight = 1200;
+        const cols = 4;
+        const totalFrames = 4;
+        const frameInterval = 100; // ms per frame
+
+        // Canvas & drawing settings
+        const canvasWidth = 600;
+        const canvasHeight = 750;
+        const scale = 0.45;                 // 1000x1200 -> 450x540
+        const drawWidth = spriteWidth * scale;
+        const drawHeight = spriteHeight * scale;
+
+        let frameIndex = 0;
+        let lastFrameTime = 0;
+
+        const img = new Image();
+        img.src = 'img/Robot.png';
+
+        function drawBackground() {
+            // Wall
+            ctx.fillStyle = '#4a5160';
+            ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+            // Floor
+            ctx.fillStyle = '#8a93a2';
+            ctx.fillRect(0, canvasHeight - 90, canvasWidth, 90);
+            ctx.strokeStyle = '#6b7381';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, canvasHeight - 90);
+            ctx.lineTo(canvasWidth, canvasHeight - 90);
+            ctx.stroke();
+        }
+
+        function drawSprite() {
+            const row = Math.floor(frameIndex / cols);
+            const col = frameIndex % cols;
+            const sx = col * spriteWidth;
+            const sy = row * spriteHeight;
+
+            const dx = (canvasWidth - drawWidth) / 2;
+            const dy = canvasHeight - drawHeight - 60;
+
+            ctx.drawImage(
+                img,
+                sx, sy, spriteWidth, spriteHeight,   // source rect
+                dx, dy, drawWidth, drawHeight        // destination (scaled)
+            );
+        }
+
+        function animate(timestamp) {
+            if (!lastFrameTime) lastFrameTime = timestamp;
+
+            if (timestamp - lastFrameTime >= frameInterval) {
+                frameIndex = (frameIndex + 1) % totalFrames;
+                lastFrameTime = timestamp;
+            }
+
+            drawBackground();
+            drawSprite();
+
+            requestAnimationFrame(animate);
+        }
+
+        img.onload = function() {
+            console.log('✅ Robot spritesheet loaded – smoothed scaling active.');
+            requestAnimationFrame(animate);
+        };
+
+        img.onerror = function() {
+            ctx.fillStyle = '#fff';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('❌ Could not load img/Robot.png', canvasWidth/2, canvasHeight/2);
+        };
+    </script>
+</body>
+</html>

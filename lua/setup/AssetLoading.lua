@@ -87,6 +87,23 @@ local function loadAssets(onComplete)
   state.spaceShelterDoorTexture = love.graphics.newImage("img/spaceshelter_door.png")
   state.spaceShelterDoorTexture:setFilter("linear", "linear")
 
+  -- Robot butler NPC (patrols beside the shelter) — 4000x1200, four
+  -- 1000x1200 walking frames in a single row (see RobotButler.lua's own
+  -- FRAME_COUNT). High-res source art scaled DOWN substantially, not a
+  -- pixel-art sheet — "linear" filtering reads better here than the
+  -- game's pixel-art "nearest" default, same reasoning as the
+  -- Ooomba/shelter textures above.
+  state.robotTexture = love.graphics.newImage("img/Robot2.png")
+  state.robotTexture:setFilter("linear", "linear")
+
+  -- Dialogue box background (RobotButler.lua's own :drawDialogue) —
+  -- 1410x227. Scaled to fit the window at draw time, same "linear over
+  -- the game's pixel-art nearest default" reasoning as the textures
+  -- above — an arbitrary runtime scale (window-width-dependent) is
+  -- exactly the case nearest-neighbor looks worst in.
+  state.textboxTexture = love.graphics.newImage("img/textbox.png")
+  state.textboxTexture:setFilter("linear", "linear")
+
   for key, src in pairs(CHARACTER_IMAGE_SOURCES) do
     state.characterImages[key] = love.graphics.newImage(src)
   end

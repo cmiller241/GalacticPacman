@@ -29,6 +29,15 @@ function Particle.new(pos, vel, life)
   -- velocity forever, 0 = constant size.
   self.drag = 1
   self.growRate = 0
+  -- Optional — nil by default, so every EXISTING particle (explosions,
+  -- sparks, etc.) still draws as a single plain circle exactly as
+  -- before. When set (see DustPuff.lua), a list of {angle, distFrac,
+  -- radiusFrac} blobs, each positioned/sized as a FRACTION of the
+  -- particle's own current radius rather than fixed pixels — so as the
+  -- particle grows over its life (see growRate), the whole cluster
+  -- grows with it instead of the sub-circles drifting apart or staying
+  -- a fixed size.
+  self.blobs = nil
   return self
 end
 
@@ -43,7 +52,15 @@ end
 function Particle:draw()
   if self.life <= 0 then return end
   love.graphics.setColor(self.color[1], self.color[2], self.color[3], self.life / self.maxLife)
-  love.graphics.circle("fill", self.pos.x, self.pos.y, self.radius)
+  if self.blobs then
+    for _, blob in ipairs(self.blobs) do
+      local bx = self.pos.x + math.cos(blob.angle) * blob.distFrac * self.radius
+      local by = self.pos.y + math.sin(blob.angle) * blob.distFrac * self.radius
+      love.graphics.circle("fill", bx, by, blob.radiusFrac * self.radius)
+    end
+  else
+    love.graphics.circle("fill", self.pos.x, self.pos.y, self.radius)
+  end
   love.graphics.setColor(1, 1, 1, 1)
 end
 

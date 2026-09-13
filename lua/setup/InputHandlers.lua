@@ -189,6 +189,9 @@ local function attachInputHandlers()
 
     if key == 'Enter' then
       tryRestartOrAdvance()
+      if state.robotButler and state.player then
+        state.robotButler:tryInteract(state.player)
+      end
     end
 
     if key == 'c' and not isrepeat then

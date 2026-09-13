@@ -80,6 +80,19 @@ local ALL_FACE_AND_SHOULDER_BUTTONS = {
 local STICK_DEADZONE = 0.2      -- ignore small stick drift near center, on both sticks
 local TRIGGER_PRESS_THRESHOLD = 0.5  -- analog trigger value counted as "pressed" — tune against real hardware feel
 
+-- Keyboard-and-mouse equivalent of Square (run) — polled directly here,
+-- not via love.keypressed/keyreleased's own state.keys[...] bookkeeping,
+-- specifically because this function runs every single frame regardless
+-- of whether a gamepad is even connected (see the early-return branch
+-- right below) and unconditionally OVERWRITES state.gamepadRunHeld each
+-- time — an event-driven flag set elsewhere would just get stomped back
+-- the very next frame. Polling love.keyboard.isDown here instead makes
+-- this the one place that always computes the CURRENT correct value,
+-- from whichever input source(s) are actually active.
+local function isShiftHeld()
+  return love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift")
+end
+
 -- Tracked across frames so buttons can be edge-triggered (fires once
 -- per press, not once per frame held) — same reasoning and same
 -- variable-per-button structure as the original.
@@ -117,7 +130,7 @@ local function pollGamepad(dt)
   if not gp then
     state.gamepadAimActive = false
     state.gamepadFireHeld = false
-    state.gamepadRunHeld = false
+    state.gamepadRunHeld = isShiftHeld()
     state.gamepadIsActiveDevice = false
     return
   end
@@ -195,8 +208,9 @@ local function pollGamepad(dt)
   end
   lastTrianglePressed = trianglePressed
 
-  -- --- Square: run ---
-  state.gamepadRunHeld = gp:isGamepadDown(BUTTON_SQUARE)
+  -- --- Square: run --- (SHIFT does the same thing on keyboard, so
+  -- either works even with a gamepad connected — see isShiftHeld above)
+  state.gamepadRunHeld = gp:isGamepadDown(BUTTON_SQUARE) or isShiftHeld()
 
   -- --- R1: hard lock, next --- / --- L1: hard lock, previous ---
   local r1Pressed = gp:isGamepadDown(BUTTON_R1)
@@ -213,11 +227,21 @@ local function pollGamepad(dt)
   end
   lastL1Pressed = l1Pressed
 
-  -- --- Circle: release lock, and end V.A.T.S. ---
+  -- --- Circle: release lock, end V.A.T.S., and interact (RobotButler) ---
+  -- Also doubling as the interact button (PlayStation convention would
+  -- more naturally put "confirm/interact" on X — but X is already the
+  -- jump button here, and overloading THAT risks an accidental
+  -- interact every time the player just jumps near an NPC. Circle only
+  -- fires this rarely, near the shelter, well away from anything VATS
+  -- or lock-related would be active for anyway, so the two uses don't
+  -- meaningfully collide in practice.
   local circlePressed = gp:isGamepadDown(BUTTON_CIRCLE)
   if circlePressed and not lastCirclePressed and state.player then
     state.player:clearLockTarget()
     state.vatsActive = false
+    if state.robotButler then
+      state.robotButler:tryInteract(state.player)
+    end
   end
   lastCirclePressed = circlePressed
 
