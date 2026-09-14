@@ -3,4 +3,5 @@ function love.conf(t)
   t.window.width = 1280
   t.window.height = 800
   t.window.resizable = true  -- lets you also drag-resize it yourself afterward
+  t.console = true
 end

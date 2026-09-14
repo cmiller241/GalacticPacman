@@ -32,7 +32,7 @@ local Lava = require("lua.world.Lava")
 
 local collisionSystem
 
-local ZOOM_MIN = 0.5
+local ZOOM_MIN = 0.1
 local ZOOM_MAX = 2.5
 local ZOOM_STEP_PER_FRAME = 0.02
 local VATS_TIME_SCALE = 0.05
@@ -95,7 +95,15 @@ function love.load()
   state.starfield = Starfield.new()
 
   local cellSize = worldGen.CELL_SIZE
-  local domeHalfW = 2000
+  -- Doubled from the original 2000 (see :domeRadiusX/Y below, both tied
+  -- to this same value) — twice as long, and since domeRadiusY scales
+  -- with it too, twice as tall as well. domeX's own formula (below)
+  -- keeps the dome's LEFT edge anchored at a fixed point regardless of
+  -- this value (domeHalfW cancels out of domeX - domeHalfW), so growing
+  -- it only extends the dome further to the right, in the same cell —
+  -- no separate repositioning needed to keep it where it was relative
+  -- to the belt.
+  local domeHalfW = 4000
   -- Left edge of cell 9,14, hull just inside the cell
   local domeX = HOME_CELL_COL * cellSize + domeHalfW + 80
   local domeY = HOME_CELL_ROW * cellSize + cellSize * 0.5
@@ -104,8 +112,13 @@ function love.load()
     halfWidth = domeHalfW,
     halfHeight = 32,
     grassHeight = 32,
-    domeRadiusX = 2000,
-    domeRadiusY = 2000,
+    -- Tied to domeHalfW rather than repeating its own literal — these
+    -- default to halfWidth anyway when omitted (SkyDomePlanetoid.lua),
+    -- but were kept explicit as a plain hardcoded 2000 here; referencing
+    -- the variable instead means resizing the dome again later only
+    -- ever needs the one domeHalfW number changed.
+    domeRadiusX = domeHalfW,
+    domeRadiusY = domeHalfW,
   })
   dome.isPermanent = true
   table.insert(state.planetoids, dome)
@@ -175,10 +188,37 @@ function love.load()
     -- player, since Ooomba's own patrol logic has no concept of "this
     -- surface needs active momentum to stay attached" the way
     -- Player.lua's own isWallClimb check now does.
+    -- Also skip any shape sitting directly under a lava tile (e.g. the
+    -- sunken floor of a lava pit, walkable now that TiledTerrain.lua no
+    -- longer bridges it to the curb on either side) — an Ooomba patrolling
+    -- there would just walk back and forth through the lava itself.
+    local function shapeXYBounds(shape)
+      local minX, maxX, minY = math.huge, -math.huge, math.huge
+      for _, seg in ipairs(shape.segments) do
+        for _, p in ipairs({ seg.a, seg.b }) do
+          minX = math.min(minX, p.x); maxX = math.max(maxX, p.x)
+          minY = math.min(minY, p.y)
+        end
+      end
+      return minX, maxX, minY
+    end
+    local function isBeneathLava(shape, lavas)
+      local minX, maxX, minY = shapeXYBounds(shape)
+      local EPS = 4
+      for _, lava in ipairs(lavas) do
+        local overlapsX = lava.x0 < maxX and (lava.x0 + lava.size) > minX
+        if overlapsX and math.abs((lava.y0 + lava.size) - minY) <= EPS then
+          return true
+        end
+      end
+      return false
+    end
+
     local OOMBA_MIN_SHAPE_LENGTH = 200
     state.ooombas = {}
     for i, shape in ipairs(terrainLevel.shapes) do
-      if not shape.isWallClimb and shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH then
+      if not shape.isWallClimb and shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH
+        and not isBeneathLava(shape, terrainLevel.lavas) then
         local startArcPos = shape:getPerimeter() / 2
         local direction = (i % 2 == 0) and 1 or -1
         table.insert(state.ooombas, Ooomba.new(shape, startArcPos, { direction = direction }))
