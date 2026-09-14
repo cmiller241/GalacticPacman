@@ -154,6 +154,15 @@ local function classifyGid(tileProps, gid)
     -- "not isTopRole" treatment as rampRight/rampLeft: never enters
     -- the ordinary per-column scan.
     if slope == "ceilingLeft" or slope == "ceilingRight" then return slope end
+    -- crestRight/crestLeft and archRight/archLeft: the CONVEX counterpart
+    -- of rampRight/rampLeft and ceilingLeft/ceilingRight — a flat TOP
+    -- curving down into a wall (crest), and that wall curving further
+    -- into an underside/ceiling belly (arch), like walking over and
+    -- around the outside of a rounded block instead of through the
+    -- inside of a tube. Same "not isTopRole" treatment — see
+    -- buildConvexClimbShape.
+    if slope == "crestRight" or slope == "crestLeft" then return slope end
+    if slope == "archRight" or slope == "archLeft" then return slope end
     return "flat"
   end
   return "fill"
@@ -532,6 +541,22 @@ end
 -- stayed false and the airborne wall-slide branch kept running instead,
 -- which read as the player gliding in place on top of the pillar rather
 -- than standing on it.
+-- A one-row height change only bridges into the SAME chain when it's an
+-- authored 45-degree slope tile (riseLeft/riseRight) on at least one side.
+-- Two "flat" (or "wall") tops that happen to sit one row apart — e.g. a
+-- raised curb tile beside a sunken lava-floor tile, with no ramp art
+-- between them — must NOT auto-connect: doing so used to splice in a
+-- sheer vertical segment (the flat tile's own edge at its row, immediately
+-- followed by the neighboring flat tile's edge one row off) that the
+-- ordinary red walkable path then treated as a climbable "side" of the
+-- curb. Real slopes are always explicitly tiled in this project (rampLeft/
+-- Right, riseLeft/Right, crestLeft/Right, archLeft/Right all get their own
+-- tile), so requiring an explicit rise tile to justify a delta of 1 here
+-- doesn't cost any intentional terrain.
+local function isRiseKind(kind)
+  return kind == "riseLeft" or kind == "riseRight"
+end
+
 local function buildVertexRuns(pointsByColumn, width)
   local runs = {}
   local openChains = {}
@@ -546,7 +571,8 @@ local function buildVertexRuns(pointsByColumn, width)
       for _, entry in ipairs(entries) do
         if not usedRow[entry.row] then
           local delta = math.abs(entry.row - last.row)
-          if delta <= 1 and (not bestDelta or delta < bestDelta) then
+          local connects = delta == 0 or (delta == 1 and (isRiseKind(last.kind) or isRiseKind(entry.kind)))
+          if connects and (not bestDelta or delta < bestDelta) then
             bestDelta = delta
             best = entry
           end
@@ -952,19 +978,46 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
         if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then
           -- Ceiling backing (never the ordinary ground-level "flat" run)
           -- stopping here because the tile directly BELOW this scan row
-          -- is another ceilingLeft/ceilingRight cap means this shape's
-          -- own ceiling run has reached exactly where a second wall-climb
-          -- shape's cap begins — the two were authored to meet here and
-          -- continue as one loop. Recording that cap's grid position lets
+          -- is another cap tile means this shape's own ceiling run has
+          -- reached exactly where a second wall-climb shape's cap
+          -- begins — the two were authored to meet here and continue as
+          -- one loop. Recording that cap's grid position lets
           -- linkAndMergeWallClimbShapes stitch the two shapes into a
           -- single continuous path afterward, once every shape in the
           -- level exists to look up.
+          --
+          -- Checks BOTH cap families, not just this shape's own
+          -- (ceilingLeft/ceilingRight) — a flat ceiling run doesn't care
+          -- whether the wall on the far side of the cap it reaches goes
+          -- UP (another concave shape) or DOWN (a convex
+          -- buildConvexClimbShape one, archLeft/archRight): both
+          -- present the exact same "normal points down, now curve
+          -- toward a wall" orientation where a plain run reaches them,
+          -- so either is a valid splice point.
+          --
+          -- The two families sit on DIFFERENT rows relative to this
+          -- scan, though, and checking only one misses the other: a
+          -- concave cap (ceilingLeft/ceilingRight) sits ONE ROW BELOW
+          -- its own backing (this shape's own convention, hence
+          -- flatRow+1 below), but a convex cap (archLeft/archRight)
+          -- sits at the SAME row as its own backing (see
+          -- buildConvexClimbShape's own header comment) — so it shows
+          -- up as the tile THIS run just broke on (fgid itself), not a
+          -- neighbor row.
           if absorbRole == "wall" then
-            local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
-            if belowGid and belowGid ~= 0 then
-              local belowRole = classifyGid(tileProps, belowGid)
-              if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
-                continuesAtKey = (flatRow + 1) * width + fc
+            if fgid ~= 0 then
+              local sameRowRole = classifyGid(tileProps, fgid)
+              if sameRowRole == "archLeft" or sameRowRole == "archRight" then
+                continuesAtKey = flatRow * width + fc
+              end
+            end
+            if not continuesAtKey then
+              local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
+              if belowGid and belowGid ~= 0 then
+                local belowRole = classifyGid(tileProps, belowGid)
+                if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
+                  continuesAtKey = (flatRow + 1) * width + fc
+                end
               end
             end
           end
@@ -1043,6 +1096,233 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   -- else. Player.lua flips ds for this shape specifically so that
   -- "the key that visually walks you into the ramp" is always the one
   -- that climbs it, regardless of which way the ramp faces.
+  shape.controlsReversed = dir < 0
+  return shape, claimedCells
+end
+
+----------------------------------------------------------------------
+-- Convex wall-climbs (crestRight/crestLeft + archRight/archLeft) — the
+-- outside-of-a-rounded-block counterpart to buildRampClimbShape's own
+-- inside-of-a-tube shapes above.
+----------------------------------------------------------------------
+
+-- Builds a convex wall-climb shape: a flat TOP curving DOWN into a wall
+-- (crestRight/crestLeft), optionally a straight run of that wall, then
+-- optionally a second curve into an underside/ceiling belly
+-- (archRight/archLeft) the player walks upside-down along — like
+-- walking over and around the OUTSIDE of a rounded block, rather than
+-- through the INSIDE of a tube the way buildRampClimbShape's own
+-- concave shapes work.
+--
+-- This mirrors buildRampClimbShape closely, but several things differ
+-- because that's genuinely how the actual authored tile art places
+-- these pieces — confirmed directly against tiled/Level1.lua's own
+-- crestRight/archLeft placement (row 38/39, same column), not guessed:
+--
+--   - The wall continues in the SAME column as the crest tile itself,
+--     not an adjacent one (concave's ramp wall sits in col+dir; this
+--     one is straight down in `col`).
+--   - The arch cap tile, if any, is ALSO in that same column, directly
+--     below wherever the wall stack ends — not offset sideways the way
+--     concave's ceiling cap is.
+--   - A wall stack is entirely OPTIONAL: the arch cap can sit directly
+--     beneath the crest tile with zero plain wall tiles between them
+--     (that's exactly how the level's own tiles are laid out), so the
+--     cap check can't be nested inside "only if a wall tile was found"
+--     the way concave's is — it always runs, using whichever row comes
+--     right after the wall search (found or not).
+--
+-- Every arc's normal points AWAY from its own center instead of toward
+-- it (buildRampClimbShape's concave arcs have center on the OPEN-air
+-- side; here center sits on the material side, and the player walks
+-- the outside of the curve) — that's the entire concave/convex
+-- difference in one sentence; everything else follows from it.
+--
+-- dir = 1 for crestRight (wall descends to the right of the flat top),
+-- dir = -1 for crestLeft (mirrored).
+local function buildConvexClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+  local T = TILE_WORLD_SIZE
+  local x0 = anchorX + col * T
+  local y0 = anchorY + row * T
+  local claimedCells = {}
+
+  -- Base arc, inscribed in the crest tile's own box: center on the
+  -- BOTTOM corner nearest the wall side (the corner a rounded-off sharp
+  -- corner would have pivoted around), sweeping from the flat-top
+  -- tangent point (normal straight up) to the wall tangent point
+  -- (normal straight out sideways) — a quarter turn either way
+  -- depending on dir.
+  local centerX = dir > 0 and x0 or (x0 + T)
+  local centerY = y0 + T
+  local center = Vector2.new(centerX, centerY)
+
+  local thetaLedge = -math.pi / 2
+  local thetaWall = dir > 0 and 0 or -math.pi
+
+  local points = {}
+  for i = 0, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = thetaLedge + (thetaWall - thetaLedge) * t
+    table.insert(points, Vector2.new(centerX + T * math.cos(theta), centerY + T * math.sin(theta)))
+  end
+  local arcSegmentCount = #points - 1
+
+  -- Wall stack: straight down the SAME column as the crest tile (see
+  -- this function's own header comment), starting one row below it.
+  -- Wholly optional — see below, the cap check runs either way.
+  local wallCol = col
+  local wallEdgeX = dir > 0 and (x0 + T) or x0
+  local wallBottomRow = nil
+  do
+    local r = row + 1
+    while r < height do
+      local gid = layer.data[r * width + wallCol + 1]
+      if gid == 0 or classifyGid(tileProps, gid) ~= "wall" then break end
+      wallBottomRow = r
+      claimedCells[r * width + wallCol] = true
+      r = r + 1
+    end
+  end
+
+  local wallSegIndex = nil
+  if wallBottomRow then
+    table.insert(points, Vector2.new(wallEdgeX, anchorY + (wallBottomRow + 1) * T))
+    wallSegIndex = #points - 1
+  end
+
+  -- Arch cap: directly below wherever the wall search stopped (right
+  -- after the last wall tile, or right after the crest tile itself if
+  -- there was no wall at all) — same column throughout.
+  local capRow = wallBottomRow and (wallBottomRow + 1) or (row + 1)
+  local capCol = col
+
+  local capCenter, capArcStart, capArcEnd = nil, nil, nil
+  local ceilingRunStart = nil
+  local ownCapTileKey = nil
+  local continuesAtKey = nil
+
+  if capRow < height then
+    local capGid = layer.data[capRow * width + capCol + 1]
+    local capRole = capGid ~= 0 and classifyGid(tileProps, capGid) or "empty"
+
+    if capRole == "archRight" or capRole == "archLeft" then
+      claimedCells[capRow * width + capCol] = true
+      ownCapTileKey = capRow * width + capCol
+
+      -- Second arc, its own center — continues sweeping in the SAME
+      -- angular direction the base arc was already sweeping, another
+      -- quarter turn past thetaWall, exactly like buildRampClimbShape's
+      -- own ceiling cap does. Lands, at its far end, on this arch
+      -- tile's own bottom corner.
+      local ccx = wallEdgeX - dir * T
+      local ccy = anchorY + capRow * T
+      capCenter = Vector2.new(ccx, ccy)
+      capArcStart = #points
+      for i = 1, RAMP_ARC_SEGMENTS do
+        local t = i / RAMP_ARC_SEGMENTS
+        local theta = thetaWall + (thetaWall - thetaLedge) * t
+        table.insert(points, Vector2.new(ccx + T * math.cos(theta), ccy + T * math.sin(theta)))
+      end
+      capArcEnd = #points
+
+      -- Underside backing: continues sideways AWAY from the crest's own
+      -- climb direction, same row the arch tile itself sits in (unlike
+      -- buildRampClimbShape's own ceiling run, which continues one row
+      -- ABOVE its cap — the arch cap's own arc ends at ITS OWN bottom
+      -- edge, not its top edge, so the matching backing row is the cap's
+      -- own row, not the row above it).
+      local flatRow = capRow
+      local flatCol = capCol - dir
+      local absorbDir = -dir
+      ceilingRunStart = #points
+
+      local fc = flatCol
+      while fc >= 0 and fc < width do
+        local fgid = layer.data[flatRow * width + fc + 1]
+        if fgid == 0 or classifyGid(tileProps, fgid) ~= "wall" then
+          -- Same idea as buildRampClimbShape's own continuesAtKey: if
+          -- this run stopped because it ran straight into ANOTHER
+          -- shape's own cap, record where, so linkAndMergeWallClimbShapes
+          -- can stitch the two together once every shape in the level
+          -- exists to look up. Checks BOTH cap families (see
+          -- buildRampClimbShape's own matching comment) — the neighbor
+          -- on the other end of this underside run might belong to
+          -- another convex piece (archLeft/archRight) or an ordinary
+          -- CONCAVE one (ceilingLeft/ceilingRight): both present the
+          -- same "normal points down" orientation this run is already
+          -- walking in, so either is a valid splice point.
+          --
+          -- The two families sit on DIFFERENT rows relative to this
+          -- scan, though: THIS shape's own convex cap sits at the SAME
+          -- row as its backing, so another convex cap shows up as the
+          -- tile this run just broke on (fgid itself) — but a concave
+          -- cap (ceilingLeft/ceilingRight) sits ONE ROW BELOW its own
+          -- backing (buildRampClimbShape's own convention), so it shows
+          -- up one row further down from here instead.
+          if fgid ~= 0 then
+            local hitRole = classifyGid(tileProps, fgid)
+            if hitRole == "archRight" or hitRole == "archLeft" then
+              continuesAtKey = flatRow * width + fc
+            end
+          end
+          if not continuesAtKey then
+            local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
+            if belowGid and belowGid ~= 0 then
+              local belowRole = classifyGid(tileProps, belowGid)
+              if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
+                continuesAtKey = (flatRow + 1) * width + fc
+              end
+            end
+          end
+          break
+        end
+        claimedCells[flatRow * width + fc] = true
+        local edgeCol = absorbDir > 0 and (fc + 1) or fc
+        table.insert(points, Vector2.new(anchorX + edgeCol * T, anchorY + (flatRow + 1) * T))
+        fc = fc + absorbDir
+      end
+    end
+  end
+
+  if #points < 2 then return nil end
+
+  local segments = {}
+  for i = 1, #points - 1 do
+    local a, b = points[i], points[i + 1]
+    local tangent = b:subtract(a):normalize()
+    local normal
+    if i <= arcSegmentCount then
+      -- Convex: normal points AWAY from center (the material side),
+      -- not toward it — the one formula flip that makes this the
+      -- outside of a curve instead of the inside.
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(center):normalize()
+    elseif capArcStart and i >= capArcStart and i < capArcEnd then
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(capCenter):normalize()
+    else
+      -- Straight segments (wall face, underside backing run): this
+      -- formula needs no convex/concave adjustment — it already gives
+      -- the correct outward normal for a wall descending on either
+      -- side, same as buildRampClimbShape's own straight segments use.
+      normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
+    end
+    local isCapArc = capArcStart and i >= capArcStart and i < capArcEnd
+    local isCeilingRun = ceilingRunStart and i >= ceilingRunStart
+    table.insert(segments, {
+      a = a, b = b, tangent = tangent, normal = normal,
+      length = b:subtract(a):length(),
+      isWallFace = (i == wallSegIndex),
+      isCeiling = isCapArc or isCeilingRun,
+    })
+  end
+
+  local shape = newShape(segments)
+  shape.forceUprightJump = false
+  shape.ownCapTileKey = ownCapTileKey
+  shape.continuesAtKey = continuesAtKey
+  shape.ceilingRunStartSegment = ceilingRunStart
+  shape.isWallClimb = true
   shape.controlsReversed = dir < 0
   return shape, claimedCells
 end
@@ -1145,8 +1425,15 @@ local function buildRampShapes(layer, tileProps, width, height, anchorX, anchorY
       if gid ~= 0 then
         local role = classifyGid(tileProps, gid)
         local dir = (role == "rampRight" and 1) or (role == "rampLeft" and -1) or nil
+        local convexDir = (role == "crestRight" and 1) or (role == "crestLeft" and -1) or nil
         if dir then
           local shape, shapeClaimed = buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+          if shape then
+            table.insert(shapes, shape)
+            for key in pairs(shapeClaimed) do claimedCells[key] = true end
+          end
+        elseif convexDir then
+          local shape, shapeClaimed = buildConvexClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, convexDir)
           if shape then
             table.insert(shapes, shape)
             for key in pairs(shapeClaimed) do claimedCells[key] = true end

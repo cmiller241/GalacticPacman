@@ -249,7 +249,7 @@
  </tile>
  <tile id="40">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
@@ -277,6 +277,18 @@
    <property name="slope" value="flat"/>
   </properties>
  </tile>
+ <tile id="50">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="crestLeft"/>
+  </properties>
+ </tile>
+ <tile id="51">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="crestRight"/>
+  </properties>
+ </tile>
  <tile id="55">
   <properties>
    <property name="role" value="top"/>
@@ -287,6 +299,18 @@
   <properties>
    <property name="role" value="top"/>
    <property name="slope" value="ceilingLeft"/>
+  </properties>
+ </tile>
+ <tile id="59">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="archRight"/>
+  </properties>
+ </tile>
+ <tile id="60">
+  <properties>
+   <property name="role" value="top"/>
+   <property name="slope" value="archLeft"/>
   </properties>
  </tile>
  <tile id="64">
