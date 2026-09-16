@@ -197,6 +197,10 @@ local function attachInputHandlers()
     if key == 'c' and not isrepeat then
       state.showCollisionDebug = not state.showCollisionDebug
     end
+
+    if key == 'a' and not isrepeat then
+      state.showBeltCellDebug = not state.showBeltCellDebug
+    end
   end
 
   function love.keyreleased(loveKey, scancode)
