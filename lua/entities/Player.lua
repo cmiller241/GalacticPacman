@@ -117,12 +117,16 @@ function Player.new(x, y)
 
   -- Wall jump: which wall (if any) was touched THIS FRAME, set fresh
   -- every frame by CollisionSystem:handlePlayerWallCollisions — never
-  -- stale. wallJumpUpwardRatio shapes the launch direction (1 = pure up,
-  -- 0 = pure sideways-away-from-wall); 0.85 reads as "mostly up, kicked
-  -- noticeably sideways," not a shallow skim off the wall.
+  -- stale. wallJumpUpwardRatio shapes the launch direction: it's the
+  -- vertical leg of an (horizontal=1, vertical=ratio) vector before
+  -- normalizing, so the vertical FRACTION of the final launch speed is
+  -- ratio/sqrt(1+ratio^2) — not ratio itself (ratio=1 is a 45-degree
+  -- diagonal, not "pure up"; getting mostly-vertical needs ratio well
+  -- above 1). 2 puts about 89% of launch speed into the upward
+  -- component while still keeping a real sideways kick off the wall.
   self.touchingWall = nil
   self.wallContactNormal = nil
-  self.wallJumpUpwardRatio = 0.85
+  self.wallJumpUpwardRatio = 2
 
   -- Wall slide: while airborne, touching a wall, and holding the
   -- direction key INTO it, fall speed is capped to this (much slower
@@ -335,8 +339,16 @@ function Player:jump()
     -- drifting back into a wall in between — pressing toward the wall you
     -- just left (or the opposite one) and re-touching it — rather than
     -- letting the same single contact be spent over and over in place.
+    -- self.lastInfluencePlanet (not currentPlanet — that's already nil
+    -- while airborne) is the same "whichever surface actually applies
+    -- right now" lookup used elsewhere for airborne gravity/orientation;
+    -- using its jumpStrength here matches an ordinary jump's launch
+    -- speed on this level instead of always falling back to the plain
+    -- global default, which used to leave wall jumps weaker than ground
+    -- jumps on any level (like the dome) with a stronger override.
+    local jumpStrength = (self.lastInfluencePlanet and self.lastInfluencePlanet.jumpStrength) or constants.JUMP_STRENGTH
     local direction = Vector2.new(self.wallContactNormal.x, -self.wallJumpUpwardRatio):normalize()
-    self.vel = direction:multiply(constants.JUMP_STRENGTH * jumpBoost)
+    self.vel = direction:multiply(jumpStrength * jumpBoost)
 
     -- Turn to face away from the wall (the kick direction), matching
     -- whichever way he's actually launching — and lock BOTH that facing
@@ -834,8 +846,26 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
     self.lockedTarget = nil
   end
 
+  -- With a gamepad as the active input device and the right stick
+  -- resting in its deadzone, there's no meaningful aim target to fall
+  -- back to — the "else" mouse branch below would use state.mouse,
+  -- which for a controller-only player still sits at its startup value
+  -- (screen center, see InputHandlers.lua) and, since the camera keeps
+  -- the player centered on screen too, lands almost exactly on top of
+  -- shoulderX/Y. That degenerate near-zero vector's atan2 angle is
+  -- essentially floating-point noise — observed as the blaster settling
+  -- on an arbitrary direction (e.g. straight up) instead of forward.
+  -- Aiming straight down forwardAngle here (relative = 0 after the
+  -- atan2 below) matches the plain "shoot ahead of me" expectation
+  -- instead.
+  local aimStraightAhead = not self.lockedTarget and not self.pullTarget
+    and not state.gamepadAimActive and state.gamepadIsActiveDevice
+
   local targetWorldX, targetWorldY
-  if self.lockedTarget then
+  if aimStraightAhead then
+    targetWorldX = shoulderX + math.cos(forwardAngle) * 1000
+    targetWorldY = shoulderY + math.sin(forwardAngle) * 1000
+  elseif self.lockedTarget then
     targetWorldX = self.lockedTarget.pos.x
     targetWorldY = self.lockedTarget.pos.y
   elseif self.pullTarget then

@@ -1591,6 +1591,28 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- the shader-drawn entity itself.
   local lavas = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
 
+  -- Entity spawn points authored via Tiled's own Object Layer (see
+  -- tiled/Level1.lua's "objectgroup" layer) — each object's Class field
+  -- says what kind of entity it is; "Ooomba" is the only kind read so
+  -- far, matched against main.lua's own spawn loop. Object x/y come out
+  -- of Tiled in the tileset's own unscaled pixel space (tilewidth=32,
+  -- same raw units as every gid/row/col computation above), so they
+  -- need the same TILE_SCALE applied as the tile grid to land in world
+  -- space alongside anchorX/anchorY.
+  local ooombaSpawns = {}
+  for _, l in ipairs(mapData.layers) do
+    if l.type == "objectgroup" then
+      for _, obj in ipairs(l.objects or {}) do
+        if obj.class == "Ooomba" then
+          table.insert(ooombaSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+          })
+        end
+      end
+    end
+  end
+
   -- Rendering: bake the ENTIRE grid (fill tiles included — rendering
   -- doesn't care about the walkable/fill/wall distinction, only collision
   -- does) to one canvas, once. Lava tiles are the one exception: skipped
@@ -1634,6 +1656,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     shapes = shapes,
     walls = walls,
     lavas = lavas,
+    ooombaSpawns = ooombaSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

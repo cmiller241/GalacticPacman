@@ -54,7 +54,7 @@ local BELT_EXTRA_STAGGER_FRAC = 0.4     -- extra randomized push (fraction of CE
 -- ~2.12 cells away (3x3 half-diagonal), and a drip spawn's hide
 -- push-back adds up to ~2.15 more cells on top of that -- 4 cells
 -- leaves ample margin on both.
-worldGen.BELT_CULL_RADIUS_CELLS = 4
+worldGen.BELT_CULL_RADIUS_CELLS = 3
 
 worldGen.FIREBAR_COUNT = 36      -- spread across the belt's radial width
 worldGen.FIREBAR_EDGE_COUNT = 10 -- extra, hugging the inner/outer edges specifically
@@ -303,9 +303,21 @@ end
 -- tracking the player's angular position, with the belt's middle left
 -- empty until the player was fully inside it. Sampling the full width
 -- has no boundary to pile up against.
+--
+-- "Uniform across the full width" means uniform in r itself here, which
+-- is subtly wrong for uniform-DENSITY coverage of an annulus: a thin
+-- ring near the outer edge covers far more actual area (circumference
+-- scales with r) than an equally-thin ring near the inner edge, so
+-- sampling r with equal probability per unit radius packs more
+-- planetoids per unit AREA near the inner edge than the outer one --
+-- exactly the "everything congregates near the min radius" pileup.
+-- Sampling r^2 uniformly instead (then sqrt) weights larger radii
+-- proportionally to how much more area they actually cover, giving a
+-- spatially even scatter across the whole belt's width.
 local function spawnDriftingBeltPlanetoid(refTheta)
   local inner, outer = worldGen.beltRadii()
-  local r = inner + 10 + math.random() * (outer - inner - 20)
+  local rInner, rOuter = inner + 10, outer - 10
+  local r = math.sqrt(rInner * rInner + math.random() * (rOuter * rOuter - rInner * rInner))
   local radius = BELT_DRIFT_RADIUS_MIN + math.random() * (BELT_DRIFT_RADIUS_MAX - BELT_DRIFT_RADIUS_MIN)
 
   local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
@@ -472,22 +484,58 @@ local function randomPointInCell(col, row, radius)
   return x, y
 end
 
+-- Plain rejection sampling: pick (x,y) uniformly in the cell's own
+-- rectangle, keep it only if it's genuinely inside the belt annulus too
+-- -- every accepted point is trivially inside the cell, by construction.
+--
+-- An earlier version of this function tried to be clever when a cell
+-- only clips a thin sliver of the ring (its farthest corner barely past
+-- the inner radius, say): it sampled a valid RADIUS directly from the
+-- band the cell can reach, but kept the ANGLE from an independently
+-- random point in the rectangle. That decoupling was wrong -- measured
+-- with a Monte Carlo check against the actual thin-sliver cell next to
+-- the dome, ~70% of the resulting points landed OUTSIDE that cell's own
+-- rectangle entirely (a point sampled near the cell's NEAR corner, then
+-- pushed out to a radius only valid near the FAR corner, walks into
+-- neighboring territory). That's a worse bug than the one it replaced:
+-- planetoids weren't stacking anymore, but most of them weren't
+-- landing anywhere near where they were supposed to either.
+--
+-- The actual fix for the original stacking bug is just a much higher
+-- retry budget: measured against that same real sliver cell, a random
+-- rectangle point has roughly an 8.7% chance of landing in the belt
+-- annulus, so 40 tries (the old count) had a ~2.7% chance of exhausting
+-- -- rare, but landing on the SAME fixed fallback point every time it
+-- did happen is what let multiple planetoids in one 36-planetoid batch
+-- pile on each other. 200 tries drops that exhaustion chance to roughly
+-- 1 in 10^8, and generation only runs once per cell activation, so the
+-- extra tries cost nothing that matters.
 local function randomPointInCellBelt(col, row, radius)
-  local inner, outer = worldGen.beltRadii()
-  for _ = 1, 40 do
-    local x, y = randomPointInCell(col, row, radius)
-    if worldGen.isInBeltRing(x, y) then
+  local x0, y0 = col * worldGen.CELL_SIZE, row * worldGen.CELL_SIZE
+  for _ = 1, 200 do
+    local x = x0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    local y = y0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    if worldGen.isInBeltRing(x, y) and not isNearSkyDome(x, y) then
       return x, y
     end
   end
+
+  -- Only reached if 200 tries in a row missed the annulus or landed
+  -- near the sky dome -- shouldn't happen for any cell generateCell has
+  -- already confirmed intersects the belt (see cellIntersectsBelt), but
+  -- re-rolls a fresh point and just clamps ITS radius onto the nearest
+  -- belt boundary rather than using one fixed coordinate every time --
+  -- keeps this from ever becoming a new shared stacking point the way
+  -- the old fallback was.
   local sx, sy = worldGen.sunPos()
-  local cx = (col + 0.5) * worldGen.CELL_SIZE
-  local cy = (row + 0.5) * worldGen.CELL_SIZE
-  local dx, dy = cx - sx, cy - sy
+  local inner, outer = worldGen.beltRadii()
+  local x = x0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+  local y = y0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+  local dx, dy = x - sx, y - sy
   local d = math.sqrt(dx * dx + dy * dy)
   if d < 1 then d = 1; dx, dy = 1, 0 end
-  local r = (inner + outer) * 0.5
-  return sx + (dx / d) * r, sy + (dy / d) * r
+  local clampedD = math.max(inner + radius, math.min(outer - radius, d))
+  return sx + (dx / d) * clampedD, sy + (dy / d) * clampedD
 end
 
 local BELT_PLANETOID_MIN_GAP = 5 -- min surface-to-surface distance enforced between belt planetoids
@@ -576,16 +624,23 @@ local function generateCell(col, row)
   if state.activeCells[key] then return end
   state.activeCells[key] = true
 
-  -- The dome's exterior footprint straddles more than one cell (see
-  -- worldGen.cellIntersectsSkyDome) — any cell it touches at all is
-  -- left completely empty rather than generating its usual planetoids/
-  -- asteroids/fire bars, so nothing clutters the area right around
-  -- where the player starts. Deliberately checked BEFORE the belt
-  -- check below: the dome doesn't currently overlap the belt ring, but
-  -- if it ever did, staying dome-free should win.
-  if worldGen.cellIntersectsSkyDome(col, row) then return end
-
   local belt = worldGen.cellIntersectsBelt(col, row)
+
+  -- The dome's exterior footprint straddles more than one cell (see
+  -- worldGen.cellIntersectsSkyDome) — a REGULAR cell touched at all by
+  -- it is left completely empty rather than generating its usual
+  -- planetoids/asteroids/fire bars, so nothing clutters the area right
+  -- around where the player starts. Belt cells are exempt from this:
+  -- belt planetoids orbit out in open space rather than sitting on the
+  -- ground near the dome's own silhouette, so there's no clutter to
+  -- avoid — and skipping them left the belt permanently empty in a
+  -- one-cell-wide band immediately next to the dome, only ever filled
+  -- in by slow drift/drip from neighboring, non-excluded cells instead
+  -- of its own burst. randomPointInCellBelt still steers individual
+  -- points clear of the dome's own footprint (see its isNearSkyDome
+  -- check), so this doesn't risk planetoids landing ON the dome art.
+  if not belt and worldGen.cellIntersectsSkyDome(col, row) then return end
+
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL
   local regulars = createPlanetoidsInCell(col, row, planetCount, belt)
 

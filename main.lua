@@ -76,6 +76,7 @@ function love.load()
   state.timeScaleTarget = 1
   state.vatsMultiplier = 1
   state.showCollisionDebug = false
+  state.showBeltCellDebug = false
   state.vatsActive = false
   state.vatsAutoEnterOnLock = true
   state.vatsTimeScale = VATS_TIME_SCALE
@@ -177,51 +178,39 @@ function love.load()
     state.tiledLevels = { terrainLevel }
     state.lavas = terrainLevel.lavas
 
-    -- Ooombas patrol the walkable terrain shapes (replacing the old
-    -- JumpPlatform-based patrol) — one per shape with enough room to
-    -- actually walk back and forth; a shorter shape would put its two
-    -- inset turn-around bounds past each other, so it'd just flip
-    -- direction in place every frame instead of patrolling. Ramp-climb
-    -- shapes (isWallClimb — see TiledTerrain.lua's buildRampClimbShape)
-    -- are skipped entirely: an ordinary edge-patrolling Ooomba plopped
-    -- onto one would just walk straight up the wall along with the
-    -- player, since Ooomba's own patrol logic has no concept of "this
-    -- surface needs active momentum to stay attached" the way
-    -- Player.lua's own isWallClimb check now does.
-    -- Also skip any shape sitting directly under a lava tile (e.g. the
-    -- sunken floor of a lava pit, walkable now that TiledTerrain.lua no
-    -- longer bridges it to the curb on either side) — an Ooomba patrolling
-    -- there would just walk back and forth through the lava itself.
-    local function shapeXYBounds(shape)
-      local minX, maxX, minY = math.huge, -math.huge, math.huge
-      for _, seg in ipairs(shape.segments) do
-        for _, p in ipairs({ seg.a, seg.b }) do
-          minX = math.min(minX, p.x); maxX = math.max(maxX, p.x)
-          minY = math.min(minY, p.y)
-        end
-      end
-      return minX, maxX, minY
-    end
-    local function isBeneathLava(shape, lavas)
-      local minX, maxX, minY = shapeXYBounds(shape)
-      local EPS = 4
-      for _, lava in ipairs(lavas) do
-        local overlapsX = lava.x0 < maxX and (lava.x0 + lava.size) > minX
-        if overlapsX and math.abs((lava.y0 + lava.size) - minY) <= EPS then
-          return true
-        end
-      end
-      return false
-    end
-
-    local OOMBA_MIN_SHAPE_LENGTH = 200
+    -- Ooombas are placed explicitly via Tiled's own Object Layer now
+    -- (see TiledTerrain.lua's ooombaSpawns) instead of auto-spawned onto
+    -- every long-enough walkable shape — that heuristic had no idea a
+    -- shape might be the sunken floor of a lava pit or some other spot
+    -- that looks walkable but isn't a good fit for a patrol. Each spawn
+    -- point can be placed loosely (anywhere above the intended surface,
+    -- doesn't need to sit exactly on it) and gets snapped straight down
+    -- onto whichever terrain shape it's actually standing over, via the
+    -- same swept findLandingCrossing test CollisionSystem itself uses
+    -- for landing on open-path terrain. Ramp-climb shapes (isWallClimb)
+    -- are excluded from the search — an ordinary edge-patrolling Ooomba
+    -- has no concept of "this surface needs active momentum to stay
+    -- attached" the way Player.lua's own isWallClimb check does.
+    local OOMBA_RAYCAST_DOWN = 6000
     state.ooombas = {}
-    for i, shape in ipairs(terrainLevel.shapes) do
-      if not shape.isWallClimb and shape:getPerimeter() >= OOMBA_MIN_SHAPE_LENGTH
-        and not isBeneathLava(shape, terrainLevel.lavas) then
-        local startArcPos = shape:getPerimeter() / 2
-        local direction = (i % 2 == 0) and 1 or -1
-        table.insert(state.ooombas, Ooomba.new(shape, startArcPos, { direction = direction }))
+    for _, spawn in ipairs(terrainLevel.ooombaSpawns or {}) do
+      local bestShape, bestDy = nil, nil
+      for _, shape in ipairs(terrainLevel.shapes) do
+        if not shape.isWallClimb then
+          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
+          if hit then
+            local dy = hit.point.y - spawn.y
+            if dy >= 0 and (not bestDy or dy < bestDy) then
+              bestDy = dy
+              bestShape = shape
+            end
+          end
+        end
+      end
+      if bestShape then
+        local arcPos = bestShape:arcPositionForWorldPoint(spawn.x, spawn.y)
+        local direction = (math.random() < 0.5) and -1 or 1
+        table.insert(state.ooombas, Ooomba.new(bestShape, arcPos, { direction = direction }))
       end
     end
   end
@@ -709,12 +698,55 @@ function love.draw()
     end
   end
 
-  if state.lavas then
-    for _, lava in ipairs(state.lavas) do
-      if utils.isOnScreen(lava.pos.x, lava.pos.y, lava.radius, 50) then
-        lava:draw()
+  -- Debug: transparent red over every cell that's BOTH in the player's
+  -- current 3x3 active window AND geometrically inside the asteroid
+  -- belt ring (worldGen.cellIntersectsBelt) — lets you see at a glance
+  -- exactly which nearby cells worldGen.updateActiveCells should be
+  -- populating with belt planetoids right now. Toggle with 'A'.
+  if state.showBeltCellDebug and state.player then
+    local cellSize = worldGen.CELL_SIZE
+    local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+    love.graphics.setColor(1, 0, 0, 0.35)
+    for dRow = -1, 1 do
+      for dCol = -1, 1 do
+        local col = playerCell.col + dCol
+        local row = playerCell.row + dRow
+        if worldGen.cellIntersectsBelt(col, row) then
+          love.graphics.rectangle("fill", col * cellSize, row * cellSize, cellSize, cellSize)
+        end
       end
     end
+
+    -- Bright blue grid over EVERY cell boundary in the current view, not
+    -- just the 3x3 -- lets you see at a glance how much more of the
+    -- world your camera is actually showing at low zoom than the fixed
+    -- 3x3 active-cell window covers, and lines up individual belt
+    -- planetoids against which cell they actually landed in. Only drawn
+    -- across the camera's own visible span (snapped outward to the
+    -- nearest cell lines), not the whole 20x20 world grid -- that span
+    -- itself grows at lower zoom, so more lines naturally appear the
+    -- further out you zoom.
+    local cam = state.camera or { x = 0, y = 0 }
+    local visW = state.visibleWidth or 0
+    local visH = state.visibleHeight or 0
+    local firstCol = math.floor(cam.x / cellSize)
+    local lastCol = math.floor((cam.x + visW) / cellSize) + 1
+    local firstRow = math.floor(cam.y / cellSize)
+    local lastRow = math.floor((cam.y + visH) / cellSize) + 1
+
+    love.graphics.setColor(0.2, 0.6, 1, 0.9)
+    love.graphics.setLineWidth(2)
+    for col = firstCol, lastCol do
+      local x = col * cellSize
+      love.graphics.line(x, firstRow * cellSize, x, (lastRow + 1) * cellSize)
+    end
+    for row = firstRow, lastRow do
+      local y = row * cellSize
+      love.graphics.line(firstCol * cellSize, y, (lastCol + 1) * cellSize, y)
+    end
+    love.graphics.setLineWidth(1)
+
+    love.graphics.setColor(1, 1, 1, 1)
   end
 
   if state.ooombas then
@@ -750,6 +782,19 @@ function love.draw()
   end
 
   state.player:draw()
+
+  -- Drawn AFTER the player (not back with the other hazards/scenery
+  -- above) so lava visually covers him the moment he's in it, instead of
+  -- him rendering on top of a hazard he's supposedly submerged in —
+  -- z-order standing in for "he's under the surface" until lava actually
+  -- kills him.
+  if state.lavas then
+    for _, lava in ipairs(state.lavas) do
+      if utils.isOnScreen(lava.pos.x, lava.pos.y, lava.radius, 50) then
+        lava:draw()
+      end
+    end
+  end
 
   -- Drawn HERE, on top of the just-drawn player, only while the
   -- opening-cutscene door is still closed/opening — see the matching
