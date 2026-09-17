@@ -50,6 +50,7 @@ function Minimap:getSpecialPlanets()
   if state.mazePlanet then table.insert(list, state.mazePlanet) end
   if state.platformPlanet then table.insert(list, state.platformPlanet) end
   if state.skyDomePlanet then table.insert(list, state.skyDomePlanet) end
+  if state.waterPlanet then table.insert(list, state.waterPlanet) end
   return list
 end
 
