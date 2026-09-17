@@ -25,6 +25,46 @@ Player.__index = Player
 -- be, rather than snapping there in one frame.
 local INTRO_POSE_TRANSITION_SECONDS = 0.6
 
+-- Water bubbles: spawn just outside the player's own body, on whichever
+-- side currently faces AWAY from the water planet's center (matches the
+-- radial "up" convention every circular planet already uses — that's
+-- literally where his helmet points), then travel further outward along
+-- that same radial line, with a lazy angular wobble, until reaching the
+-- water's own outer radius — wherever that happens to be from the
+-- player's CURRENT depth, not a fixed distance. Polar coordinates
+-- (angle + r, both relative to the water planet's center) rather than
+-- x/y for the same reason WaterPlanet.lua's original ambient version
+-- used them: "outward toward the surface" is a radial motion here, and
+-- critically, radial is direction-agnostic — a player on the far side
+-- of the core sees bubbles correctly head the opposite screen direction
+-- instead of always drifting toward one fixed screen "up."
+local BUBBLE_SPAWN_CHANCE     = 0.35 -- per baseline (60fps) frame, while under BUBBLE_MAX_COUNT and submerged
+local BUBBLE_MAX_COUNT        = 10
+local BUBBLE_HEAD_GAP         = 1.4  -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
+local BUBBLE_FADE_DISTANCE    = 20   -- world units of travel, just before reaching the water's own radius, that a bubble fades out over
+local BUBBLE_RISE_SPEED_MIN   = 0.5  -- world units per baseline frame, radially outward
+local BUBBLE_RISE_SPEED_MAX   = 1.1
+local BUBBLE_WOBBLE_FREQ_MIN  = 0.01 -- radians per baseline frame the angular wobble oscillates at
+local BUBBLE_WOBBLE_FREQ_MAX  = 0.03
+local BUBBLE_WOBBLE_AMPLITUDE = 0.1  -- radians of angular sway at full swing
+local BUBBLE_RADIUS_MIN       = 2.5
+local BUBBLE_RADIUS_MAX       = 6
+local BUBBLE_COLOR            = { 0.85, 0.97, 1.0 }
+
+local function newBubble(centerX, centerY, angle, startR, targetR)
+  return {
+    centerX = centerX,
+    centerY = centerY,
+    baseAngle = angle,
+    r = startR,
+    targetR = targetR,
+    wobblePhase = math.random() * math.pi * 2,
+    wobbleFreq = BUBBLE_WOBBLE_FREQ_MIN + math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
+    riseSpeed = BUBBLE_RISE_SPEED_MIN + math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
+    radius = BUBBLE_RADIUS_MIN + math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
+  }
+end
+
 function Player.new(x, y)
   local self = setmetatable({}, Player)
 
@@ -42,6 +82,30 @@ function Player.new(x, y)
   self.facingDirection = 1
   self.isGroundPounding = false
   self.mode = "space"
+
+  -- Water planets (WaterPlanet.lua) never set onSurface — the player
+  -- sinks straight through instead of landing (see CollisionSystem's
+  -- own comment on this) — so self.submergedIn, recomputed fresh every
+  -- frame in :update(), is the only way to know "currently inside one
+  -- of these" for water drag and the swim stroke in :jump(). waterDrag
+  -- is deliberately much stronger than the ordinary airborne DRAG
+  -- constant — that's what makes sinking read as pushing through water
+  -- instead of falling through empty space. swimStrength is the
+  -- outward-from-center impulse each jump press adds while submerged.
+  self.submergedIn = nil
+  self.waterDrag = 0.90
+  self.swimStrength = 6
+  self.waterWalkSpeedMultiplier = 0.4 -- walking the hard core at the bottom is still walking underwater
+
+  -- One-shot arm-wave played over swimStrokeDuration frames after each
+  -- swim stroke (see :jump()) — a simple placeholder "this is swimming"
+  -- signal until there's a real stroke animation. Counts down in
+  -- :update() the same way wallJumpLockTimer does.
+  self.swimStrokeTimer = 0
+  self.swimStrokeDuration = 18
+  self.swimStrokeAmplitude = 1.4
+
+  self.bubbles = {}
 
   self.isWalking = false
   self.walkTime = 0
@@ -369,6 +433,25 @@ function Player:jump()
     self.touchingWall = nil
     self.wallContactNormal = nil
     if state.audioManager then state.audioManager:playJump() end
+  elseif self.submergedIn then
+    -- Swim stroke: an outward-from-center impulse ADDED to (not
+    -- replacing) current velocity, so repeated presses build against
+    -- the water's own strong drag instead of resetting momentum each
+    -- time — reads as paddling rather than a series of identical
+    -- little hops. Deliberately no onSurface/touchingWall-style gate
+    -- and no cooldown of its own: this can fire on every single press
+    -- while submerged, which is what makes it feel like swimming rather
+    -- than a single limited jump. Enough consecutive strokes carry the
+    -- player back out past the surface entirely — CollisionSystem never
+    -- treats a water planet as solid, so crossing back out just resumes
+    -- ordinary falling/gravity toward whatever's dominant next.
+    local planet = self.submergedIn
+    local away = self.pos:subtract(planet.pos)
+    local dist = away:length()
+    local dir = dist > 1 and away:normalize() or Vector2.new(0, -1)
+    self.vel:add(dir:multiply(self.swimStrength))
+    self.swimStrokeTimer = self.swimStrokeDuration
+    if state.audioManager then state.audioManager:playJump() end
   end
 end
 
@@ -618,7 +701,14 @@ function Player:move(keys)
 
   elseif self.onSurface and self.currentPlanet then
     local surfaceDist = self.currentPlanet.radius + self.radius
-    local speed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * state.timeScale
+    -- Walking the hard core at the bottom of a water planet (see
+    -- WaterPlanet.lua) is still walking underwater — self.submergedIn
+    -- stays true even once landed there (it's a plain distance-to-the-
+    -- water-body's-own-center check, unrelated to onSurface/currentPlanet),
+    -- so the same water resistance that slows swimming above also
+    -- slows walking down here.
+    local speedMul = (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * (self.submergedIn and self.waterWalkSpeedMultiplier or 1)
+    local speed = constants.PLAYER_LINEAR_SPEED * speedMul * state.timeScale
     local angularSpeed = speed / surfaceDist
 
     self.isWalking = false
@@ -644,7 +734,16 @@ function Player:move(keys)
     end
 
   elseif (not self.onSurface) and self.lastInfluencePlanet
-      and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump) then
+      and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump or self.submergedIn) then
+    -- Ordinary circular planets deliberately don't get this fixed
+    -- screen-space left/right air control at all — "sideways" isn't a
+    -- well-defined direction on a sphere you could be approaching from
+    -- any angle. Water is the one exception: swimming around freely
+    -- while submerged reads fine with a plain fixed left/right, and
+    -- self.waterDrag (applied afterward, in :update()) already softens
+    -- how much this actually achieves per press — no separate "water
+    -- air control" tuning needed, the existing strong drag does that
+    -- for free.
     local lockedDir = self.wallJumpLockTimer > 0 and self.wallJumpLockBlockedDir or nil
     -- Nudges vel.x toward (and up to) airControlMaxSpeed in the held
     -- direction — but never REDUCES it if momentum carried from a
@@ -668,6 +767,63 @@ function Player:move(keys)
   end
 end
 
+function Player:updateBubbles()
+  local timeScale = state.timeScale or 1
+  self.bubbles = self.bubbles or {}
+
+  if self.submergedIn and #self.bubbles < BUBBLE_MAX_COUNT and math.random() < BUBBLE_SPAWN_CHANCE * timeScale then
+    local water = self.submergedIn
+    local away = self.pos:subtract(water.pos)
+    local dist = away:length()
+    local angle = dist > 1 and math.atan2(away.y, away.x) or (math.random() * math.pi * 2)
+
+    -- Spawned past the player's OWN position along this same radial
+    -- line (not at a fixed screen offset) — that's what keeps it
+    -- "above his head" regardless of which side of the core he's
+    -- currently on. Skipped entirely if he's already right at the
+    -- surface, with no room left to spawn one before the target.
+    local spawnR = dist + self.radius * BUBBLE_HEAD_GAP
+    local targetR = water.radius
+    if spawnR < targetR then
+      table.insert(self.bubbles, newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR))
+    end
+  end
+
+  for i = #self.bubbles, 1, -1 do
+    local b = self.bubbles[i]
+    b.r = b.r + b.riseSpeed * timeScale
+    b.wobblePhase = b.wobblePhase + b.wobbleFreq * timeScale
+    if b.r >= b.targetR then
+      table.remove(self.bubbles, i)
+    end
+  end
+end
+
+-- Drawn separately from the rest of the player (see main.lua's own call
+-- site, right after the water planet's second draw pass) so bubbles
+-- stay visible on top of the translucent water fill instead of getting
+-- muddied underneath it — matches how the water planet's own now-removed
+-- ambient bubbles used to layer.
+function Player:drawBubbles()
+  for _, b in ipairs(self.bubbles or {}) do
+    local angle = b.baseAngle + math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE
+    local bx = b.centerX + math.cos(angle) * b.r
+    local by = b.centerY + math.sin(angle) * b.r
+
+    local fadeStart = b.targetR - BUBBLE_FADE_DISTANCE
+    local fade = 1
+    if b.r > fadeStart then
+      fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE
+    end
+
+    love.graphics.setColor(BUBBLE_COLOR[1], BUBBLE_COLOR[2], BUBBLE_COLOR[3], 0.5 * fade)
+    love.graphics.circle("fill", bx, by, b.radius)
+    love.graphics.setColor(1, 1, 1, 0.75 * fade)
+    love.graphics.circle("line", bx, by, b.radius)
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 function Player:update()
   -- Captured before this frame's own movement, so CollisionSystem can
   -- compare "where was I a moment ago" against "where am I now" — a
@@ -675,6 +831,26 @@ function Player:update()
   -- ordinary platformer tile collision uses instead of a plain distance
   -- check. See TerrainShape:findLandingCrossing.
   self.prevPos = self.pos:clone()
+
+  if self.swimStrokeTimer > 0 then
+    self.swimStrokeTimer = math.max(0, self.swimStrokeTimer - state.timeScale)
+  end
+
+  -- Recomputed fresh every frame, regardless of onSurface — a water
+  -- planet never sets onSurface (see CollisionSystem's own comment), so
+  -- this plain distance-to-center check is the only signal :jump() and
+  -- the airborne drag below have for "currently inside one."
+  self.submergedIn = nil
+  if state.planetoids then
+    for _, p in ipairs(state.planetoids) do
+      if p.isWaterPlanet and self.pos:subtract(p.pos):length() < p.radius then
+        self.submergedIn = p
+        break
+      end
+    end
+  end
+
+  self:updateBubbles()
 
   -- Marks the moment the shelter door reaches fully open
   -- (state.spaceShelter.playerInFront flips true — see
@@ -737,7 +913,13 @@ function Player:update()
       end
     end
 
-    self.vel:scale(constants.DRAG ^ state.timeScale)
+    -- Water's own much stronger drag (vs. ordinary space DRAG) is what
+    -- makes sinking read as pushing through resistance instead of just
+    -- falling slower — gravity itself (GravitySystem) is untouched, so
+    -- without this a submerged player would fall exactly like they do
+    -- anywhere else.
+    local dragFactor = self.submergedIn and self.waterDrag or constants.DRAG
+    self.vel:scale(dragFactor ^ state.timeScale)
     self.pos:addScaled(self.vel, state.timeScale)
 
     if self.pos.x - self.radius < 0 then self.pos.x = self.radius; self.vel.x = -self.vel.x end
@@ -1072,6 +1254,21 @@ function Player:drawFullBody(orientation, originPos)
     local raisedWorldAngle = -math.pi / 2 - (math.pi * 0.75) * dirSign
     rightArmAngle = self:worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign)
     rightArmFlipped = true
+  end
+
+  -- Swim stroke: a brief one-shot wave overriding whatever pose came
+  -- before it — the airborne raised-arm pose above otherwise stays
+  -- perfectly static the whole time submerged, with nothing marking the
+  -- moment a stroke actually happened. Both arms swing together through
+  -- one simple sine sweep (0 -> peak -> 0 across swimStrokeDuration),
+  -- same "local angle IS the pose" convention the idle sway above uses
+  -- — a placeholder signal until there's a real swim animation.
+  if self.swimStrokeTimer > 0 then
+    local progress = 1 - (self.swimStrokeTimer / self.swimStrokeDuration)
+    local waveAngle = math.sin(progress * math.pi) * self.swimStrokeAmplitude
+    leftArmAngle = waveAngle
+    rightArmAngle = waveAngle
+    rightArmFlipped = false
   end
 
   self:drawLimb(images.leftboot, cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO)

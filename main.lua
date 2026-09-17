@@ -29,6 +29,7 @@ local LockOutline = require("lua.effects.LockOutline")
 local VatsOverlay = require("lua.effects.VatsOverlay")
 local VatsCursor = require("lua.effects.VatsCursor")
 local Lava = require("lua.world.Lava")
+local WaterPlanet = require("lua.world.WaterPlanet")
 
 local collisionSystem
 
@@ -132,6 +133,25 @@ function love.load()
   -- on top of gameplay geometry.
   state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome:trueSurfaceY())
   state.skyDomePlanet = dome
+
+  -- Water planet landmark — an ordinary walkable/landable Planetoid
+  -- (see WaterPlanet.lua) with a shader-wavy edge instead of a plain
+  -- circle. Placed one cell diagonally past the belt's own outer edge,
+  -- toward the bottom-right of the sun (screen +x/+y), so it sits just
+  -- outside belt territory rather than overlapping it. Half the sun's
+  -- own radius (1920), per "not as big as the sun."
+  do
+    local sunCol, sunRow = worldGen.sunCell()
+    local cellSize = worldGen.CELL_SIZE
+    local waterCol, waterRow = sunCol + 3, sunRow + 3
+    local waterX = (waterCol + 0.5) * cellSize
+    local waterY = (waterRow + 0.5) * cellSize
+    local waterPlanet, waterCore = WaterPlanet.new(waterX, waterY, 960)
+    table.insert(state.planetoids, waterPlanet)
+    table.insert(state.planetoids, waterCore)
+    state.waterPlanet = waterPlanet
+    state.waterCore = waterCore
+  end
 
   -- Robot butler NPC — paces back and forth just to the right of the
   -- shelter's own footprint (see RobotButler.lua). Positioned off the
@@ -345,6 +365,8 @@ function love.update(dt)
       lava:update()
     end
   end
+
+  WaterPlanet.updateSharedClock()
 
   if state.spaceShelter then
     state.spaceShelter:update(dt)
@@ -645,7 +667,12 @@ function love.draw()
     -- two explicit dome draw calls (the shelter — see above — and
     -- anything else meant to sit behind the foreground hex but in
     -- front of the background one).
-    if p ~= state.skyDomePlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+    -- The water planet is ALSO excluded here and drawn again later,
+    -- right after the player (see that draw call's own comment) — same
+    -- reasoning as the lava fix: it needs to render ON TOP of him
+    -- whenever they overlap, so he reads as submerged rather than
+    -- floating in front of the water.
+    if p ~= state.skyDomePlanet and p ~= state.waterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
     end
   end
@@ -795,6 +822,19 @@ function love.draw()
       end
     end
   end
+
+  -- Same reasoning as lava above — drawn again here (excluded from the
+  -- ordinary planetoid pass) so the water always renders on top of the
+  -- player whenever they overlap, reading as submerged rather than
+  -- floating in front of it.
+  if state.waterPlanet and utils.isOnScreen(state.waterPlanet.pos.x, state.waterPlanet.pos.y, state.waterPlanet.radius, 50) then
+    state.waterPlanet:draw()
+  end
+
+  -- Drawn after the water planet's own redraw above, so bubbles stay
+  -- visible on top of the translucent fill rather than getting muddied
+  -- underneath it (see Player:drawBubbles's own comment).
+  state.player:drawBubbles()
 
   -- Drawn HERE, on top of the just-drawn player, only while the
   -- opening-cutscene door is still closed/opening — see the matching

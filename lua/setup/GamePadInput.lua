@@ -180,15 +180,15 @@ local function pollGamepad(dt)
     gamepadHeldZoomOut = false
   end
 
-  -- --- X (Cross): jump / wall jump / ground pound ---
+  -- --- X (Cross): jump / wall jump / swim stroke / ground pound ---
   -- Player:jump() itself branches on grounded-launch vs. wall-jump kick
-  -- (see Player.lua) — routed here together the same way InputHandlers.lua
-  -- routes the keyboard Space key, since both are "this button performs a
-  -- jump," as opposed to the ground-pound fallback for mid-air with
-  -- nothing to jump off of.
+  -- vs. swim stroke (see Player.lua) — routed here together the same way
+  -- InputHandlers.lua routes the keyboard Space key, since all three are
+  -- "this button performs a jump," as opposed to the ground-pound
+  -- fallback for mid-air with nothing to jump off of (or swim in).
   local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
   if xPressed and not lastXPressed and state.player and state.player.mode ~= "maze" and not state.introLocked then
-    if state.player.onSurface or state.player.touchingWall then state.player:jump()
+    if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then state.player:jump()
     else state.player:tryGroundPound() end
   end
   lastXPressed = xPressed

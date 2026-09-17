@@ -350,6 +350,16 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
     return false
   end
 
+  -- Water planets (WaterPlanet.lua) are never solid ground — the player
+  -- should sink straight through the surface into it instead of landing
+  -- and sticking there like any other planet. Player:update() tracks
+  -- self.submergedIn separately (checking plain distance-to-center
+  -- against planet.radius) to apply water drag and enable the swim
+  -- stroke in Player:jump(); gravity keeps pulling toward the center
+  -- the whole time since GravitySystem:applyTo only ever stops for a
+  -- planet once onSurface is true, which this deliberately never sets.
+  if planet.isWaterPlanet then return false end
+
   local offset = player.pos:subtract(planet.pos)
   local dist = offset:length()
   local surfaceDist = planet.radius + player.radius
