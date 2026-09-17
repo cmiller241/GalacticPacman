@@ -155,12 +155,12 @@ local function attachInputHandlers()
 
     if key == ' ' then
       if state.player and state.player.mode ~= "maze" and not state.introLocked then
-        if state.player.onSurface or state.player.touchingWall then
-          -- Player:jump() itself branches on which of the two applies
-          -- (grounded launch vs. wall-jump kick) — routed here together
-          -- since both are "Space performs a jump," as opposed to the
-          -- ground-pound fallback below for plain mid-air Space with
-          -- nothing to jump off of.
+        if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then
+          -- Player:jump() itself branches on which of the three applies
+          -- (grounded launch, wall-jump kick, or swim stroke) — routed
+          -- here together since all three are "Space performs a jump,"
+          -- as opposed to the ground-pound fallback below for plain
+          -- mid-air Space with nothing to jump off of (or swim in).
           state.player:jump()
         else
           state.player:tryGroundPound()
