@@ -107,15 +107,38 @@ function Planetoid.beginFrame()
   bodyCanvasBakesThisFrame = 0
 end
 
+-- Shared across every planetoid with a matching (color, radius) pair —
+-- keyed on self.color BY REFERENCE (relies on callers reusing the same
+-- color table for "the same color," e.g. WorldGen.lua's randomColor()
+-- always returning one of its fixed PLANET_COLORS entries, never a
+-- fresh table) nested under self.radius. Since color already only ever
+-- comes from that small fixed swatch list, and WorldGen.lua's
+-- randomQuantizedRadius snaps generated radii to 5px steps instead of
+-- a continuous range, the number of DISTINCT (color, radius) pairs that
+-- ever actually occur is small and bounded — once every combination in
+-- play has been baked once, every further planetoid that becomes
+-- visible for the first time is a free cache hit here instead of a new
+-- bake, well below MAX_BODY_CANVAS_BAKES_PER_FRAME's own per-frame cap.
+local sharedBodyCanvasCache = {}
+
 function Planetoid:ensureBodyCanvas()
   if self.bodyCanvas then return end
   if not state.planetTexture then return end
+
+  self.bodyCanvasPadding = Planetoid.SHADOW_PADDING
+
+  local colorCache = sharedBodyCanvasCache[self.color]
+  local cachedCanvas = colorCache and colorCache[self.radius]
+  if cachedCanvas then
+    self.bodyCanvas = cachedCanvas
+    return
+  end
+
   if bodyCanvasBakesThisFrame >= Planetoid.MAX_BODY_CANVAS_BAKES_PER_FRAME then return end
   bodyCanvasBakesThisFrame = bodyCanvasBakesThisFrame + 1
 
   local r = self.radius
   local padding = Planetoid.SHADOW_PADDING
-  self.bodyCanvasPadding = padding
 
   local scale = 2
   local size = (r * 2 + padding * 2) * scale
@@ -167,6 +190,13 @@ end
   love.graphics.pop()
 
   self.bodyCanvas = finalCanvas
+
+  colorCache = sharedBodyCanvasCache[self.color]
+  if not colorCache then
+    colorCache = {}
+    sharedBodyCanvasCache[self.color] = colorCache
+  end
+  colorCache[self.radius] = finalCanvas
 end
 
 function Planetoid:updateCachedAlpha()
@@ -253,7 +283,15 @@ function Planetoid:drawEclipseShadow()
   local dist = math.sqrt(dx * dx + dy * dy)
   if dist < 1 then return end
 
-  local maxShadowDist = 1400
+  -- The sun's own visible glow (see Sun.lua's corona layer, drawn out to
+  -- roughly self.radius*2.1 — about 4100 units at its actual configured
+  -- radius of 1920) reaches much farther than this used to account for.
+  -- At 1400, only planetoids nearly touching the sun's own core disc
+  -- ever got a shadow at all; widened to cover the full corona so
+  -- anything visibly sitting in the sun's outer glow gets one too,
+  -- fading out toward the edge of that glow via `proximity` below same
+  -- as before.
+  local maxShadowDist = 4000
   local proximity = 1 - math.min(dist / maxShadowDist, 1)
   if proximity < 0.05 then return end
 

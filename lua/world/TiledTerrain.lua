@@ -1593,18 +1593,27 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
 
   -- Entity spawn points authored via Tiled's own Object Layer (see
   -- tiled/Level1.lua's "objectgroup" layer) — each object's Class field
-  -- says what kind of entity it is; "Ooomba" is the only kind read so
-  -- far, matched against main.lua's own spawn loop. Object x/y come out
-  -- of Tiled in the tileset's own unscaled pixel space (tilewidth=32,
-  -- same raw units as every gid/row/col computation above), so they
-  -- need the same TILE_SCALE applied as the tile grid to land in world
-  -- space alongside anchorX/anchorY.
+  -- says what kind of entity it is, matched against main.lua's own spawn
+  -- loops. Object x/y come out of Tiled in the tileset's own unscaled
+  -- pixel space (tilewidth=32, same raw units as every gid/row/col
+  -- computation above), so they need the same TILE_SCALE applied as the
+  -- tile grid to land in world space alongside anchorX/anchorY.
   local ooombaSpawns = {}
+  -- "Sphere" objects (see lua/world/Sphere.lua): unlike ooombaSpawns,
+  -- these are never raycast onto terrain below them — the object's own
+  -- x/y IS the sphere's center, since it's a freestanding gravity/landing
+  -- body in open space, not something that needs to rest on a surface.
+  local sphereSpawns = {}
   for _, l in ipairs(mapData.layers) do
     if l.type == "objectgroup" then
       for _, obj in ipairs(l.objects or {}) do
         if obj.class == "Ooomba" then
           table.insert(ooombaSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+          })
+        elseif obj.class == "Sphere" then
+          table.insert(sphereSpawns, {
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
           })
@@ -1657,6 +1666,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     walls = walls,
     lavas = lavas,
     ooombaSpawns = ooombaSpawns,
+    sphereSpawns = sphereSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,
