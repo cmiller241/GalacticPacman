@@ -23,9 +23,11 @@ local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local SpaceShelter = require("lua.world.SpaceShelter")
 local RobotButler = require("lua.entities.RobotButler")
 local TiledTerrain = require("lua.world.TiledTerrain")
+local Sphere = require("lua.world.Sphere")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
 local LockOutline = require("lua.effects.LockOutline")
+local InfluenceRing = require("lua.effects.InfluenceRing")
 local VatsOverlay = require("lua.effects.VatsOverlay")
 local VatsCursor = require("lua.effects.VatsCursor")
 local Lava = require("lua.world.Lava")
@@ -78,6 +80,7 @@ function love.load()
   state.vatsMultiplier = 1
   state.showCollisionDebug = false
   state.showBeltCellDebug = false
+  state.showInfluenceRings = false
   state.vatsActive = false
   state.vatsAutoEnterOnLock = true
   state.vatsTimeScale = VATS_TIME_SCALE
@@ -232,6 +235,15 @@ function love.load()
         local direction = (math.random() < 0.5) and -1 or 1
         table.insert(state.ooombas, Ooomba.new(bestShape, arcPos, { direction = direction }))
       end
+    end
+
+    -- "Sphere" objects (see lua/world/Sphere.lua): small fixed metal
+    -- balls the player can jump on and pull-beam to, exactly like any
+    -- other planetoid. Unlike Ooombas above, the spawn point IS the
+    -- sphere's own center — no raycast-onto-terrain needed for a
+    -- freestanding body.
+    for _, spawn in ipairs(terrainLevel.sphereSpawns or {}) do
+      table.insert(state.planetoids, Sphere.new(spawn.x, spawn.y))
     end
   end
 
@@ -655,6 +667,24 @@ function love.draw()
     for _, a in ipairs(state.asteroids) do
       if utils.isOnScreen(a.pos.x, a.pos.y, a.radius, 50) then
         a:draw()
+      end
+    end
+  end
+
+  -- Influence-radius rings ('R' toggles — see InputHandlers.lua): only
+  -- for planetoids GravitySystem itself treats as plain circular gravity
+  -- sources (has influenceRadius, not isRoundedRect — see
+  -- GravitySystem:findDominantPlanet's own branching). The dome and
+  -- TiledTerrain shapes are deliberately skipped: their real gravity
+  -- range isn't a circle at all (isWithinGravityWindow / "whatever's
+  -- underfoot"), so a ring around them would just be wrong, not merely
+  -- redundant.
+  if state.showInfluenceRings then
+    for _, p in ipairs(state.planetoids) do
+      if p.influenceRadius and not p.isRoundedRect
+         and utils.isOnScreen(p.pos.x, p.pos.y, p.influenceRadius, 50) then
+        p:updateCachedAlpha()
+        InfluenceRing.draw(p.pos.x, p.pos.y, p.influenceRadius, p.cachedAlpha)
       end
     end
   end

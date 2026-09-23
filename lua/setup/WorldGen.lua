@@ -245,6 +245,23 @@ local function randomColor()
   return PLANET_COLORS[math.random(1, #PLANET_COLORS)]
 end
 
+-- Snaps a randomly generated planetoid radius to a multiple of
+-- RADIUS_STEP within [min, max] — there's no gameplay reason for two
+-- planetoids to differ by a single pixel, and continuous radii meant
+-- almost every planetoid needed its own unique baked body texture (see
+-- Planetoid.lua's ensureBodyCanvas). Since color already only ever comes
+-- from the fixed PLANET_COLORS swatch list, quantizing radius too means
+-- the (color, radius) pairs actually seen across the whole field/belt
+-- collapse to a small, fixed set — that shared body-canvas cache can
+-- then reuse one bake across every planetoid with a matching pair
+-- instead of baking one per instance.
+local RADIUS_STEP = 5
+local function randomQuantizedRadius(min, max, step)
+  step = step or RADIUS_STEP
+  local steps = math.floor((max - min) / step)
+  return min + math.random(0, steps) * step
+end
+
 local function applyBeltOrbit(planet)
   planet.isBeltPlanetoid = true
   local sunX, sunY = worldGen.sunPos()
@@ -318,7 +335,7 @@ local function spawnDriftingBeltPlanetoid(refTheta)
   local inner, outer = worldGen.beltRadii()
   local rInner, rOuter = inner + 10, outer - 10
   local r = math.sqrt(rInner * rInner + math.random() * (rOuter * rOuter - rInner * rInner))
-  local radius = BELT_DRIFT_RADIUS_MIN + math.random() * (BELT_DRIFT_RADIUS_MAX - BELT_DRIFT_RADIUS_MIN)
+  local radius = randomQuantizedRadius(BELT_DRIFT_RADIUS_MIN, BELT_DRIFT_RADIUS_MAX)
 
   local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
 
@@ -563,7 +580,7 @@ end
 local function createPlanetoidsInCell(col, row, count, belt)
   local created = {}
   for i = 1, count do
-    local radius = belt and (28 + math.random() * 36) or (30 + math.random() * 40)
+    local radius = belt and randomQuantizedRadius(28, 64) or randomQuantizedRadius(30, 70)
     local x, y
     if belt then
       -- Retries a handful of times to find a spot that isn't

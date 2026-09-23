@@ -94,7 +94,12 @@ function Player.new(x, y)
   -- outward-from-center impulse each jump press adds while submerged.
   self.submergedIn = nil
   self.waterDrag = 0.90
-  self.swimStrength = 6
+  -- With waterDrag at 0.90 and ordinary gravity (~0.35/frame), terminal
+  -- sink speed works out to roughly 3.5 units/frame (grav / (1-drag)) —
+  -- swimStrength needs to clear that by a wide margin per stroke or it
+  -- barely dents a sink already at or near that speed, which is why 6
+  -- read as "only a few pixels" per press.
+  self.swimStrength = 16
   self.waterWalkSpeedMultiplier = 0.4 -- walking the hard core at the bottom is still walking underwater
 
   -- One-shot arm-wave played over swimStrokeDuration frames after each
@@ -103,7 +108,6 @@ function Player.new(x, y)
   -- :update() the same way wallJumpLockTimer does.
   self.swimStrokeTimer = 0
   self.swimStrokeDuration = 18
-  self.swimStrokeAmplitude = 1.4
 
   self.bubbles = {}
 
@@ -850,6 +854,23 @@ function Player:update()
     end
   end
 
+  -- Guards against a real stuck-gravity bug: isGroundPounding only ever
+  -- gets cleared by actually LANDING (CollisionSystem:tryLandOnPlanet),
+  -- which water never does. If Space is pressed in the one-frame gap
+  -- right as a swim stroke carries the player just past the surface
+  -- (submergedIn already nil, onSurface/touchingWall still false), the
+  -- input gate falls through to tryGroundPound() instead of jump() —
+  -- and since his velocity is still outward at that exact instant,
+  -- tryGroundPound() sets isGroundPounding true. With nothing to ever
+  -- land on nearby, that stuck flag triples gravity (see
+  -- GROUND_POUND_GRAV_MULTIPLIER) for as long as he's near the water,
+  -- reading as "swimming suddenly stops working." Ground-pounding while
+  -- floating in open water doesn't mean anything anyway, so just clear
+  -- it unconditionally whenever submerged.
+  if self.submergedIn then
+    self.isGroundPounding = false
+  end
+
   self:updateBubbles()
 
   -- Marks the moment the shelter door reaches fully open
@@ -1256,18 +1277,32 @@ function Player:drawFullBody(orientation, originPos)
     rightArmFlipped = true
   end
 
-  -- Swim stroke: a brief one-shot wave overriding whatever pose came
+  -- Swim stroke: a brief one-shot sweep overriding whatever pose came
   -- before it — the airborne raised-arm pose above otherwise stays
   -- perfectly static the whole time submerged, with nothing marking the
-  -- moment a stroke actually happened. Both arms swing together through
-  -- one simple sine sweep (0 -> peak -> 0 across swimStrokeDuration),
-  -- same "local angle IS the pose" convention the idle sway above uses
-  -- — a placeholder signal until there's a real swim animation.
+  -- moment a stroke actually happened. Both arms sweep the SAME WORLD
+  -- angle together (a simplified, synchronized stroke rather than
+  -- alternating arms), from horizontal-out to straight overhead and
+  -- back — a placeholder signal until there's a real swim animation.
+  --
+  -- Each arm's own local-angle convention is different (the right arm's
+  -- rest art hangs straight down at local 0; the left/blaster arm's
+  -- local 0 points it forward — see the intro-pose block above's own
+  -- comment), so setting both to one shared LOCAL value, like the
+  -- previous version of this did, produced two different-looking poses
+  -- from the same number. Converting a single WORLD angle via
+  -- worldAngleToLocalRotation for EACH arm separately — the same trick
+  -- the intro pose above uses to put the left arm at the same literal
+  -- world angle as the right's own natural hang — is what actually
+  -- keeps them looking like a matched pair here.
   if self.swimStrokeTimer > 0 then
     local progress = 1 - (self.swimStrokeTimer / self.swimStrokeDuration)
-    local waveAngle = math.sin(progress * math.pi) * self.swimStrokeAmplitude
-    leftArmAngle = waveAngle
-    rightArmAngle = waveAngle
+    local swingT = math.sin(progress * math.pi) -- 0 -> 1 -> 0 across the stroke
+    local overheadWorldAngle = -math.pi / 2
+    local outWorldAngle = dirSign > 0 and 0 or math.pi
+    local strokeWorldAngle = outWorldAngle + (overheadWorldAngle - outWorldAngle) * swingT
+    leftArmAngle = self:worldAngleToLocalRotation(strokeWorldAngle, orientation, dirSign)
+    rightArmAngle = self:worldAngleToLocalRotation(strokeWorldAngle, orientation, dirSign)
     rightArmFlipped = false
   end
 

@@ -201,6 +201,10 @@ local function attachInputHandlers()
     if key == 'a' and not isrepeat then
       state.showBeltCellDebug = not state.showBeltCellDebug
     end
+
+    if key == 'r' and not isrepeat then
+      state.showInfluenceRings = not state.showInfluenceRings
+    end
   end
 
   function love.keyreleased(loveKey, scancode)

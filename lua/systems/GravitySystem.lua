@@ -23,12 +23,38 @@ function GravitySystem.new(planetoids)
   return self
 end
 
+-- Hysteresis margin for the sticky hand-off below: a NEW candidate must
+-- beat the entity's CURRENT dominant planet by at least this much (as a
+-- fraction of the current one's own distance) to actually take over —
+-- see findDominantPlanet's own comment for why.
+local DOMINANT_SWITCH_MARGIN = 0.85
+
 -- For rect / sky-dome planets, "distance" is measured to the nearest
 -- SURFACE point (not the center). For SkyDome that surface is the grass
 -- deck. Circle planets still use center distance vs influenceRadius.
-function GravitySystem:findDominantPlanet(pos)
+--
+-- currentDominant (optional): the entity's own lastInfluencePlanet from
+-- the previous frame (applyTo passes this in; other callers that omit
+-- it just get the plain "always pick the single closest" behavior
+-- below, unchanged). Without this, two or more planetoids sitting at
+-- nearly equal distance from a drifting/idle entity — increasingly
+-- likely the longer a session runs, since the belt's own drip-spawner
+-- keeps adding more nearby planetoids over time — can trade the
+-- "closest" title back and forth from one frame to the next as either
+-- side drifts by a sub-pixel amount. Each swap flips which DIRECTION
+-- gravity pulls that frame, not just its size, and repeated swapping
+-- reads as the entity (and anything tracking its position, like the
+-- camera) visibly oscillating side to side — and worse later in a
+-- session, since degrading FPS as the belt gets more crowded hands each
+-- frame's kick a larger timeScale multiplier (see applyTo below), so
+-- the same underlying jitter produces bigger and bigger swings over
+-- time. Requiring a real margin before switching keeps the entity
+-- locked onto one source until another is genuinely, meaningfully
+-- closer, instead of chattering between near-equal candidates.
+function GravitySystem:findDominantPlanet(pos, currentDominant)
   local closest = nil
   local minDist = math.huge
+  local currentDist = nil
 
   for _, planet in ipairs(self.planetoids) do
     local dist, withinRange
@@ -64,9 +90,24 @@ function GravitySystem:findDominantPlanet(pos)
       withinRange = dist < (planet.influenceRadius or (planet.radius + (constants.INFLUENCE_PADDING or 200)))
     end
 
-    if withinRange and dist < minDist then
-      minDist = dist
-      closest = planet
+    if withinRange then
+      if dist < minDist then
+        minDist = dist
+        closest = planet
+      end
+      if planet == currentDominant then
+        currentDist = dist
+      end
+    end
+  end
+
+  -- Sticky hand-off (see this function's own header comment): only
+  -- actually switch away from the current dominant planet — if it's
+  -- still in range at all — when the new closest one beats it by a
+  -- real margin, not just a sliver.
+  if currentDominant and currentDist and closest ~= currentDominant then
+    if minDist > currentDist * DOMINANT_SWITCH_MARGIN then
+      return currentDominant
     end
   end
 
@@ -76,7 +117,7 @@ end
 function GravitySystem:applyTo(entity)
   if entity.onSurface then return end
 
-  local dominant = self:findDominantPlanet(entity.pos)
+  local dominant = self:findDominantPlanet(entity.pos, entity.lastInfluencePlanet)
   if not dominant then return end
 
   entity.lastInfluencePlanet = dominant
