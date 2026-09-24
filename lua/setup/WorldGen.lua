@@ -483,6 +483,43 @@ function worldGen.cellIntersectsSkyDome(col, row)
   return dx * dx + dy * dy < exclR * exclR
 end
 
+-- Same "skip generateCell entirely for any REGULAR cell this landmark's
+-- own footprint touches" pattern as the sky dome exclusion above
+-- (worldGen.cellIntersectsSkyDome), generalized to however many
+-- WaterPlanets exist rather than a single named landmark. WaterPlanets
+-- are created directly in main.lua as permanent Planetoids OUTSIDE the
+-- normal per-cell spawn system, so WorldGen has no built-in knowledge
+-- of where they are otherwise — this just scans state.planetoids for
+-- the isWaterPlanet flag every time a cell activates (cheap: only runs
+-- once per cell, on activation, against a short list of permanent
+-- landmarks, not every frame). Unlike the dome exclusion, this isn't
+-- about visual clutter (a regular planetoid spawned under the water
+-- wouldn't even be visible) — it's plain FPS: every extra planetoid is
+-- another gravity source, another per-frame shading/collision check,
+-- and another baked-canvas draw call for something the player could
+-- never actually reach under a water body's own wavy silhouette anyway.
+local WATER_SPAWN_MARGIN = 150 -- extra clearance kept beyond the water body's own true radius
+
+function worldGen.cellIntersectsWaterPlanet(col, row)
+  if not state.planetoids then return false end
+  local x0 = col * worldGen.CELL_SIZE
+  local y0 = row * worldGen.CELL_SIZE
+  local x1 = x0 + worldGen.CELL_SIZE
+  local y1 = y0 + worldGen.CELL_SIZE
+  for _, p in ipairs(state.planetoids) do
+    if p.isWaterPlanet then
+      local exclR = p.radius + WATER_SPAWN_MARGIN
+      local nearestX = math.max(x0, math.min(p.pos.x, x1))
+      local nearestY = math.max(y0, math.min(p.pos.y, y1))
+      local dx, dy = p.pos.x - nearestX, p.pos.y - nearestY
+      if dx * dx + dy * dy < exclR * exclR then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function randomPointInCell(col, row, radius)
   local originX = col * worldGen.CELL_SIZE
   local originY = row * worldGen.CELL_SIZE
@@ -656,7 +693,13 @@ local function generateCell(col, row)
   -- of its own burst. randomPointInCellBelt still steers individual
   -- points clear of the dome's own footprint (see its isNearSkyDome
   -- check), so this doesn't risk planetoids landing ON the dome art.
-  if not belt and worldGen.cellIntersectsSkyDome(col, row) then return end
+  --
+  -- Same exemption/reasoning extends to worldGen.cellIntersectsWaterPlanet
+  -- (see its own comment) — any regular cell a WaterPlanet's own
+  -- footprint touches is likewise left empty, purely to keep the extra
+  -- gravity/collision/draw overhead of planetoids the player could
+  -- never actually reach off the frame budget.
+  if not belt and (worldGen.cellIntersectsSkyDome(col, row) or worldGen.cellIntersectsWaterPlanet(col, row)) then return end
 
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL
   local regulars = createPlanetoidsInCell(col, row, planetCount, belt)
