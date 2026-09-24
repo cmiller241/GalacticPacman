@@ -14,6 +14,7 @@ local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local DustPuff = require("lua.effects.DustPuff")
+local Splash = require("lua.effects.Splash")
 local TargetLock = require("lua.systems.TargetLock")
 
 local Player = {}
@@ -742,31 +743,76 @@ function Player:move(keys)
     -- Ordinary circular planets deliberately don't get this fixed
     -- screen-space left/right air control at all — "sideways" isn't a
     -- well-defined direction on a sphere you could be approaching from
-    -- any angle. Water is the one exception: swimming around freely
-    -- while submerged reads fine with a plain fixed left/right, and
-    -- self.waterDrag (applied afterward, in :update()) already softens
-    -- how much this actually achieves per press — no separate "water
-    -- air control" tuning needed, the existing strong drag does that
-    -- for free.
+    -- any angle. SkyDome / forceUprightJump surfaces are the exception,
+    -- reading fine with a plain fixed left/right.
     local lockedDir = self.wallJumpLockTimer > 0 and self.wallJumpLockBlockedDir or nil
-    -- Nudges vel.x toward (and up to) airControlMaxSpeed in the held
-    -- direction — but never REDUCES it if momentum carried from a
-    -- running jump (see jump()'s own groundMoveSpeedX carry) already
-    -- exceeds that cap. The plain math.max/math.min clamp used to snap
-    -- straight down to airControlMaxSpeed the instant this ran with a
-    -- faster vel.x already in flight — which happens on essentially
-    -- every running jump, since the same direction key held to run is
-    -- still held going into the jump — reading as sudden air friction
-    -- killing the jump's own distance. The outer math.min/math.max
-    -- keeps the accelerated value only when it doesn't walk speed back
-    -- DOWN toward the cap from above.
-    if keys["ArrowLeft"] and lockedDir ~= -1 then
-      self.vel.x = math.min(self.vel.x, math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed))
-      self.facingDirection = -1
-    end
-    if keys["ArrowRight"] and lockedDir ~= 1 then
-      self.vel.x = math.max(self.vel.x, math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed))
-      self.facingDirection = 1
+
+    if self.submergedIn then
+      -- Orbits around the water body's own center instead of a fixed
+      -- screen-space direction — same idea Player:move's own
+      -- onSurface-on-a-round-planet branch above already uses for
+      -- walking the seabed (ArrowRight always increases self.angle,
+      -- i.e. always the SAME rotational sense regardless of where on
+      -- the circle you currently are), just applied as a velocity nudge
+      -- along the current TANGENT instead of directly setting position,
+      -- since swimming is still physics-driven (gravity + drag), unlike
+      -- walking's fixed-radius arc.
+      --
+      -- Deliberately decomposes vel into tangential + radial components
+      -- and only ever touches the tangential one here — getting FARTHER
+      -- from the water's center is NOT something ArrowLeft/ArrowRight
+      -- can do at all, on purpose (an earlier version nudged vel.x in a
+      -- fixed screen-space direction instead, which could carry a
+      -- player near the water's own left/right side straight out past
+      -- the shore). The radial component — gravity pulling in, and
+      -- Player:jump's own swim-stroke impulse pushing straight out — is
+      -- preserved untouched, so that stays the only way to actually
+      -- move toward or away from the center.
+      local water = self.submergedIn
+      local radial = self.pos:subtract(water.pos)
+      if radial:length() > 0.01 then
+        radial:normalize()
+      else
+        radial = Vector2.new(0, -1)
+      end
+      local tangent = Vector2.new(-radial.y, radial.x)
+
+      local tangentSpeed = self.vel:dot(tangent)
+      local radialSpeed = self.vel:dot(radial)
+
+      -- Same accel-toward-a-cap-without-fighting-existing-momentum
+      -- shape the screen-space version below uses, just applied to the
+      -- tangential speed instead of vel.x directly.
+      if keys["ArrowLeft"] and lockedDir ~= -1 then
+        tangentSpeed = math.min(tangentSpeed, math.max(tangentSpeed - self.airControlAccel, -self.airControlMaxSpeed))
+        self.facingDirection = -1
+      end
+      if keys["ArrowRight"] and lockedDir ~= 1 then
+        tangentSpeed = math.max(tangentSpeed, math.min(tangentSpeed + self.airControlAccel, self.airControlMaxSpeed))
+        self.facingDirection = 1
+      end
+
+      self.vel = tangent:multiply(tangentSpeed):add(radial:multiply(radialSpeed))
+    else
+      -- Nudges vel.x toward (and up to) airControlMaxSpeed in the held
+      -- direction — but never REDUCES it if momentum carried from a
+      -- running jump (see jump()'s own groundMoveSpeedX carry) already
+      -- exceeds that cap. The plain math.max/math.min clamp used to snap
+      -- straight down to airControlMaxSpeed the instant this ran with a
+      -- faster vel.x already in flight — which happens on essentially
+      -- every running jump, since the same direction key held to run is
+      -- still held going into the jump — reading as sudden air friction
+      -- killing the jump's own distance. The outer math.min/math.max
+      -- keeps the accelerated value only when it doesn't walk speed back
+      -- DOWN toward the cap from above.
+      if keys["ArrowLeft"] and lockedDir ~= -1 then
+        self.vel.x = math.min(self.vel.x, math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed))
+        self.facingDirection = -1
+      end
+      if keys["ArrowRight"] and lockedDir ~= 1 then
+        self.vel.x = math.max(self.vel.x, math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed))
+        self.facingDirection = 1
+      end
     end
   end
 end
@@ -844,6 +890,7 @@ function Player:update()
   -- planet never sets onSurface (see CollisionSystem's own comment), so
   -- this plain distance-to-center check is the only signal :jump() and
   -- the airborne drag below have for "currently inside one."
+  local wasSubmergedIn = self.submergedIn
   self.submergedIn = nil
   if state.planetoids then
     for _, p in ipairs(state.planetoids) do
@@ -852,6 +899,15 @@ function Player:update()
         break
       end
     end
+  end
+
+  -- Splash the instant submergedIn actually flips (either direction) —
+  -- comparing this frame's result against last frame's is what catches
+  -- the crossing itself, rather than "is currently submerged" which
+  -- would fire every single frame he's underwater.
+  if self.submergedIn ~= wasSubmergedIn then
+    local water = self.submergedIn or wasSubmergedIn
+    Splash.spawn(self.pos, self.pos:subtract(water.pos):normalize())
   end
 
   -- Guards against a real stuck-gravity bug: isGroundPounding only ever

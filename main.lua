@@ -32,6 +32,7 @@ local VatsOverlay = require("lua.effects.VatsOverlay")
 local VatsCursor = require("lua.effects.VatsCursor")
 local Lava = require("lua.world.Lava")
 local WaterPlanet = require("lua.world.WaterPlanet")
+local Fish = require("lua.entities.Fish")
 
 local collisionSystem
 
@@ -154,6 +155,71 @@ function love.load()
     table.insert(state.planetoids, waterCore)
     state.waterPlanet = waterPlanet
     state.waterCore = waterCore
+
+    state.fish = {}
+    local FISH_COUNT = 6
+    for _ = 1, FISH_COUNT do
+      table.insert(state.fish, Fish.new(waterPlanet, waterCore))
+    end
+
+    -- A second, smaller water body — right and a little further down
+    -- from the first, with a ~336-unit gap between the two shores. Too
+    -- far for an ordinary in-place jump's reach (see Fish.lua's
+    -- JUMP_MAX_APEX_FRAC), which is deliberate: crossing this gap needs
+    -- Fish.lua's own dedicated cross-pool jump (JUMP_CROSS_* tunables,
+    -- decideToJump/startJump) — a fish specifically aiming for another
+    -- pool it can reach, launching much harder than an ordinary hop.
+    --
+    -- At THIS distance, reaching the far shore actually requires
+    -- Fish.lua's gravity hand-off (findDominantWaterInfluence): each
+    -- WaterPlanet's own influence ring (radius + constants.
+    -- INFLUENCE_PADDING) only reaches 1160 units from A's center and
+    -- 872 from B's own (smaller) center, and neither ring alone reaches
+    -- the far shore — but the two rings still overlap by about 64
+    -- units, just barely, so a strong enough launch from A can coast
+    -- into B's own ring before A's would have capped it, at which point
+    -- B's own gravity takes over and pulls it the rest of the way in.
+    -- Pushing the two pools any further apart than this will make the
+    -- rings stop overlapping entirely — at that point crossing becomes
+    -- flatly impossible without breaking the "never leave a pool's own
+    -- influence ring" rule this whole feature is built on, not just a
+    -- matter of retuning launch speed.
+    local water2X = waterX + 1820
+    local water2Y = waterY + 750
+    local waterPlanet2, waterCore2 = WaterPlanet.new(water2X, water2Y, 960 * 0.7)
+    table.insert(state.planetoids, waterPlanet2)
+    table.insert(state.planetoids, waterCore2)
+    state.waterPlanet2 = waterPlanet2
+    state.waterCore2 = waterCore2
+
+    local FISH_COUNT_2 = 4
+    for _ = 1, FISH_COUNT_2 do
+      table.insert(state.fish, Fish.new(waterPlanet2, waterCore2))
+    end
+
+    -- Three more, small water bodies below the second one (each offset
+    -- sideways by a different amount, so none of them sit directly
+    -- below it) — half its own radius (336). Placed with a comfortable
+    -- ~150-250 unit reach margin each way to/from water2 specifically
+    -- (not to each other, though none happen to overlap either), rather
+    -- than pushed to the tight limit the water1<->water2 gap already
+    -- is — see Fish.lua's own JUMP_CROSS_* tunables and
+    -- findDominantWaterInfluence for what that margin actually has to
+    -- absorb (randomized launch speed, tangential drift).
+    local SMALL_WATER_RADIUS = (960 * 0.7) * 0.5
+    local smallWaterOffsets = {
+      { -650, 1050 },
+      { 100, 1200 },
+      { 900, 900 },
+    }
+    for _, off in ipairs(smallWaterOffsets) do
+      local wp, wc = WaterPlanet.new(water2X + off[1], water2Y + off[2], SMALL_WATER_RADIUS)
+      table.insert(state.planetoids, wp)
+      table.insert(state.planetoids, wc)
+      for _ = 1, 3 do
+        table.insert(state.fish, Fish.new(wp, wc))
+      end
+    end
   end
 
   -- Robot butler NPC — paces back and forth just to the right of the
@@ -379,6 +445,12 @@ function love.update(dt)
   end
 
   WaterPlanet.updateSharedClock()
+
+  if state.fish then
+    for _, fish in ipairs(state.fish) do
+      fish:update()
+    end
+  end
 
   if state.spaceShelter then
     state.spaceShelter:update(dt)
@@ -689,6 +761,20 @@ function love.draw()
     end
   end
 
+  -- Every water body's own opaque BACKDROP (see WaterPlanet.lua's own
+  -- comment on drawWaterBackdrop) drawn first, so the core/player/fish
+  -- below layer normally on top of it, and the translucent shell's own
+  -- later redraw pass (after the player — see further down) blends its
+  -- shading/caustics over an already-solid base instead of raw
+  -- starfield. Without this, turning BODY_OPACITY down made the water
+  -- look "ghostly" — the background showed through evenly whether or
+  -- not something was actually standing in the water.
+  for _, p in ipairs(state.planetoids) do
+    if p.isWaterPlanet and p.drawBackdrop and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+      p:drawBackdrop()
+    end
+  end
+
   for _, p in ipairs(state.planetoids) do
     -- The dome is ALSO in this list (for gravity/physics bookkeeping —
     -- see GravitySystem.new(state.planetoids)), but already drew
@@ -697,12 +783,16 @@ function love.draw()
     -- two explicit dome draw calls (the shelter — see above — and
     -- anything else meant to sit behind the foreground hex but in
     -- front of the background one).
-    -- The water planet is ALSO excluded here and drawn again later,
-    -- right after the player (see that draw call's own comment) — same
-    -- reasoning as the lava fix: it needs to render ON TOP of him
-    -- whenever they overlap, so he reads as submerged rather than
-    -- floating in front of the water.
-    if p ~= state.skyDomePlanet and p ~= state.waterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+    -- Every water body's own SHELL (isWaterPlanet — there can be more
+    -- than one now, see the second WaterPlanet.new() call above) is
+    -- ALSO excluded here and drawn again later, right after the player
+    -- (see that draw call's own comment) — same reasoning as the lava
+    -- fix: it needs to render ON TOP of him whenever they overlap, so
+    -- he reads as submerged rather than floating in front of the water.
+    -- Checked via the flag rather than comparing against specific named
+    -- water planet variables, so this keeps working regardless of how
+    -- many water bodies end up existing.
+    if p ~= state.skyDomePlanet and not p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
     end
   end
@@ -840,6 +930,17 @@ function love.draw()
 
   state.player:draw()
 
+  -- Same "draw before the water's second pass so its translucent fill
+  -- reads as covering them" reasoning as the player himself — see the
+  -- water re-draw a bit further down.
+  if state.fish then
+    for _, fish in ipairs(state.fish) do
+      if utils.isOnScreen(fish.pos.x, fish.pos.y, 70, 50) then
+        fish:draw()
+      end
+    end
+  end
+
   -- Drawn AFTER the player (not back with the other hazards/scenery
   -- above) so lava visually covers him the moment he's in it, instead of
   -- him rendering on top of a hazard he's supposedly submerged in —
@@ -856,15 +957,25 @@ function love.draw()
   -- Same reasoning as lava above — drawn again here (excluded from the
   -- ordinary planetoid pass) so the water always renders on top of the
   -- player whenever they overlap, reading as submerged rather than
-  -- floating in front of it.
-  if state.waterPlanet and utils.isOnScreen(state.waterPlanet.pos.x, state.waterPlanet.pos.y, state.waterPlanet.radius, 50) then
-    state.waterPlanet:draw()
+  -- floating in front of it. Every water body's shell gets this same
+  -- treatment, not just one named one — see the exclusion pass above's
+  -- own comment.
+  for _, p in ipairs(state.planetoids) do
+    if p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
+      p:draw()
+    end
   end
 
   -- Drawn after the water planet's own redraw above, so bubbles stay
   -- visible on top of the translucent fill rather than getting muddied
   -- underneath it (see Player:drawBubbles's own comment).
   state.player:drawBubbles()
+
+  if state.fish then
+    for _, fish in ipairs(state.fish) do
+      fish:drawBubbles()
+    end
+  end
 
   -- Drawn HERE, on top of the just-drawn player, only while the
   -- opening-cutscene door is still closed/opening — see the matching
