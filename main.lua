@@ -22,6 +22,7 @@ local MiniMap = require("lua.ui.MiniMap")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local SpaceShelter = require("lua.world.SpaceShelter")
 local RobotButler = require("lua.entities.RobotButler")
+local Fisherman = require("lua.entities.Fisherman")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
@@ -230,6 +231,15 @@ function love.load()
   local ROBOT_GAP_FROM_SHELTER = 60
   local robotHomeX = state.spaceShelter.pos.x + state.spaceShelter.drawWidth / 2 + ROBOT_GAP_FROM_SHELTER
   state.robotButler = RobotButler.new(robotHomeX, dome:trueSurfaceY())
+
+  -- Fisherman NPC — same decorative/interactive role as the robot
+  -- butler above, mirrored to the dome's own RIGHT edge instead (a
+  -- fixed inset from the true edge so his art doesn't clip off the
+  -- walkable deck — see SkyDomePlanetoid.lua's own halfWidth/
+  -- trueSurfaceY for the deck's actual bounds).
+  local FISHERMAN_GAP_FROM_EDGE = 300
+  local fishermanHomeX = dome.pos.x + dome.halfWidth - FISHERMAN_GAP_FROM_EDGE
+  state.fisherman = Fisherman.new(fishermanHomeX, dome:trueSurfaceY())
 
   -- === TILED HILL TERRAIN above the sky dome's ground ===
   -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
@@ -462,6 +472,20 @@ function love.update(dt)
   if state.robotButler then
     state.robotButler:update()
   end
+
+  if state.fisherman then
+    state.fisherman:update()
+  end
+
+  -- Recomputed fresh every frame (never a flag some NPC sets and might
+  -- forget to clear) from whichever NPCs actually have a dialogue box
+  -- open right now — Player.lua reads this to freeze movement/jumping
+  -- for as long as any conversation is showing, same "empty keys" trick
+  -- state.introLocked already uses just below, generalized to cover
+  -- every NPC's own dialogueActive rather than hardcoding one.
+  state.dialogueActive = (state.robotButler and state.robotButler.dialogueActive)
+    or (state.fisherman and state.fisherman.dialogueActive)
+    or false
 
   -- Empty keys while the opening cutscene is running — the player
   -- still stands on the deck normally (gravity/collision below are
@@ -912,6 +936,14 @@ function love.draw()
     end
   end
 
+  if state.fisherman then
+    local f = state.fisherman
+    if utils.isOnScreen(f.pos.x, f.pos.y, math.max(f.halfWidth, f.halfHeight), 20) then
+      f:draw()
+      f:drawTooltip()
+    end
+  end
+
   if state.coins then
     for _, c in ipairs(state.coins) do
       if utils.isOnScreen(c.pos.x, c.pos.y, c.radius, 20) then
@@ -929,6 +961,36 @@ function love.draw()
   end
 
   state.player:draw()
+
+  -- Debug: the player's own actual collision shape (toggle with 'C',
+  -- state.showCollisionDebug — same flag/key the TiledTerrain wall/shape
+  -- debug view above already uses). A vertical CAPSULE, not a plain
+  -- circle — see CollisionSystem:handlePlayerWallCollisions and
+  -- Player.lua's own headReach for why: the bottom circle sits right at
+  -- player.pos (exactly what every other system — ground distance,
+  -- water, enemies — already treats as "the player"), and the top
+  -- circle is offset up by however far his actual visual head reaches,
+  -- minus this circle's own radius (since the circle itself already
+  -- contributes that much reach). Drawn in magenta so it's visually
+  -- distinct from the red/blue/green wall-shape debug lines above.
+  if state.showCollisionDebug then
+    local r = state.player.radius
+    local headReach = (not state.player.isBall) and (state.player.headReach or 0) or 0
+    local topY = state.player.pos.y - math.max(0, headReach - r)
+    local bottomY = state.player.pos.y
+    local px = state.player.pos.x
+
+    love.graphics.setLineWidth(3)
+    love.graphics.setColor(1, 0.2, 1, 1)
+    love.graphics.circle("line", px, bottomY, r)
+    love.graphics.circle("line", px, topY, r)
+    if topY < bottomY then
+      love.graphics.line(px - r, topY, px - r, bottomY)
+      love.graphics.line(px + r, topY, px + r, bottomY)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setLineWidth(1)
+  end
 
   -- Same "draw before the water's second pass so its translucent fill
   -- reads as covering them" reasoning as the player himself — see the
@@ -1024,6 +1086,10 @@ function love.draw()
 
   if state.robotButler then
     state.robotButler:drawDialogue()
+  end
+
+  if state.fisherman then
+    state.fisherman:drawDialogue()
   end
 
   if state.minimap then

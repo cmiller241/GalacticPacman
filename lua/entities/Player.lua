@@ -41,6 +41,30 @@ local INTRO_POSE_TRANSITION_SECONDS = 0.6
 -- instead of always drifting toward one fixed screen "up."
 local BUBBLE_SPAWN_CHANCE     = 0.35 -- per baseline (60fps) frame, while under BUBBLE_MAX_COUNT and submerged
 local BUBBLE_MAX_COUNT        = 10
+
+-- Morph ball (ArrowDown to curl up, ArrowUp to stand back up — see
+-- InputHandlers.lua/GamePadInput.lua's own calls into
+-- enterBallMode/exitBallMode, and Player:drawBallMode for how it's
+-- actually drawn). BALL_RADIUS_MULTIPLIER is deliberately the ONE
+-- number behind both "about half his current height" (the drawn
+-- ball's own radius) and "his collision boundary should be shorter" —
+-- those are the same physical shrink, not two separately-tuned values,
+-- since the ball's visible silhouette should always exactly match
+-- where its actual collision is.
+local BALL_RADIUS_MULTIPLIER = 0.792 -- 0.5 * 1.2 * 1.2 * 1.1 — bumped 20%, 20%, then another 10% bigger
+local BALL_SPEED_MULTIPLIER  = 2.1  -- 1.25 * 1.2 * 1.4 — bumped 20%, then another 40% faster
+
+-- Curl-into-a-ball transition: two authored keyframes (see
+-- BALL_MORPH_FRAME_1/2 near drawBallMorphPose, in the Drawing section
+-- below) played in order on the way in, reversed on the way out, before/
+-- after the plain ball circle itself. self.isBall (and therefore
+-- self.radius/ground speed — everything actually FUNCTIONAL) only
+-- flips at the very END of whichever direction is playing — see
+-- Player:updateBallMorph — so he's fully humanoid-physics throughout
+-- the curl-in animation, and stays ball-sized/ball-speed throughout the
+-- whole stand-back-up animation too, only becoming humanoid again once
+-- he's actually fully stood up.
+local BALL_MORPH_SEGMENT_TICKS = 8 -- baseline (60fps) ticks each of the two keyframe blends takes — a full transition either direction is 2x this, ~0.27s at 60fps
 local BUBBLE_HEAD_GAP         = 1.4  -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
 local BUBBLE_FADE_DISTANCE    = 20   -- world units of travel, just before reaching the water's own radius, that a bubble fades out over
 local BUBBLE_RISE_SPEED_MIN   = 0.5  -- world units per baseline frame, radially outward
@@ -74,6 +98,19 @@ function Player.new(x, y)
   self.vel = Vector2.new(0, 0)
   self.sizeMultiplier = 1
   self.radius = constants.PLAYER_RADIUS * self.sizeMultiplier
+  -- Snapshot of the normal (non-ball) radius — enterBallMode/exitBallMode
+  -- toggle self.radius (the one every collision/gravity/surface-distance
+  -- check actually reads) between this and baseRadius*BALL_RADIUS_MULTIPLIER,
+  -- rather than the ball shrink permanently overwriting the number it'd
+  -- need to restore later.
+  self.baseRadius = self.radius
+  self.isBall = false
+  self.ballRollAngle = 0
+  -- nil | "toBall" | "toHuman" — see Player:enterBallMode/exitBallMode/
+  -- updateBallMorph. morphElapsed is in baseline (60fps) ticks, counted
+  -- from 0 at the start of whichever transition is currently playing.
+  self.morphState = nil
+  self.morphElapsed = 0
 
   self.onSurface = false
   self.currentPlanet = nil
@@ -249,6 +286,32 @@ function Player.new(x, y)
     rightBootX = -142, rightBootY = 241, rightBootJointX = 77, rightBootJointY = 15
   }
 
+  -- How far above self.pos (world units) the very TOP of his visual
+  -- helmet actually sits — derived from the same numbers drawFullBody
+  -- itself uses to place the head (groundOffset, bodyPartsConfig.headY,
+  -- headPivotFraction), not a guessed constant, so it stays correct if
+  -- the rig's own proportions ever change. CollisionSystem's
+  -- handlePlayerWallCollisions uses this to give the player a proper
+  -- vertical CAPSULE against walls/ceilings instead of a single circle
+  -- centered near his feet — a plain circle of radius self.radius (30
+  -- units) never reached anywhere near his actual head height, which is
+  -- exactly why a lowered ceiling tile could visibly clip through his
+  -- helmet without ever registering a collision.
+  --
+  -- groundOffset*bodyScale: self.pos -> the rig's own draw origin.
+  -- |headY|*bodyScale: draw origin -> the head's ATTACH point.
+  -- headH*bodyScale*headPivotFraction: attach point -> the head
+  -- image's own TOP edge (pivotY, in drawFullBody, is exactly how far
+  -- below the image's top edge the attach point sits).
+  local headImg = state.characterImages and state.characterImages.head
+  local headH = 0
+  if headImg then
+    local _, imgH = headImg:getDimensions()
+    headH = imgH
+  end
+  self.headReach = (self.groundOffset + math.abs(self.bodyPartsConfig.headY)) * self.bodyScale
+    + headH * self.bodyScale * self.headPivotFraction
+
   -- Aim cache
   self.aimShoulderPos = nil
   self.aimWorldAngle = 0
@@ -256,6 +319,54 @@ function Player.new(x, y)
   self.aimAnchorPos = nil
 
   return self
+end
+
+------------------------------------------------------------------
+-- Morph ball
+------------------------------------------------------------------
+
+-- Starts the curl-in ANIMATION — self.isBall itself (and therefore
+-- self.radius/ground speed) doesn't flip until updateBallMorph below
+-- finishes playing it. Ignored while any transition is already in
+-- progress (can't interrupt/re-trigger mid-curl), same as it being
+-- ignored while already fully a ball or while talking to an NPC
+-- (state.dialogueActive — movement/jumping are already frozen then, see
+-- Player:move/jump, and starting a morph mid-conversation would be the
+-- same kind of "moving" while supposedly standing still talking).
+function Player:enterBallMode()
+  if self.isBall or self.morphState or state.dialogueActive then return end
+  self.morphState = "toBall"
+  self.morphElapsed = 0
+end
+
+-- Starts the stand-back-up animation, played in REVERSE — see
+-- updateBallMorph/drawBallMorphTransition. Ignored while not currently
+-- a ball, already mid-transition either direction, or talking to an NPC
+-- (same reasoning as enterBallMode's own dialogueActive check above).
+function Player:exitBallMode()
+  if not self.isBall or self.morphState or state.dialogueActive then return end
+  self.morphState = "toHuman"
+  self.morphElapsed = 0
+end
+
+-- Advances whichever transition (if any) is currently playing, and
+-- flips the actual functional isBall/radius state the instant it
+-- completes — see BALL_MORPH_SEGMENT_TICKS's own comment for why that
+-- boundary is at the END of each direction's animation, not the start.
+function Player:updateBallMorph(ts)
+  if not self.morphState then return end
+  self.morphElapsed = self.morphElapsed + ts
+  if self.morphElapsed >= BALL_MORPH_SEGMENT_TICKS * 2 then
+    if self.morphState == "toBall" then
+      self.isBall = true
+      self.radius = self.baseRadius * BALL_RADIUS_MULTIPLIER
+    else
+      self.isBall = false
+      self.radius = self.baseRadius
+    end
+    self.morphState = nil
+    self.morphElapsed = 0
+  end
 end
 
 ------------------------------------------------------------------
@@ -364,6 +475,15 @@ function Player:getOutwardLaunchDirection()
 end
 
 function Player:jump()
+  -- Locked out entirely while curling into/out of a ball (self.morphState
+  -- — see enterBallMode/exitBallMode/updateBallMorph) OR while talking
+  -- to an NPC (state.dialogueActive — see main.lua, computed fresh each
+  -- frame from every NPC's own dialogueActive) — a single guard here
+  -- covers every input source (keyboard Space, gamepad Cross) that
+  -- calls this, rather than needing the same check patched into each
+  -- one separately.
+  if self.morphState or state.dialogueActive then return end
+
   -- Requires actually MOVING at run speed, not just holding the run
   -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
   -- (set each frame in move(), see its own comment) is 0 whenever no
@@ -397,7 +517,7 @@ function Player:jump()
     self.onSurface = false
     self.currentPlanet = nil
     if state.audioManager then state.audioManager:playJump() end
-  elseif (not self.onSurface) and self.touchingWall then
+  elseif (not self.onSurface) and self.touchingWall and not self.isBall then
     -- Wall jump: kicks away from whichever wall was touched THIS FRAME
     -- (self.wallContactNormal, set fresh each frame by
     -- CollisionSystem:handlePlayerWallCollisions — never stale, since it's
@@ -545,11 +665,23 @@ function Player:spawnWallJumpEffects()
 end
 
 function Player:move(keys)
+  -- Locked out while curling into/out of a ball (self.morphState — see
+  -- enterBallMode/exitBallMode/updateBallMorph) OR while talking to an
+  -- NPC (state.dialogueActive — see main.lua): treating `keys` as empty
+  -- for the rest of this call means every ArrowLeft/ArrowRight check
+  -- below naturally falls through to "no input," so he can't walk
+  -- anywhere, while everything else this function still does
+  -- (gravity-airborne handling, wall-climb bookkeeping, arc-position
+  -- resync, etc.) keeps running exactly as normal rather than being
+  -- skipped wholesale.
+  if self.morphState or state.dialogueActive then keys = {} end
+
   if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
     local planet = self.currentPlanet
     self.isWalking = false
     local ds = 0
     local rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1)
+      * (self.isBall and BALL_SPEED_MULTIPLIER or 1)
     local speed = rawSpeed * state.timeScale
 
     -- Unscaled (no state.timeScale) current ground speed+direction —
@@ -625,8 +757,13 @@ function Player:move(keys)
         -- PS5 pad), the same flag that already gates the run-speed
         -- multiplier on `speed` above: an ordinary walking pace isn't
         -- committed enough to hold either zone, matching stopping and
-        -- reversing as things that peel the player off.
-        if ds == 0 or not state.gamepadRunHeld then
+        -- reversing as things that peel the player off. Ball mode is
+        -- ALWAYS treated as "running" for this specific check — a ball
+        -- rolling with enough commitment to not stop or reverse (ds==0/
+        -- direction-reversal detachment below still applies exactly the
+        -- same either way) can cling to a wall or ceiling without also
+        -- needing the run button held down.
+        if ds == 0 or not (state.gamepadRunHeld or self.isBall) then
           shouldDetach = true
         else
           local dirSign = ds > 0 and 1 or -1
@@ -702,6 +839,17 @@ function Player:move(keys)
     if self.isWalking then
       self.walkTime = self.walkTime + (math.abs(ds) / self.strideLength) * math.pi * 2
       self:spawnWalkDust()
+      -- Rolling-without-slipping: a wheel of radius r moving a signed
+      -- distance ds rotates by exactly ds/r radians — ds is already the
+      -- true signed world-unit displacement attempted this frame, so
+      -- this is the physically correct spin rate, not just a stylized
+      -- approximation. Wrapped via math.fmod every frame (same
+      -- precaution Sun.lua's own unbounded-time bug taught — see that
+      -- file's PLASMA_TIME_WRAP) so this angle never grows large enough
+      -- to lose precision over a long play session.
+      if self.isBall then
+        self.ballRollAngle = math.fmod(self.ballRollAngle + ds / self.radius, math.pi * 2)
+      end
     end
 
   elseif self.onSurface and self.currentPlanet then
@@ -713,6 +861,7 @@ function Player:move(keys)
     -- so the same water resistance that slows swimming above also
     -- slows walking down here.
     local speedMul = (state.gamepadRunHeld and self.runSpeedMultiplier or 1) * (self.submergedIn and self.waterWalkSpeedMultiplier or 1)
+      * (self.isBall and BALL_SPEED_MULTIPLIER or 1)
     local speed = constants.PLAYER_LINEAR_SPEED * speedMul * state.timeScale
     local angularSpeed = speed / surfaceDist
 
@@ -733,9 +882,12 @@ function Player:move(keys)
     self.pos.y = self.currentPlanet.pos.y + math.sin(self.angle) * surfaceDist
 
     if self.isWalking then
-      local distanceMoved = math.abs(self.angle - prevAngle) * surfaceDist
-      self.walkTime = self.walkTime + (distanceMoved / self.strideLength) * math.pi * 2
+      local signedDistanceMoved = (self.angle - prevAngle) * surfaceDist
+      self.walkTime = self.walkTime + (math.abs(signedDistanceMoved) / self.strideLength) * math.pi * 2
       self:spawnWalkDust()
+      if self.isBall then
+        self.ballRollAngle = math.fmod(self.ballRollAngle + signedDistanceMoved / self.radius, math.pi * 2)
+      end
     end
 
   elseif (not self.onSurface) and self.lastInfluencePlanet
@@ -882,6 +1034,8 @@ function Player:update()
   -- check. See TerrainShape:findLandingCrossing.
   self.prevPos = self.pos:clone()
 
+  self:updateBallMorph(state.timeScale)
+
   if self.swimStrokeTimer > 0 then
     self.swimStrokeTimer = math.max(0, self.swimStrokeTimer - state.timeScale)
   end
@@ -979,7 +1133,7 @@ function Player:update()
     -- at the kick-off, which already did this) to match how that pose
     -- was authored, and so there's no sudden snap-turn the instant he
     -- jumps off — he's already facing that way throughout.
-    if self.touchingWall and self.wallContactNormal and self.vel.y > self.wallSlideMaxFallSpeed then
+    if self.touchingWall and self.wallContactNormal and self.vel.y > self.wallSlideMaxFallSpeed and not self.isBall then
       local towardWallDir = self.wallContactNormal.x > 0 and -1 or 1
       local holdingIntoWall = (towardWallDir == -1 and state.keys["ArrowLeft"])
         or (towardWallDir == 1 and state.keys["ArrowRight"])
@@ -1245,6 +1399,158 @@ function Player:drawWallSlidePose(orientation, originPos)
   self:drawLimb(images.rightarm, cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, pose.rightArmAngle, orientation, originPos, cosO, sinO)
 end
 
+------------------------------------------------------------------
+-- Ball-morph transition poses
+------------------------------------------------------------------
+
+-- Neutral standing pose — angle=0 everywhere, same attach offsets
+-- bodyPartsConfig itself already uses. This is what the curl-in
+-- animation blends FROM (and the stand-back-up animation blends BACK
+-- TO) — a fixed authored frame, not whatever dynamic walk/aim/idle pose
+-- happened to be playing the instant the transition began, same
+-- "just cut to a fixed pose" convention WALL_SLIDE_POSE above already
+-- uses rather than blending from arbitrary live state.
+local BALL_MORPH_STANDING_POSE = {
+  leftBootX = 111,   leftBootY = 241, leftBootAngle = 0,
+  leftArmX  = 136,   leftArmY  = 9,   leftArmAngle  = 0,
+  bodyY = 115,
+  rightBootX = -142, rightBootY = 241, rightBootAngle = 0,
+  rightArmX  = -186, rightArmY  = -14, rightArmAngle  = 0,
+  headY = -150, headAngle = 0,
+}
+
+-- Curl-in keyframes, authored with paperdoll.html against the actual
+-- bodyPartsConfig/drawLimb numbers, so these plug in directly with no
+-- unit conversion — same precedent as WALL_SLIDE_POSE above, just with
+-- explicit X offsets too (unlike that pose, arms/boots actually move
+-- sideways here, not just rotate). Played STANDING -> FRAME_1 -> FRAME_2
+-- -> (cut to the actual ball) when curling in, and the reverse when
+-- standing back up — see Player:drawBallMorphTransition.
+local BALL_MORPH_FRAME_1 = {
+  leftBootX = 111,     leftBootY = 241,    leftBootAngle = 0,
+  leftArmX  = 143.01,  leftArmY  = 131.67, leftArmAngle  = 40 * math.pi / 180,
+  bodyY = 206.13,
+  rightBootX = -142,   rightBootY = 241,   rightBootAngle = 0,
+  rightArmX  = -182.5, rightArmY  = 98.16, rightArmAngle  = -31 * math.pi / 180,
+  headY = 18.24, headAngle = 0,
+}
+local BALL_MORPH_FRAME_2 = {
+  leftBootX = 111,      leftBootY = 195.44, leftBootAngle = 32 * math.pi / 180,
+  leftArmX  = -130.37,  leftArmY  = 163.22, leftArmAngle  = 40 * math.pi / 180,
+  bodyY = 328.8,
+  rightBootX = -134.99, rightBootY = 167.4,  rightBootAngle = -9 * math.pi / 180,
+  rightArmX  = -143.95, rightArmY  = 213.82, rightArmAngle  = -43 * math.pi / 180,
+  headY = 312.65, headAngle = 25 * math.pi / 180,
+}
+
+local function lerpNum(a, b, t) return a + (b - a) * t end
+
+-- Blends every field of two ball-morph pose tables — plain linear
+-- interpolation is enough for a transition this quick (~0.27s total).
+local function lerpBallMorphPose(a, b, t)
+  return {
+    leftBootX = lerpNum(a.leftBootX, b.leftBootX, t),
+    leftBootY = lerpNum(a.leftBootY, b.leftBootY, t),
+    leftBootAngle = lerpNum(a.leftBootAngle, b.leftBootAngle, t),
+    leftArmX = lerpNum(a.leftArmX, b.leftArmX, t),
+    leftArmY = lerpNum(a.leftArmY, b.leftArmY, t),
+    leftArmAngle = lerpNum(a.leftArmAngle, b.leftArmAngle, t),
+    bodyY = lerpNum(a.bodyY, b.bodyY, t),
+    rightBootX = lerpNum(a.rightBootX, b.rightBootX, t),
+    rightBootY = lerpNum(a.rightBootY, b.rightBootY, t),
+    rightBootAngle = lerpNum(a.rightBootAngle, b.rightBootAngle, t),
+    rightArmX = lerpNum(a.rightArmX, b.rightArmX, t),
+    rightArmY = lerpNum(a.rightArmY, b.rightArmY, t),
+    rightArmAngle = lerpNum(a.rightArmAngle, b.rightArmAngle, t),
+    headY = lerpNum(a.headY, b.headY, t),
+    headAngle = lerpNum(a.headAngle, b.headAngle, t),
+  }
+end
+
+-- Draws one blended ball-morph pose — same draw-order/structure as
+-- drawWallSlidePose above (leftboot, leftarm, body, rightboot, rightarm,
+-- head), except every part's own X/Y/angle comes straight from `pose`
+-- instead of bodyPartsConfig, since these poses move parts sideways too,
+-- not just rotate them. jointX/jointY still come from cfg — those are
+-- an intrinsic property of the source art (which pixel is the pivot),
+-- not something a pose changes.
+function Player:drawBallMorphPose(orientation, originPos, pose)
+  local images = state.characterImages
+  if not images then return end
+
+  local cfg = self.bodyPartsConfig
+  local s = self.bodyScale
+  local cosO = math.cos(orientation)
+  local sinO = math.sin(orientation)
+
+  self:drawLimb(images.leftboot, pose.leftBootX, pose.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, pose.leftBootAngle, orientation, originPos, cosO, sinO)
+  self:drawLimb(images.leftarm, pose.leftArmX, pose.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, pose.leftArmAngle, orientation, originPos, cosO, sinO)
+
+  if images.body then
+    local bodyW, bodyH = images.body:getDimensions()
+    love.graphics.push()
+    love.graphics.translate(originPos.x, originPos.y)
+    love.graphics.rotate(orientation)
+    love.graphics.draw(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s)
+    love.graphics.pop()
+  end
+
+  self:drawLimb(images.rightboot, pose.rightBootX, pose.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, pose.rightBootAngle, orientation, originPos, cosO, sinO)
+  self:drawLimb(images.rightarm, pose.rightArmX, pose.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, pose.rightArmAngle, orientation, originPos, cosO, sinO)
+
+  if images.head then
+    local headW, headH = images.head:getDimensions()
+    local headWX = -pose.headY * sinO
+    local headWY = pose.headY * cosO
+    local pivotY = headH * s * self.headPivotFraction
+    love.graphics.push()
+    love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s)
+    love.graphics.rotate(orientation + pose.headAngle)
+    love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s)
+    love.graphics.pop()
+  end
+end
+
+-- Picks and blends the right pair of keyframes for whichever direction
+-- (self.morphState) and how far into it (self.morphElapsed) the
+-- transition currently is, then draws that pose with the same
+-- facing-direction flip wrapper Player:draw() itself uses.
+function Player:drawBallMorphTransition(orientation)
+  local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
+  local outwardDir = self:visualDownDirection(planet):multiply(-1)
+  local visualPos = self.pos:clone():add(outwardDir:multiply(self.groundOffset * self.bodyScale))
+  local dirSign = self.facingDirection < 0 and -1 or 1
+
+  local segT = math.min(1, self.morphElapsed / BALL_MORPH_SEGMENT_TICKS)
+  local pose
+  if self.morphState == "toBall" then
+    if self.morphElapsed < BALL_MORPH_SEGMENT_TICKS then
+      pose = lerpBallMorphPose(BALL_MORPH_STANDING_POSE, BALL_MORPH_FRAME_1, segT)
+    else
+      local t2 = math.min(1, (self.morphElapsed - BALL_MORPH_SEGMENT_TICKS) / BALL_MORPH_SEGMENT_TICKS)
+      pose = lerpBallMorphPose(BALL_MORPH_FRAME_1, BALL_MORPH_FRAME_2, t2)
+    end
+  else -- "toHuman" — same two keyframes, played in reverse
+    if self.morphElapsed < BALL_MORPH_SEGMENT_TICKS then
+      pose = lerpBallMorphPose(BALL_MORPH_FRAME_2, BALL_MORPH_FRAME_1, segT)
+    else
+      local t2 = math.min(1, (self.morphElapsed - BALL_MORPH_SEGMENT_TICKS) / BALL_MORPH_SEGMENT_TICKS)
+      pose = lerpBallMorphPose(BALL_MORPH_FRAME_1, BALL_MORPH_STANDING_POSE, t2)
+    end
+  end
+
+  love.graphics.push()
+  love.graphics.translate(self.pos.x, self.pos.y)
+  love.graphics.rotate(orientation)
+  love.graphics.scale(dirSign, 1)
+  love.graphics.rotate(-orientation)
+  love.graphics.translate(-self.pos.x, -self.pos.y)
+
+  self:drawBallMorphPose(orientation, visualPos, pose)
+
+  love.graphics.pop()
+end
+
 function Player:drawFullBody(orientation, originPos)
   local images = state.characterImages
   if not images then return end
@@ -1395,11 +1701,66 @@ function Player:drawFullBody(orientation, originPos)
   end
 end
 
+-- White morph-ball body split by three black spokes into equal wedges,
+-- like a classic peace-sign/beach-ball marking — spoke positions are
+-- offset by self.ballRollAngle (see :move()'s own rolling-without-
+-- slipping update), so they visibly sweep around as he travels instead
+-- of the ball reading as a static painted-on circle. orientation is the
+-- same "which way is down relative to the surface below" convention
+-- every other draw here uses, so the wedge pattern stays sensibly
+-- aligned with gravity rather than just the rolling spin alone.
+local BALL_LINE_COLOR = { 0x9C / 255, 0x9B / 255, 0x9B / 255 } -- #9C9B9B — outline + section-spoke color
+local BALL_CENTER_FILL_COLOR = { 0x6A / 255, 0xE7 / 255, 0xEB / 255 } -- #6AE7EB
+local BALL_CENTER_RADIUS_FRACTION = 1 / 3
+
+function Player:drawBallMode(orientation)
+  local r = self.radius
+
+  love.graphics.push()
+  love.graphics.translate(self.pos.x, self.pos.y)
+  love.graphics.rotate(orientation + self.ballRollAngle)
+
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.circle("fill", 0, 0, r)
+
+  love.graphics.setColor(BALL_LINE_COLOR)
+  local prevLineWidth = love.graphics.getLineWidth()
+  love.graphics.setLineWidth(math.max(1, r * 0.12 - 1))
+  for i = 0, 2 do
+    local a = i * (math.pi * 2 / 3)
+    love.graphics.line(0, 0, math.cos(a) * r, math.sin(a) * r)
+  end
+  love.graphics.circle("line", 0, 0, r)
+
+  -- Small center "eye" — a plain filled+outlined circle, same section-
+  -- line gray for its own outline so it reads as part of the same
+  -- marking scheme rather than a separate decoration.
+  local centerR = r * BALL_CENTER_RADIUS_FRACTION
+  love.graphics.setColor(BALL_CENTER_FILL_COLOR)
+  love.graphics.circle("fill", 0, 0, centerR)
+  love.graphics.setColor(BALL_LINE_COLOR)
+  love.graphics.circle("line", 0, 0, centerR)
+
+  love.graphics.setLineWidth(prevLineWidth)
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.pop()
+end
+
 function Player:draw()
   local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
   local downDir = self:visualDownDirection(planet)
   local downAngle = math.atan2(downDir.y, downDir.x)
   local orientation = downAngle - math.pi / 2
+
+  if self.morphState then
+    self:drawBallMorphTransition(orientation)
+    return
+  end
+
+  if self.isBall then
+    self:drawBallMode(orientation)
+    return
+  end
 
   local outwardDir = downDir:multiply(-1)
   local visualPos = self.pos:clone():add(outwardDir:multiply(self.groundOffset * self.bodyScale))
