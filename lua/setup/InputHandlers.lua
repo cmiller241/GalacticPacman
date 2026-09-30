@@ -212,11 +212,20 @@ local function attachInputHandlers()
 
     if key == 'Enter' then
       tryRestartOrAdvance()
-      if state.robotButler and state.player then
-        state.robotButler:tryInteract(state.player)
-      end
-      if state.fisherman and state.player then
-        state.fisherman:tryInteract(state.player)
+      -- No talking to NPCs or pulling levers while curled into a ball —
+      -- see this same guard in GamePadInput.lua's own Circle handler.
+      if state.player and not state.player.isBall then
+        if state.robotButler then
+          state.robotButler:tryInteract(state.player)
+        end
+        if state.fisherman then
+          state.fisherman:tryInteract(state.player)
+        end
+        if state.levers then
+          for _, lever in ipairs(state.levers) do
+            lever:tryInteract(state.player)
+          end
+        end
       end
     end
 

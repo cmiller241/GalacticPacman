@@ -115,7 +115,28 @@ function CollisionSystem:handlePlayerWallCollisions(player, walls)
   -- isBall/drawBallMode) — a ball is drawn as a plain circle with
   -- nothing reaching up past its own radius, so the capsule collapses
   -- back to an ordinary circle there, matching what's actually drawn.
-  local headReach = (not player.isBall) and (player.headReach or 0) or 0
+  --
+  -- ALSO zeroed out while on a wall-climb shape (TiledTerrain's
+  -- ceilingLeft/ceilingRight/wall-face/ceiling loop-de-loop geometry —
+  -- see planet.isWallClimb). This capsule's "head" always extends in
+  -- WORLD-SPACE UP (segTopY below is a plain Y offset), regardless of
+  -- which way the player is actually oriented — fine on ordinary
+  -- ground, where up really is up, but while climbing a wall or
+  -- running upside-down along a ceiling, the player's own true "up"
+  -- (away from the surface) is sideways or inverted. Right at a
+  -- ceilingRight/ceilingLeft tile's own seam into the flat ceiling
+  -- run, that fixed world-up extension pokes straight into the very
+  -- ceiling tile being walked onto, registering a bogus collision that
+  -- blocked the transition outright — confirmed against a real
+  -- screenshot showing the (non-rotating) capsule sitting inside the
+  -- wall there. There's no equivalent "low ceiling bonks your upright
+  -- head" scenario during a wall-climb traversal anyway, so — same as
+  -- ball mode — this just collapses back to a plain circle rather than
+  -- attempting to rotate the capsule to match the surface (a much
+  -- larger change to the box-distance math below, which currently
+  -- relies on the capsule staying purely vertical).
+  local onWallClimb = player.onSurface and player.currentPlanet and player.currentPlanet.isWallClimb
+  local headReach = (not player.isBall and not onWallClimb) and (player.headReach or 0) or 0
   local segBottomY = player.pos.y
   local segTopY = player.pos.y - math.max(0, headReach - player.radius)
 
@@ -269,34 +290,146 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
   end
 end
 
-function CollisionSystem:handlePlayerPlanetCollisions(player)
-  for _, planet in ipairs(state.planetoids) do
-    if planet.isSpikey then
-      local dist = player.pos:subtract(planet.pos):length()
-      if dist <= planet.radius + player.radius + constants.SURFACE_TOLERANCE then
-        player:startDeath()
-        return
-      end
-    end
+-- Smallest t in [0,1] along the segment a->b where a circle of radius r
+-- centered at (cx,cy) is first entered (a<->b parametrized as
+-- a + t*(b-a)), or nil if the segment never comes within r of the
+-- circle at all. Standard ray/segment-vs-circle intersection (solve
+-- |a + t*(b-a) - center| = r for t, keep the smaller root); falls back
+-- to a direct endpoint-inside check for the (rare, discriminant<0 but
+-- an endpoint still qualifies) case where the segment barely grazes
+-- the circle right at one of its own ends rather than truly crossing
+-- it. Used below so a fast-moving player (pull beam especially, or any
+-- large enough single-frame movement/timeScale combination) is stopped
+-- exactly at a spikey planetoid's own boundary, not wherever this
+-- frame's full, uninterrupted movement would otherwise have carried
+-- them — a same-frame endpoint-only check can't do that: it only ever
+-- sees "did I END UP close enough," which a big enough single-frame
+-- jump can skip right over.
+local function sweptCircleEntryT(ax, ay, bx, by, cx, cy, r)
+  local dx, dy = bx - ax, by - ay
+  local fx, fy = ax - cx, ay - cy
+  local a = dx * dx + dy * dy
+  if a < 1e-9 then
+    return (fx * fx + fy * fy <= r * r) and 0 or nil
+  end
+  local b = 2 * (fx * dx + fy * dy)
+  local c = fx * fx + fy * fy - r * r
+  local disc = b * b - 4 * a * c
+  if disc < 0 then
+    if fx * fx + fy * fy <= r * r then return 0 end
+    local gx, gy = bx - cx, by - cy
+    if gx * gx + gy * gy <= r * r then return 1 end
+    return nil
+  end
+  local sq = math.sqrt(disc)
+  local t1, t2 = (-b - sq) / (2 * a), (-b + sq) / (2 * a)
+  if t1 > 1 or t2 < 0 then return nil end
+  local tEnter = math.max(0, t1)
+
+  -- If the segment STARTS already on/inside the boundary (c <= 0) while
+  -- moving OUTWARD from here (b >= 0, i.e. distance-to-center is
+  -- increasing for the rest of the segment), this isn't a genuine new
+  -- penetration to resolve — it's the far more common "already resting
+  -- right at the boundary, now moving away" case, and t1 collapses to
+  -- 0 here (the starting point) purely because that's where the
+  -- infinite line touches the circle, not because anything is actually
+  -- being entered. Reporting a collision here clamps the player straight
+  -- back to their PREVIOUS position every single frame, silently
+  -- canceling their own escape movement — confirmed bug: jumping (or
+  -- pull-beaming) off a Spikey while resting exactly on its boundary
+  -- kept snapping the player right back in place, reading as "stuck in
+  -- a perpetual jump." Only an already-touching start moving INWARD
+  -- (b < 0) is a real, ongoing collision.
+  if tEnter <= 0 and c <= 1e-6 and b >= 0 then
+    return nil
   end
 
+  return tEnter
+end
+
+function CollisionSystem:handlePlayerPlanetCollisions(player)
   if player.onSurface then return end
 
   if player.pullTarget then
-    if not player.pullTarget.isSpikey and self:tryLandOnPlanet(player, player.pullTarget) then
+    if self:tryLandOnPlanet(player, player.pullTarget) then
       player.pullTarget = nil
     end
     return
   end
 
   for _, planet in ipairs(state.planetoids) do
-    if not planet.isSpikey then
-      if self:tryLandOnPlanet(player, planet) then return end
-    end
+    if self:tryLandOnPlanet(player, planet) then return end
   end
 
   player.onSurface = false
   player.currentPlanet = nil
+end
+
+-- Spikey (lua/world/Spikey.lua) is deliberately NOT a planet anymore —
+-- no gravity, no onSurface landing, no orbital walking around it, not
+-- even pull-targetable (it isn't in state.planetoids at all, so
+-- TargetLock/GravitySystem never see it in the first place). It's just
+-- a solid, impassable obstacle: touching it from any angle stops the
+-- player right at its boundary and sets touchingWall/wallContactNormal
+-- exactly like an ordinary TiledTerrain wall does, so the EXISTING
+-- wall-jump code in Player:jump() is what actually lets him "jump off
+-- of it" — no separate escape mechanism needed. Falling/jumping onto
+-- the TOP of one reads as briefly resting there (gravity from whatever
+-- else is dominant keeps pushing him back against this same solid
+-- boundary each frame) rather than a real landed stance — there's
+-- nothing here setting onSurface, so he never gets an orbit-walk
+-- surface to move along, matching "impassable object, not a planet."
+function CollisionSystem:handlePlayerSpikeyCollisions(player, spikeys)
+  if not spikeys then return end
+
+  -- Swept, not just a same-frame endpoint check: player.prevPos (set at
+  -- the top of Player:update(), before that frame's own movement — see
+  -- its own comment there) lets this measure the whole PATH traveled
+  -- this frame against each Spikey's own solid boundary, catching
+  -- contact regardless of approach angle (falling onto one, jumping
+  -- sideways into one, pull-beaming past one) or speed — a same-frame
+  -- endpoint-only check can miss a fast enough single-frame movement
+  -- entirely.
+  local prevPos = player.prevPos or player.pos
+  for _, spikey in ipairs(spikeys) do
+    local r = spikey.radius + player.radius + constants.SURFACE_TOLERANCE
+    local t = sweptCircleEntryT(prevPos.x, prevPos.y, player.pos.x, player.pos.y, spikey.pos.x, spikey.pos.y, r)
+    if t then
+      player.pos.x = prevPos.x + (player.pos.x - prevPos.x) * t
+      player.pos.y = prevPos.y + (player.pos.y - prevPos.y) * t
+
+      local nx, ny = player.pos.x - spikey.pos.x, player.pos.y - spikey.pos.y
+      local ndist = math.sqrt(nx * nx + ny * ny)
+      local normal = ndist > 1e-6 and Vector2.new(nx / ndist, ny / ndist) or Vector2.new(0, -1)
+
+      -- Cancel the velocity component still driving INTO the spikey
+      -- (same idea the ordinary wall push-out uses) so gravity from
+      -- whatever else is dominant can keep him settled against it
+      -- (resting on top, sliding along a side, etc.) without
+      -- re-tunneling in on the next frame.
+      local into = player.vel:dot(normal)
+      if into < 0 then
+        player.vel = player.vel:subtract(normal:multiply(into))
+      end
+
+      -- Same fields CollisionSystem:handlePlayerWallCollisions sets on
+      -- real wall contact — this alone is what makes Player:jump()'s
+      -- existing wall-jump branch fire off of a Spikey too, with no
+      -- separate "jump off a spikey" code needed.
+      player.touchingWall = spikey
+      player.wallContactNormal = normal
+
+      -- Still lethal contact — startDeath() is currently an empty stub
+      -- (no death/respawn/damage system exists yet), so this is a
+      -- no-op today, but it's exactly where a future life-gauge hit
+      -- should hook in. Fires every frame contact continues (there's no
+      -- "already hit this frame" debounce) — reasonable for a spike
+      -- hazard's continuous contact damage, but worth deciding
+      -- deliberately once a real damage system exists rather than
+      -- inheriting this by accident.
+      player:startDeath()
+    end
+  end
 end
 
 function CollisionSystem:tryLandOnPlanet(player, planet)

@@ -271,11 +271,20 @@ local function pollGamepad(dt)
   if circlePressed and not lastCirclePressed and state.player then
     state.player:clearLockTarget()
     state.vatsActive = false
-    if state.robotButler then
-      state.robotButler:tryInteract(state.player)
-    end
-    if state.fisherman then
-      state.fisherman:tryInteract(state.player)
+    -- No talking to NPCs or pulling levers while curled into a ball —
+    -- see this same guard in InputHandlers.lua's own Enter handler.
+    if not state.player.isBall then
+      if state.robotButler then
+        state.robotButler:tryInteract(state.player)
+      end
+      if state.fisherman then
+        state.fisherman:tryInteract(state.player)
+      end
+      if state.levers then
+        for _, lever in ipairs(state.levers) do
+          lever:tryInteract(state.player)
+        end
+      end
     end
   end
   lastCirclePressed = circlePressed

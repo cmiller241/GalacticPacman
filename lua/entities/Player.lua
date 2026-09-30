@@ -1784,7 +1784,7 @@ end
 ------------------------------------------------------------------
 
 function Player:trySelectPullTarget(explicitTarget)
-  if self.mode ~= "space" then return end
+  if self.mode ~= "space" or self.isBall then return end
 
   local best = nil
   if explicitTarget then
@@ -1846,6 +1846,12 @@ end
 function Player:applyPullForce()
   if self.onSurface then self.pullTarget = nil; return end
   if not self.pullTarget then return end
+  -- Curling into a ball drops any pull in progress outright, rather
+  -- than leaving it silently paused mid-flight — a ball has no pull
+  -- beam at all (see this session's own "no pull beam while a ball"
+  -- request), so there's nothing for a stale pullTarget to resume once
+  -- he un-morphs either.
+  if self.isBall then self.pullTarget = nil; return end
 
   local stillActive = false
   for _, p in ipairs(state.planetoids) do
@@ -1882,6 +1888,7 @@ end
 
 function Player:shootFireball()
   if self.mode ~= "space" and self.mode ~= "platform" then return end
+  if self.isBall then return end
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0
@@ -1925,14 +1932,14 @@ end
 -- R1 press followed by a single L1 press (or vice versa) lands back on
 -- whatever was locked before, reading as a genuine undo.
 function Player:tryLockTargetNext()
-  if self.mode ~= "space" or self.isDying or self.isTeleporting then return end
+  if self.mode ~= "space" or self.isDying or self.isTeleporting or self.isBall then return end
   local originPos = self.aimShoulderPos or self.pos
   local referenceAngle = self.aimWorldAngle or 0
   self.lockedTarget = TargetLock.selectNextLockTarget(self.lockedTarget, referenceAngle, originPos)
 end
 
 function Player:tryLockTargetPrevious()
-  if self.mode ~= "space" or self.isDying or self.isTeleporting then return end
+  if self.mode ~= "space" or self.isDying or self.isTeleporting or self.isBall then return end
   local originPos = self.aimShoulderPos or self.pos
   local referenceAngle = self.aimWorldAngle or 0
   self.lockedTarget = TargetLock.selectPreviousLockTarget(self.lockedTarget, referenceAngle, originPos)

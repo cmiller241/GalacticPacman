@@ -1604,6 +1604,46 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- x/y IS the sphere's center, since it's a freestanding gravity/landing
   -- body in open space, not something that needs to rest on a surface.
   local sphereSpawns = {}
+  -- "Spikey" objects (see lua/world/Spikey.lua): same
+  -- point-placement convention as sphereSpawns above — the object's own
+  -- x/y IS the planetoid's center, no raycasting onto terrain below it.
+  local spikeySpawns = {}
+  -- "Lever" objects (see lua/world/Lever.lua): placed on the ground,
+  -- same "loosely placed, snapped down onto whatever's actually below
+  -- it" convention as ooombaSpawns — the raycast itself happens in
+  -- main.lua's own spawn loop (it needs `terrainLevel.shapes`, which
+  -- isn't fully assembled yet at this point in this function), so this
+  -- is just the raw spawn point, exactly like ooombaSpawns.
+  local leverSpawns = {}
+  -- "Gate" objects (see lua/world/Gate.lua): a vertical barrier that
+  -- spans from the nearest wall/top tile BELOW the object's own point
+  -- up to the nearest wall/top tile ABOVE it — resolved right here via
+  -- a plain tile-grid scan (rather than in main.lua, like Lever above)
+  -- since that scan needs the raw layer.data/tileProps/classifyGid this
+  -- function already has in scope, not anything from the assembled
+  -- shapes/walls lists.
+  local gateSpawns = {}
+  local GATE_HALF_WIDTH = 16 -- world units — a thin vertical bar, not a full tile-wide wall
+
+  -- Scans column `col` outward from `startRow` in direction `dRow`
+  -- (+1 = downward/floor search, -1 = upward/ceiling search) for the
+  -- nearest tile classified as "wall" or a walkable "top" (isTopRole —
+  -- see that function's own comment: a wall tile's TOP counts as solid
+  -- ground too, exactly the "wall or top tile" the Gate is meant to
+  -- reach). Returns that tile's own row, or nil if the scan runs off
+  -- the map edge without finding one.
+  local function findSolidRow(col, startRow, dRow)
+    local r = startRow
+    while r >= 0 and r < height do
+      local gid = layer.data[r * width + col + 1]
+      if gid ~= 0 and isTopRole(classifyGid(tileProps, gid)) then
+        return r
+      end
+      r = r + dRow
+    end
+    return nil
+  end
+
   for _, l in ipairs(mapData.layers) do
     if l.type == "objectgroup" then
       for _, obj in ipairs(l.objects or {}) do
@@ -1617,6 +1657,47 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
           })
+        elseif obj.class == "Spikey" then
+          table.insert(spikeySpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+          })
+        elseif obj.class == "Lever" then
+          table.insert(leverSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+          })
+        elseif obj.class == "Gate" then
+          -- obj.x/y are in the RAW, unscaled tile-pixel space (same as
+          -- every gid/row/col computation in this file) — dividing by
+          -- TILE_SOURCE_SIZE (not TILE_WORLD_SIZE) is what actually
+          -- lands on the right row/col here, matching how classifyGid's
+          -- own callers index layer.data elsewhere in this file.
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE)
+          local topRow = findSolidRow(col, row, -1)
+          local bottomRow = findSolidRow(col, row, 1)
+          if topRow and bottomRow and bottomRow > topRow then
+            table.insert(gateSpawns, {
+              x = anchorX + (col + 0.5) * TILE_WORLD_SIZE,
+              topY = anchorY + (topRow + 1) * TILE_WORLD_SIZE,
+              bottomY = anchorY + bottomRow * TILE_WORLD_SIZE,
+              halfWidth = GATE_HALF_WIDTH,
+            })
+          else
+            -- Silent failure otherwise (no gate spawned at all) is
+            -- exactly the kind of thing a level designer could spend a
+            -- long time confused about — e.g. nudging the object's
+            -- point a bit and having it land ON a wall/top tile instead
+            -- of the open space between two of them collapses topRow
+            -- and bottomRow onto the same tile (or leaves one/both nil
+            -- if the scan runs off the map edge without finding solid
+            -- ground at all), and this print is the only signal that
+            -- happened.
+            print(string.format(
+              "TiledTerrain: Gate object at tile (col=%d, row=%d) failed to resolve a gate (topRow=%s, bottomRow=%s) — no gate spawned here.",
+              col, row, tostring(topRow), tostring(bottomRow)))
+          end
         end
       end
     end
@@ -1667,6 +1748,9 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     lavas = lavas,
     ooombaSpawns = ooombaSpawns,
     sphereSpawns = sphereSpawns,
+    spikeySpawns = spikeySpawns,
+    leverSpawns = leverSpawns,
+    gateSpawns = gateSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

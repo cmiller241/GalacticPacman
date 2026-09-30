@@ -186,8 +186,13 @@ local TOOLTIP_TEXT = "Press ENTER / Circle to talk"
 local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
 local TOOLTIP_GAP_ABOVE_HEAD = 26
 
+-- Not shown while curled into a ball (Player.lua's own isBall) — a
+-- ball can't interact with him at all (see the input-handler guards in
+-- InputHandlers.lua/GamePadInput.lua), so advertising the prompt then
+-- would just be misleading.
 function Fisherman:drawTooltip()
   if not self.playerNearby or self.dialogueActive then return end
+  if state.player and state.player.isBall then return end
 
   local font = love.graphics.getFont()
   local textW = font:getWidth(TOOLTIP_TEXT)
