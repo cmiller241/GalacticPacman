@@ -111,6 +111,13 @@ local gamepadHeldRight = false
 local gamepadHeldZoomIn = false
 local gamepadHeldZoomOut = false
 
+-- Edge-triggered, same pattern as the buttons above — otherwise holding
+-- the stick down/up would call enterBallMode/exitBallMode every single
+-- frame (harmless, since both already no-op once already in that
+-- state, but there's no reason to call them that often either).
+local gamepadHeldBallDown = false
+local gamepadHeldBallUp = false
+
 local function maybeAutoEnterVats()
   if state.vatsAutoEnterOnLock and not state.vatsActive and state.player and state.player.mode == "space" then
     state.vatsActive = true
@@ -160,6 +167,31 @@ local function pollGamepad(dt)
   else
     if gamepadHeldLeft then state.keys['ArrowLeft'] = false; gamepadHeldLeft = false end
     if gamepadHeldRight then state.keys['ArrowRight'] = false; gamepadHeldRight = false end
+  end
+
+  -- --- Left stick vertical: morph ball toggle --- (down = curl into
+  -- the ball, up = stand back up — see Player:enterBallMode/
+  -- exitBallMode). D-pad up/down is already zoom (see just below), so
+  -- this rides the stick's own Y axis instead rather than fighting over
+  -- the same physical input. LÖVE's gamepad Y axis follows screen-space
+  -- convention here (negative = up, positive = down), matching every
+  -- other "down" direction already used throughout this codebase.
+  local leftY = gp:getGamepadAxis("lefty") or 0
+  if leftY > STICK_DEADZONE then
+    if not gamepadHeldBallDown and state.player and state.player.mode ~= "maze" and not state.introLocked then
+      state.player:enterBallMode()
+    end
+    gamepadHeldBallDown = true
+  else
+    gamepadHeldBallDown = false
+  end
+  if leftY < -STICK_DEADZONE then
+    if not gamepadHeldBallUp and state.player and state.player.mode ~= "maze" then
+      state.player:exitBallMode()
+    end
+    gamepadHeldBallUp = true
+  else
+    gamepadHeldBallUp = false
   end
 
   -- --- D-pad up/down: zoom in/out ---
@@ -241,6 +273,9 @@ local function pollGamepad(dt)
     state.vatsActive = false
     if state.robotButler then
       state.robotButler:tryInteract(state.player)
+    end
+    if state.fisherman then
+      state.fisherman:tryInteract(state.player)
     end
   end
   lastCirclePressed = circlePressed

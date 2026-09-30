@@ -169,15 +169,25 @@ local function attachInputHandlers()
     end
 
     if key == 'ArrowDown' and state.player and state.player.mode ~= "maze" then
-      -- MazeInterior/BeamPlanetoid/angleDiff aren't ported yet —
-      -- required lazily, same reasoning as levelSetup above, so this
-      -- branch is the only thing that can't be exercised until they
-      -- exist, not the whole file.
-      local BeamPlanetoid = require("lua.world.BeamPlanetoid")
-      local MazeInterior = require("lua.interiors.MazeInterior")
-      local angleDiff = require("lua.utils").angleDiff
+      -- MazeInterior/BeamPlanetoid aren't ported yet — lua/world/BeamPlanetoid.lua
+      -- and lua/interiors/ don't exist at all, only their old JS
+      -- originals (js/world/BeamPlanetoid.js etc). require() throws
+      -- immediately when a module genuinely doesn't exist (unlike, say,
+      -- a nil global), so a plain lazy require here still crashed the
+      -- very first time this branch actually ran (ArrowDown pressed) —
+      -- pcall keeps that crash from reaching the player: since
+      -- state.player.currentPlanet can never actually BE a BeamPlanetoid
+      -- instance right now anyway (nothing in this codebase creates
+      -- one), skipping the whole branch when the require fails changes
+      -- nothing about actual behavior — it'll just start working
+      -- correctly, with no changes needed here, once BeamPlanetoid is
+      -- eventually ported.
+      local okBeam, BeamPlanetoid = pcall(require, "lua.world.BeamPlanetoid")
+      local okMaze, MazeInterior = pcall(require, "lua.interiors.MazeInterior")
+      local okUtils, angleDiff = pcall(function() return require("lua.utils").angleDiff end)
 
-      if state.player.onSurface and state.player.currentPlanet and
+      if okBeam and okMaze and okUtils and
+         state.player.onSurface and state.player.currentPlanet and
          getmetatable(state.player.currentPlanet) == BeamPlanetoid then
         local diff = angleDiff(state.player.angle, state.player.currentPlanet.beamAngle)
         if diff < math.pi / 5 then
@@ -187,10 +197,26 @@ local function attachInputHandlers()
       end
     end
 
+    -- Morph ball: ArrowDown curls up, ArrowUp stands back up (see
+    -- Player:enterBallMode/exitBallMode) — a separate, one-shot
+    -- (not isrepeat) check from the beam-teleport ArrowDown handling
+    -- just above, which only ever fires under its own much narrower
+    -- condition (standing on a BeamPlanetoid, facing its beam), so the
+    -- two don't meaningfully conflict in practice.
+    if key == 'ArrowDown' and not isrepeat and state.player and state.player.mode ~= "maze" and not state.introLocked then
+      state.player:enterBallMode()
+    end
+    if key == 'ArrowUp' and not isrepeat and state.player and state.player.mode ~= "maze" then
+      state.player:exitBallMode()
+    end
+
     if key == 'Enter' then
       tryRestartOrAdvance()
       if state.robotButler and state.player then
         state.robotButler:tryInteract(state.player)
+      end
+      if state.fisherman and state.player then
+        state.fisherman:tryInteract(state.player)
       end
     end
 
