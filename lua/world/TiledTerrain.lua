@@ -783,6 +783,181 @@ local RAMP_ARC_SEGMENTS = 10 -- straight segments approximating the quarter-circ
 -- the ordinary column scan, no exposure check the way "wall" gets)
 -- would end up covered by TWO overlapping shapes, and the seam between
 -- them reads as a hop.
+-- Mirrors buildRampClimbShape's own "wall curving into a ceiling" cap
+-- (see that function's own capRole=="ceilingLeft"/"ceilingRight" branch,
+-- and buildConvexClimbShape's own arch-cap branch) turned upside down.
+-- Called when a ceiling-backing run STOPS and finds a ceilingLeft/
+-- ceilingRight tile one row below (see that run's own "belowGid" check)
+-- that isn't already owned by some other independently-anchored ramp
+-- shape. Previously the run just assumed one must exist elsewhere and
+-- set continuesAtKey hoping to find it via capOwnerByKey — fine for the
+-- classic "two ramps meet mid-ceiling" case, but wrong when what's
+-- actually there is a ceiling dipping down into a walled archway with no
+-- separate ramp anchoring it at all: nothing would ever own that key, and
+-- the path would just dead-end.
+--
+-- This instead treats that ceilingLeft/ceilingRight tile as a genuine END
+-- cap in its own right: curves DOWN off of it into a wall descending in
+-- the adjacent column (wallCol = capCol + dir — exactly the relationship
+-- buildRampClimbShape's own START cap uses, just discovered here instead
+-- of searched for), and if that wall bottoms out onto an archLeft/
+-- archRight tile, curves into that arch and starts a fresh underside run
+-- past it — continuing in the SAME direction the ceiling run was already
+-- traveling (this is a bridge continuing the same journey forward, unlike
+-- buildConvexClimbShape's own underside run, which doubles back under a
+-- single free-standing block since there's nothing beyond it to reach).
+--
+-- Returns nil if there's no wall-into-arch structure there at all (the
+-- ordinary two-ramps-meet-directly case, where the caller's own existing
+-- continuesAtKey fallback still applies unchanged) — or a table
+-- describing the new points to append plus enough bookkeeping for the
+-- caller to classify the new segments and know where to look for a
+-- further link onward (continuesAtKey, same meaning as everywhere else in
+-- this file).
+--
+-- startPoint: the run's own last point before it stopped — already
+-- sitting exactly on this cap tile's own near corner (see the caller).
+-- capRow/capCol: the ceilingLeft/ceilingRight tile's own grid position.
+-- capRole: its own slope string, deciding which side the wall descends on
+-- (mirrors how it decides which side a START cap's wall climbs up on).
+local function tryDescendCeilingCapToArch(layer, tileProps, width, height, anchorX, anchorY, capRow, capCol, capRole, startPoint)
+  local T = TILE_WORLD_SIZE
+  local dirCap = (capRole == "ceilingLeft" and 1) or (capRole == "ceilingRight" and -1)
+  if not dirCap then return nil end
+
+  local wallCol = capCol + dirCap
+  if wallCol < 0 or wallCol >= width then return nil end
+
+  -- Same edge convention buildRampClimbShape's own wallEdgeX uses: the
+  -- side of the wall column facing back toward the cap tile (and thus
+  -- the open ceiling territory the run just came from).
+  local wallEdgeX = anchorX + (dirCap > 0 and wallCol or (wallCol + 1)) * T
+
+  -- Scan DOWNWARD (mirrors buildRampClimbShape's own upward wall search)
+  -- for contiguous "wall"-role tiles starting one row below the cap.
+  -- Left at capRow (a zero-height wall) when none are found — same
+  -- "wall stack is entirely optional" tolerance buildConvexClimbShape's
+  -- own arch-cap check already has.
+  local wallBottomRow = capRow
+  do
+    local r = capRow + 1
+    while r < height do
+      local gid = layer.data[r * width + wallCol + 1]
+      if gid == 0 or classifyGid(tileProps, gid) ~= "wall" then break end
+      wallBottomRow = r
+      r = r + 1
+    end
+  end
+
+  local archRow = wallBottomRow + 1
+  local archCol = wallCol
+  if archRow >= height then return nil end
+  local archGid = layer.data[archRow * width + archCol + 1]
+  local archRole = archGid ~= 0 and classifyGid(tileProps, archGid) or "empty"
+  if archRole ~= "archLeft" and archRole ~= "archRight" then return nil end
+
+  local claimed = {}
+  local newPoints = {}
+
+  -- First arc: ceiling cap's own corner (startPoint, already sitting
+  -- exactly on it) curving down to the wall's own top tangent point.
+  -- Center sits directly below startPoint, one tile down — a fresh
+  -- derivation (this arc runs the opposite way from buildRampClimbShape's
+  -- own cap arc, ceiling into wall rather than wall into ceiling), but
+  -- confirmed against the tile corners it has to land on exactly the same
+  -- way that function's own header comment confirms its own arcs.
+  local center1 = Vector2.new(startPoint.x, anchorY + (capRow + 1) * T)
+  -- "Start" markers below all follow the same convention capArcStart/
+  -- ceilingRunStart use in buildRampClimbShape itself: the index of the
+  -- point BEFORE the new range begins (here, since startPoint lives in
+  -- the CALLER's own points array, not in newPoints, that's simply
+  -- newPoints' current length, with no adjustment) — not the first new
+  -- point's own index.
+  local arc1Start = #newPoints
+  for i = 1, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = -math.pi / 2 + dirCap * (math.pi / 2) * t
+    table.insert(newPoints, Vector2.new(center1.x + T * math.cos(theta), center1.y + T * math.sin(theta)))
+  end
+  local arc1End = #newPoints
+
+  -- Wall segment (may end up zero-length, when the arch cap sits
+  -- directly beneath the ceiling cap with no plain wall tile between —
+  -- harmless, the segment built from it later just has zero length).
+  for r = capRow + 1, wallBottomRow do
+    claimed[r * width + wallCol] = true
+  end
+  local wallSegIndex = #newPoints
+  table.insert(newPoints, Vector2.new(wallEdgeX, anchorY + (wallBottomRow + 1) * T))
+
+  -- Second arc: wall's own bottom tangent curving into the arch tile's
+  -- own underside tangent. NOT the same construction as the first arc:
+  -- arc1 enters with a HORIZONTAL tangent (the ceiling run), so its
+  -- center sits directly below the entry point (same x, offset in y).
+  -- This arc enters with a VERTICAL tangent instead (the wall segment
+  -- just above it), so the center has to be offset the OTHER way — same
+  -- y as the entry point, offset by T in x — or the "radius perpendicular
+  -- to tangent" relationship a circle needs doesn't hold at all.
+  --
+  -- It's also convex rather than concave: the wall material genuinely
+  -- fills the block sitting between the two walls at this row (confirmed
+  -- against the real tile data — both wall columns carry a "wall" tile at
+  -- the same row here), so the center sits ON the material side, at the
+  -- corner shared between this archLeft/archRight tile and its mirror
+  -- image on the far side of the notch, and the curve bulges AWAY from
+  -- it — hugging the visible grass edge instead of cutting a chord
+  -- straight through the middle of it.
+  local entry2 = newPoints[#newPoints]
+  local center2 = Vector2.new(entry2.x + dirCap * T, entry2.y)
+  local entryTheta2 = dirCap > 0 and math.pi or 0
+  local arc2Start = #newPoints
+  for i = 1, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = entryTheta2 - dirCap * (math.pi / 2) * t
+    table.insert(newPoints, Vector2.new(center2.x + T * math.cos(theta), center2.y + T * math.sin(theta)))
+  end
+  local arc2End = #newPoints
+  claimed[archRow * width + archCol] = true
+
+  -- Underside run: stops the instant it isn't "wall"-backed anymore
+  -- (exactly like every other absorption run in this file), checking for
+  -- a same-row archLeft/archRight partner to hand off to via
+  -- continuesAtKey the same way buildConvexClimbShape's own underside run
+  -- already does — that partner is normally the mirror-image descent of
+  -- whichever OTHER ceiling run is coming from the far side of this same
+  -- archway, landing on the immediately adjacent arch tile.
+  local runStart = #newPoints
+  local continuesAtKey = nil
+  local fc = archCol + dirCap
+  while fc >= 0 and fc < width do
+    local fgid = layer.data[archRow * width + fc + 1]
+    if fgid == 0 or classifyGid(tileProps, fgid) ~= "wall" then
+      if fgid ~= 0 then
+        local hitRole = classifyGid(tileProps, fgid)
+        if hitRole == "archLeft" or hitRole == "archRight" then
+          continuesAtKey = archRow * width + fc
+        end
+      end
+      break
+    end
+    claimed[archRow * width + fc] = true
+    local edgeCol = dirCap > 0 and (fc + 1) or fc
+    table.insert(newPoints, Vector2.new(anchorX + edgeCol * T, anchorY + (archRow + 1) * T))
+    fc = fc + dirCap
+  end
+  return {
+    points = newPoints,
+    center1 = center1, arc1Start = arc1Start, arc1End = arc1End,
+    wallSegIndex = wallSegIndex,
+    center2 = center2, arc2Start = arc2Start, arc2End = arc2End,
+    runStart = runStart,
+    claimed = claimed,
+    ownCapTileKey2 = archRow * width + archCol,
+    continuesAtKey = continuesAtKey,
+    dirCap = dirCap,
+  }
+end
+
 local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
   local T = TILE_WORLD_SIZE
   local x0 = anchorX + col * T
@@ -823,6 +998,16 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   end
 
   local wallSegIndex = nil
+  -- Set only when this shape's own ceiling run dips down into a wall and
+  -- an archLeft/archRight cap (see tryDescendCeilingCapToArch below) —
+  -- the second, symmetric set of the same bookkeeping ceilingRunStart's
+  -- own cap arc gets, just one bend further along the path.
+  local descentCenter1, descentArc1Start, descentArc1End = nil, nil, nil
+  local descentWallSegIndex = nil
+  local descentCenter2, descentArc2Start, descentArc2End = nil, nil, nil
+  local descentRunStart = nil
+  local descentDirCap = nil
+  local secondaryCapTileKey = nil
   -- Set only when a ceilingLeft/ceilingRight cap is found below — a
   -- SECOND arc, with its own center, distinct from the base arc above.
   local capCenter, capArcStart, capArcEnd = nil, nil, nil
@@ -1016,7 +1201,44 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
               if belowGid and belowGid ~= 0 then
                 local belowRole = classifyGid(tileProps, belowGid)
                 if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
-                  continuesAtKey = (flatRow + 1) * width + fc
+                  -- Found a ceilingLeft/ceilingRight tile one row below —
+                  -- rather than just hoping some OTHER independently-
+                  -- anchored ramp shape already owns it (the only case
+                  -- this used to handle), first try treating IT as a
+                  -- genuine end cap of THIS shape: curving down into a
+                  -- wall and, if one's there, an archLeft/archRight cap
+                  -- beyond it (see tryDescendCeilingCapToArch's own header
+                  -- comment for why a ceiling can't otherwise dip into an
+                  -- archway without a separate crestLeft/crestRight tile
+                  -- to anchor it). Falls back to the old behavior
+                  -- (continuesAtKey pointing at this tile, hoping
+                  -- capOwnerByKey resolves it) when there's genuinely no
+                  -- wall/arch there — the ordinary two-ramps-meet-
+                  -- directly case this function has always supported.
+                  local descentCapRow = flatRow + 1
+                  local descent = tryDescendCeilingCapToArch(
+                    layer, tileProps, width, height, anchorX, anchorY,
+                    descentCapRow, fc, belowRole, points[#points])
+                  if descent then
+                    local baseIndex = #points
+                    for _, p in ipairs(descent.points) do
+                      table.insert(points, p)
+                    end
+                    descentCenter1 = descent.center1
+                    descentArc1Start = baseIndex + descent.arc1Start
+                    descentArc1End = baseIndex + descent.arc1End
+                    descentWallSegIndex = baseIndex + descent.wallSegIndex
+                    descentCenter2 = descent.center2
+                    descentArc2Start = baseIndex + descent.arc2Start
+                    descentArc2End = baseIndex + descent.arc2End
+                    descentRunStart = descent.runStart and (baseIndex + descent.runStart) or nil
+                    descentDirCap = descent.dirCap
+                    for key in pairs(descent.claimed) do claimedCells[key] = true end
+                    secondaryCapTileKey = descent.ownCapTileKey2
+                    continuesAtKey = descent.continuesAtKey
+                  else
+                    continuesAtKey = (flatRow + 1) * width + fc
+                  end
                 end
               end
             end
@@ -1038,12 +1260,36 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     local a, b = points[i], points[i + 1]
     local tangent = b:subtract(a):normalize()
     local normal
+    local isDescentArc1 = descentArc1Start and i >= descentArc1Start and i < descentArc1End
+    local isDescentArc2 = descentArc2Start and i >= descentArc2Start and i < descentArc2End
     if i <= arcSegmentCount then
       local mid = (a + b) * 0.5
       normal = center:subtract(mid):normalize()
     elseif capArcStart and i >= capArcStart and i < capArcEnd then
       local mid = (a + b) * 0.5
       normal = capCenter:subtract(mid):normalize()
+    elseif isDescentArc1 then
+      local mid = (a + b) * 0.5
+      normal = descentCenter1:subtract(mid):normalize()
+    elseif isDescentArc2 then
+      -- Convex, unlike every other arc in this file — see
+      -- tryDescendCeilingCapToArch's own comment on descentCenter2: the
+      -- center sits on the material side here, so the normal points AWAY
+      -- from it instead of toward it.
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(descentCenter2):normalize()
+    elseif i == descentWallSegIndex then
+      -- Away from the solid wall column: wallCol = capCol + descentDirCap
+      -- (see tryDescendCeilingCapToArch), so the material sits on the
+      -- descentDirCap side and the open-air/climbable normal points the
+      -- opposite way — the vertical-mirror counterpart of the ordinary
+      -- ascending wallSegIndex segment's own -dir normal.
+      normal = Vector2.new(-descentDirCap, 0)
+    elseif descentRunStart and i >= descentRunStart then
+      -- Underside run past the arch: material's above, open air's below,
+      -- regardless of which way the run travels (same reasoning
+      -- buildConvexClimbShape's own underside run uses).
+      normal = Vector2.new(0, 1)
     else
       normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
     end
@@ -1052,14 +1298,18 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     table.insert(segments, {
       a = a, b = b, tangent = tangent, normal = normal,
       length = b:subtract(a):length(),
-      isWallFace = (i == wallSegIndex),
+      isWallFace = (i == wallSegIndex) or (i == descentWallSegIndex),
       -- The ceiling cap arc (the ceilingLeft/ceilingRight tile itself)
       -- AND the flat run past it (the ceiling's own solid backing) —
       -- see Player.lua's own isCeiling check, which detaches on a stop
       -- OR a reversal here (unlike the wall face, which only detaches
       -- on a reversal — standing still on a WALL is fine, standing on
       -- open ceiling with nothing but a curve holding you up isn't).
-      isCeiling = isCapArc or isCeilingRun,
+      -- The descent arcs/run (dipping into an archway mid-shape) are the
+      -- same kind of "nothing but a curve holding you up" overhead
+      -- surface, so they're tagged isCeiling too.
+      isCeiling = isCapArc or isCeilingRun or isDescentArc1 or isDescentArc2
+        or (descentRunStart and i >= descentRunStart),
     })
   end
 
@@ -1077,6 +1327,17 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   shape.ownCapTileKey = ownCapTileKey
   shape.continuesAtKey = continuesAtKey
   shape.ceilingRunStartSegment = ceilingRunStart
+  -- Set only when this shape's own ceiling run dipped down into a wall
+  -- and an archLeft/archRight cap mid-shape (see
+  -- tryDescendCeilingCapToArch) — a second position this same shape can
+  -- be found by (linkAndMergeWallClimbShapes registers both), and a
+  -- marker telling mergeWallClimbShapes that this shape's own absorbed
+  -- run (everything from ceilingRunStartSegment onward) is genuinely new
+  -- geometry a merge partner needs to keep, not a redundant retrace of
+  -- ground the OTHER side of the merge already covered the way a plain
+  -- ceiling run meeting another ramp's cap directly would be.
+  shape.secondaryCapTileKey = secondaryCapTileKey
+  shape.hasDescent = secondaryCapTileKey ~= nil
   -- Marks this as a ramp-climb shape for every other system that needs
   -- to treat it differently from ordinary terrain: getArcSpeedMultiplier
   -- (no uphill penalty — this is meant to run at full speed), main.lua's
@@ -1355,7 +1616,14 @@ end
 -- covered from the far end — appending it too would double back over the
 -- whole ceiling a second time instead of continuing through the wall.
 local function mergeWallClimbShapes(shapeA, shapeB)
-  local cut = shapeB.ceilingRunStartSegment or (#shapeB.segments + 1)
+  -- shapeB.hasDescent means its own absorbed run doesn't just retrace
+  -- ground shapeA's own run already covered — partway through, it turned
+  -- a corner (dipped down into a wall and an archLeft/archRight cap, see
+  -- tryDescendCeilingCapToArch) and is now genuinely new geometry the
+  -- merge needs to keep, all the way to its own far end, not just up to
+  -- ceilingRunStartSegment.
+  local cut = shapeB.hasDescent and (#shapeB.segments + 1)
+    or shapeB.ceilingRunStartSegment or (#shapeB.segments + 1)
   for i = cut - 1, 1, -1 do
     local seg = shapeB.segments[i]
     table.insert(shapeA.segments, {
@@ -1381,12 +1649,23 @@ end
 -- cap, that owning shape, and merges them (see mergeWallClimbShapes).
 -- Loops until a full pass makes no further merges, so a shape freshly
 -- extended by one merge is still eligible to be found (as either side)
--- by another — the general case for any chain longer than two, even
--- though the only shape this level currently has forms just one pair.
+-- by another — genuinely exercised now by chains longer than a single
+-- pair (e.g. a wall/ceiling/wall climb, arched across to a second
+-- wall/ceiling/wall climb, all one continuous loop), which is also why
+-- shapeB's own continuesAtKey and cap-tile ownership both get carried
+-- forward onto shapeA below after each merge, not just discarded —
+-- earlier versions of this function only ever handled a single pair
+-- correctly.
 local function linkAndMergeWallClimbShapes(shapes)
   local capOwnerByKey = {}
   for _, shape in ipairs(shapes) do
     if shape.ownCapTileKey then capOwnerByKey[shape.ownCapTileKey] = shape end
+    -- secondaryCapTileKey: this same shape's OWN dip into a wall+arch
+    -- (see tryDescendCeilingCapToArch) lands on a second tile position —
+    -- typically the immediately adjacent archLeft/archRight tile another
+    -- shape's own mirror-image dip lands on from the far side of the same
+    -- archway — findable the same way ownCapTileKey already is.
+    if shape.secondaryCapTileKey then capOwnerByKey[shape.secondaryCapTileKey] = shape end
   end
 
   local absorbed = {}
@@ -1399,7 +1678,38 @@ local function linkAndMergeWallClimbShapes(shapes)
         if shapeB and shapeB ~= shapeA and not absorbed[shapeB] then
           mergeWallClimbShapes(shapeA, shapeB)
           absorbed[shapeB] = true
-          shapeA.continuesAtKey = nil
+
+          -- Redirect anything that still thinks shapeB owns its own cap
+          -- tile to shapeA instead: shapeB's geometry now physically
+          -- lives inside shapeA (see mergeWallClimbShapes), so a THIRD
+          -- shape further down the path whose own continuesAtKey points
+          -- at that same tile position needs to resolve to whichever
+          -- shape is actually still there, not the now-absorbed one —
+          -- capOwnerByKey was only ever built once, up front, and never
+          -- updated as merges happen, so without this a chain longer
+          -- than two shapes could never find its way past the first
+          -- splice: it would look up shapeB, see it's already absorbed,
+          -- and give up rather than continuing on to shapeA.
+          if shapeB.ownCapTileKey then
+            capOwnerByKey[shapeB.ownCapTileKey] = shapeA
+          end
+          if shapeB.secondaryCapTileKey then
+            capOwnerByKey[shapeB.secondaryCapTileKey] = shapeA
+          end
+
+          -- Carry shapeB's own continuation forward instead of just
+          -- clearing shapeA's — shapeB may ITSELF have been mid-chain
+          -- (its own ceiling/underside run reaching into a THIRD
+          -- shape's cap, e.g. an arch bridging to another wall-climb
+          -- further along), and unconditionally clearing this after
+          -- absorbing shapeB silently dropped that on the floor,
+          -- capping every chain at a single pair no matter how many
+          -- more pieces the level actually drew. When shapeB had no
+          -- further continuation of its own, shapeB.continuesAtKey is
+          -- already nil, so this still ends the chain there exactly
+          -- like the old unconditional nil did.
+          shapeA.continuesAtKey = shapeB.continuesAtKey
+
           mergedAny = true
         end
       end
@@ -1608,6 +1918,17 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- point-placement convention as sphereSpawns above — the object's own
   -- x/y IS the planetoid's center, no raycasting onto terrain below it.
   local spikeySpawns = {}
+  -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua): same
+  -- hazard, but patrols up and down within a shaft instead of sitting
+  -- still. topY/bottomY are the WALL half of its patrol bounds —
+  -- resolved right here via the same tile-grid scan Gate uses just
+  -- below, for the same reason (needs the raw layer.data/tileProps this
+  -- function has in scope). The OTHER half — clamping those bounds
+  -- against any nearby static Spikey sitting in the same shaft — needs
+  -- to happen in main.lua instead, once every Spikey has actually been
+  -- spawned (this function only knows about the tile grid, not other
+  -- entity spawns).
+  local spikeyVerticalSpawns = {}
   -- "Lever" objects (see lua/world/Lever.lua): placed on the ground,
   -- same "loosely placed, snapped down onto whatever's actually below
   -- it" convention as ooombaSpawns — the raycast itself happens in
@@ -1698,6 +2019,44 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
               "TiledTerrain: Gate object at tile (col=%d, row=%d) failed to resolve a gate (topRow=%s, bottomRow=%s) — no gate spawned here.",
               col, row, tostring(topRow), tostring(bottomRow)))
           end
+        elseif obj.class == "Spikey-Vertical" then
+          -- col/row (for the wall scan below) DO need the tile-grid
+          -- conversion Gate uses (obj.x/y are in the RAW, unscaled
+          -- tile-pixel space) — but the entity's own world x is kept at
+          -- its EXACT raw position, same convention ordinary Spikey
+          -- uses just above, NOT snapped to the tile column's own
+          -- center the way Gate's x is. Gate genuinely needs that snap
+          -- (a wall should sit centered in its corridor tile) — a
+          -- Spikey-Vertical is just a circular hazard like any other
+          -- Spikey, and snapping it introduced a visible horizontal
+          -- offset from a stationary Spikey placed at the exact same x
+          -- in Tiled, since the two would then use different position
+          -- math for what was supposed to be an identical value.
+          --
+          -- Only the WALL half of the patrol bounds is resolved here —
+          -- topY/bottomY are left nil whenever findSolidRow doesn't
+          -- find one in that direction, rather than failing the whole
+          -- spawn outright: a shaft can just as validly be bounded by a
+          -- nearby static Spikey instead of a wall (see this file's own
+          -- spikeyVerticalSpawns comment), and this function has no way
+          -- to know about other entity spawns — main.lua's own spawn
+          -- wiring is what actually falls back to that, and it's the
+          -- only place that can tell whether BOTH kinds of bound ended
+          -- up missing on a given side.
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE)
+          local topRow = findSolidRow(col, row, -1)
+          local bottomRow = findSolidRow(col, row, 1)
+          table.insert(spikeyVerticalSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            topY = topRow and (anchorY + (topRow + 1) * TILE_WORLD_SIZE) or nil,
+            bottomY = bottomRow and (anchorY + bottomRow * TILE_WORLD_SIZE) or nil,
+            -- Optional per-object override — set in Tiled via a custom
+            -- Float property named "speed" on this point; nil (falling
+            -- back to SpikeyVertical.DEFAULT_SPEED) when not set.
+            speed = obj.properties and obj.properties.speed,
+          })
         end
       end
     end
@@ -1751,6 +2110,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     spikeySpawns = spikeySpawns,
     leverSpawns = leverSpawns,
     gateSpawns = gateSpawns,
+    spikeyVerticalSpawns = spikeyVerticalSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,
