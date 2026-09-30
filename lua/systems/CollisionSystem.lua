@@ -98,10 +98,40 @@ end
 -- whether they're walking into it or jumping into it.
 function CollisionSystem:handlePlayerWallCollisions(player, walls)
   if not walls then return end
+
+  -- Vertical CAPSULE instead of a bare circle: player.pos still anchors
+  -- the BOTTOM circle exactly as before (every other system — ground
+  -- distance, water, enemies — keeps treating that the same way), and
+  -- segTopY is how much further UP the capsule's center segment
+  -- extends, derived from Player.lua's own headReach (how tall he
+  -- actually looks, helmet included) minus this circle's own radius,
+  -- since the top circle already contributes that much reach on its
+  -- own. Without this, a plain circle centered near his feet never
+  -- reached anywhere close to his actual head height, so a low ceiling
+  -- tile could visibly clip through his helmet without ever registering
+  -- a collision. headReach<=player.radius collapses segTopY back to
+  -- player.pos.y, i.e. exactly the old single-circle behavior.
+  -- Zeroed out while morphed into a ball (see Player.lua's own
+  -- isBall/drawBallMode) — a ball is drawn as a plain circle with
+  -- nothing reaching up past its own radius, so the capsule collapses
+  -- back to an ordinary circle there, matching what's actually drawn.
+  local headReach = (not player.isBall) and (player.headReach or 0) or 0
+  local segBottomY = player.pos.y
+  local segTopY = player.pos.y - math.max(0, headReach - player.radius)
+
   for _, wall in ipairs(walls) do
-    local closestX = math.max(wall.pos.x - wall.halfWidth, math.min(player.pos.x, wall.pos.x + wall.halfWidth))
-    local closestY = math.max(wall.pos.y - wall.halfHeight, math.min(player.pos.y, wall.pos.y + wall.halfHeight))
-    local dx, dy = player.pos.x - closestX, player.pos.y - closestY
+    local boxMinX, boxMaxX = wall.pos.x - wall.halfWidth, wall.pos.x + wall.halfWidth
+    local boxMinY, boxMaxY = wall.pos.y - wall.halfHeight, wall.pos.y + wall.halfHeight
+
+    -- Nearest point ON THE CAPSULE'S OWN CENTER SEGMENT to the wall's
+    -- center, then the nearest point ON THE WALL to THAT — exact for a
+    -- vertical segment against an axis-aligned box, since the segment's
+    -- X never varies along its length (the two clamps reduce to the
+    -- ordinary single-point circle case whenever segTopY == segBottomY).
+    local segY = math.max(segTopY, math.min(wall.pos.y, segBottomY))
+    local closestX = math.max(boxMinX, math.min(player.pos.x, boxMaxX))
+    local closestY = math.max(boxMinY, math.min(segY, boxMaxY))
+    local dx, dy = player.pos.x - closestX, segY - closestY
     local distSq = dx * dx + dy * dy
 
     if distSq < player.radius * player.radius then
@@ -112,12 +142,15 @@ function CollisionSystem:handlePlayerWallCollisions(player, walls)
         normal = Vector2.new(dx / dist, dy / dist)
         penetration = player.radius - dist
       else
-        -- Player's center is exactly inside the rectangle (only reachable
-        -- by tunneling through in one big step) — push out along whichever
-        -- axis has the smaller overlap, the standard AABB-resolution
-        -- fallback for a zero-distance closest point.
+        -- Capsule's center segment passes exactly inside the rectangle
+        -- (only reachable by tunneling through in one big step) — push
+        -- out along whichever axis has the smaller overlap, the
+        -- standard AABB-resolution fallback for a zero-distance closest
+        -- point, just measured against the capsule's own full vertical
+        -- extent (segTopY-radius .. segBottomY+radius) instead of a
+        -- single Y value.
         local overlapX = (wall.halfWidth + player.radius) - math.abs(player.pos.x - wall.pos.x)
-        local overlapY = (wall.halfHeight + player.radius) - math.abs(player.pos.y - wall.pos.y)
+        local overlapY = math.min(segBottomY + player.radius, boxMaxY) - math.max(segTopY - player.radius, boxMinY)
         if overlapX < overlapY then
           normal = Vector2.new(player.pos.x >= wall.pos.x and 1 or -1, 0)
           penetration = overlapX
