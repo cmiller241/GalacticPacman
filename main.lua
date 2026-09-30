@@ -25,6 +25,9 @@ local RobotButler = require("lua.entities.RobotButler")
 local Fisherman = require("lua.entities.Fisherman")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
+local Spikey = require("lua.world.Spikey")
+local Lever = require("lua.world.Lever")
+local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
 local LockOutline = require("lua.effects.LockOutline")
@@ -321,6 +324,65 @@ function love.load()
     for _, spawn in ipairs(terrainLevel.sphereSpawns or {}) do
       table.insert(state.planetoids, Sphere.new(spawn.x, spawn.y))
     end
+
+    -- "Spikey" objects (see lua/world/Spikey.lua): gray, spike-ringed
+    -- hazards that kill the player on contact
+    -- (CollisionSystem:handlePlayerSpikeyCollisions) — deliberately NOT
+    -- planetoids (no gravity, no landing/orbital walking around them),
+    -- so they get their own separate list rather than state.planetoids.
+    -- Stationary, same point-placement convention as the Sphere spawns
+    -- just above.
+    state.spikeys = {}
+    for _, spawn in ipairs(terrainLevel.spikeySpawns or {}) do
+      table.insert(state.spikeys, Spikey.new(spawn.x, spawn.y))
+    end
+
+    -- "Lever" objects (see lua/world/Lever.lua): placed on the ground
+    -- via the exact same raycast-down approach as Ooombas above (loosely
+    -- placed in Tiled, snapped onto whatever TerrainShape surface
+    -- actually sits below it).
+    state.levers = {}
+    for _, spawn in ipairs(terrainLevel.leverSpawns or {}) do
+      local bestShape, bestDy, bestHit = nil, nil, nil
+      for _, shape in ipairs(terrainLevel.shapes) do
+        if not shape.isWallClimb then
+          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
+          if hit then
+            local dy = hit.point.y - spawn.y
+            if dy >= 0 and (not bestDy or dy < bestDy) then
+              bestDy = dy
+              bestShape = shape
+              bestHit = hit
+            end
+          end
+        end
+      end
+      if bestHit then
+        table.insert(state.levers, Lever.new(bestHit.point.x, bestHit.point.y))
+      end
+    end
+
+    -- "Gate" objects (see lua/world/Gate.lua): topY/bottomY/halfWidth
+    -- are already fully resolved by TiledTerrain.lua's own tile-grid
+    -- scan (see its gateSpawns). Inserted into BOTH terrainLevel.walls
+    -- (so CollisionSystem:handlePlayerWallCollisions blocks the player
+    -- with zero changes needed there) and state.gates (so main.lua's
+    -- own update/draw loops below can animate and render it) — the
+    -- exact same object serves both roles at once.
+    state.gates = {}
+    for _, spawn in ipairs(terrainLevel.gateSpawns or {}) do
+      local gate = Gate.new(spawn.x, spawn.topY, spawn.bottomY, spawn.halfWidth)
+      table.insert(terrainLevel.walls, gate)
+      table.insert(state.gates, gate)
+    end
+
+    -- Wires the one lever to the one gate for now — see both files' own
+    -- header comments on why this is a direct reference rather than a
+    -- generic many-to-many linking system (that can replace this later
+    -- without changing anything else about how either object works).
+    if state.levers[1] and state.gates[1] then
+      state.levers[1].gate = state.gates[1]
+    end
   end
 
   -- Spawns at the shelter's own doorway, not dome center — the opening
@@ -455,6 +517,19 @@ function love.update(dt)
   end
 
   WaterPlanet.updateSharedClock()
+  Spikey.updateSharedClock()
+
+  if state.levers then
+    for _, lever in ipairs(state.levers) do
+      lever:update()
+    end
+  end
+
+  if state.gates then
+    for _, gate in ipairs(state.gates) do
+      gate:update(state.timeScale or 1)
+    end
+  end
 
   if state.fish then
     for _, fish in ipairs(state.fish) do
@@ -515,18 +590,23 @@ function love.update(dt)
     state.player:shootFireball()
   end
 
+  -- Reset once per frame, before re-checking walls AND Spikeys below —
+  -- neither handlePlayerWallCollisions nor handlePlayerSpikeyCollisions
+  -- ever CLEARS this, only sets it on actual contact, so without this
+  -- the flag would latch true forever after the first touch instead of
+  -- reflecting only THIS frame's contact (see Player:jump's wall-jump
+  -- branch, which is also what lets him "jump off" a Spikey — see
+  -- CollisionSystem:handlePlayerSpikeyCollisions's own comment).
+  state.player.touchingWall = nil
+  state.player.wallContactNormal = nil
+
   if state.tiledLevels then
-    -- Reset once per frame, before re-checking every level's walls below
-    -- — handlePlayerWallCollisions only ever SETS this (on actual
-    -- contact), never clears it, so without this the flag would latch
-    -- true forever after the first touch instead of reflecting only
-    -- THIS frame's contact (see Player:jump's wall-jump branch).
-    state.player.touchingWall = nil
-    state.player.wallContactNormal = nil
     for _, level in ipairs(state.tiledLevels) do
       collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
     end
   end
+
+  collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
 
   -- Belt planetoids alone can number in the hundreds
   -- (worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500), and almost all of them
@@ -821,6 +901,18 @@ function love.draw()
     end
   end
 
+  -- Spikey (lua/world/Spikey.lua) isn't in state.planetoids anymore (see
+  -- its own header comment on why — it's deliberately not a planet),
+  -- so it needs its own explicit draw pass instead of riding the loop
+  -- just above.
+  if state.spikeys then
+    for _, sp in ipairs(state.spikeys) do
+      if utils.isOnScreen(sp.pos.x, sp.pos.y, sp.radius, 50) then
+        sp:draw()
+      end
+    end
+  end
+
   if state.tiledLevels then
     for _, level in ipairs(state.tiledLevels) do
       if utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50) then
@@ -865,6 +957,28 @@ function love.draw()
           love.graphics.setColor(1, 1, 1, 1)
           love.graphics.setLineWidth(1)
         end
+      end
+    end
+  end
+
+  -- Gate/Lever (see lua/world/Gate.lua, lua/world/Lever.lua) — drawn
+  -- every frame regardless of state.showCollisionDebug above, since
+  -- that debug view only shows the gate's current COLLISION rectangle
+  -- (via level.walls, since a Gate is inserted directly into that same
+  -- array), not its actual bar/cross-bar art.
+  if state.gates then
+    for _, gate in ipairs(state.gates) do
+      if utils.isOnScreen(gate.pos.x, gate.pos.y, math.max(gate.halfWidth, gate.halfHeight), 20) then
+        gate:draw()
+      end
+    end
+  end
+
+  if state.levers then
+    for _, lever in ipairs(state.levers) do
+      if utils.isOnScreen(lever.pos.x, lever.pos.y, 80, 20) then
+        lever:draw()
+        lever:drawTooltip()
       end
     end
   end
@@ -975,7 +1089,13 @@ function love.draw()
   -- distinct from the red/blue/green wall-shape debug lines above.
   if state.showCollisionDebug then
     local r = state.player.radius
-    local headReach = (not state.player.isBall) and (state.player.headReach or 0) or 0
+    -- Same onWallClimb exemption CollisionSystem:handlePlayerWallCollisions
+    -- itself uses — see that file's own comment on why the head capsule
+    -- collapses to a plain circle there (it doesn't rotate with the
+    -- surface, so it otherwise pokes into the ceiling right at a
+    -- wall-climb shape's own ceilingLeft/ceilingRight seam).
+    local onWallClimb = state.player.onSurface and state.player.currentPlanet and state.player.currentPlanet.isWallClimb
+    local headReach = (not state.player.isBall and not onWallClimb) and (state.player.headReach or 0) or 0
     local topY = state.player.pos.y - math.max(0, headReach - r)
     local bottomY = state.player.pos.y
     local px = state.player.pos.x
@@ -987,6 +1107,27 @@ function love.draw()
     if topY < bottomY then
       love.graphics.line(px - r, topY, px - r, bottomY)
       love.graphics.line(px + r, topY, px + r, bottomY)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setLineWidth(1)
+  end
+
+  -- Debug: Spikey's own solid collision boundary (same 'C' toggle as
+  -- every other debug view here) — see
+  -- CollisionSystem:handlePlayerSpikeyCollisions's own sweptCircleEntryT
+  -- for the actual solid-stop logic this circle represents:
+  -- spikey.radius + player.radius + SURFACE_TOLERANCE, i.e. where the
+  -- player's OWN collision circle first touches the spikey's, not just
+  -- its bare radius. Drawn in orange to read as "danger boundary,"
+  -- distinct from the blue ordinary-wall / magenta player-capsule debug
+  -- lines elsewhere.
+  if state.showCollisionDebug and state.player and state.spikeys then
+    love.graphics.setLineWidth(3)
+    love.graphics.setColor(1, 0.55, 0, 1)
+    for _, sp in ipairs(state.spikeys) do
+      if utils.isOnScreen(sp.pos.x, sp.pos.y, sp.radius + state.player.radius, 20) then
+        love.graphics.circle("line", sp.pos.x, sp.pos.y, sp.radius + state.player.radius + constants.SURFACE_TOLERANCE)
+      end
     end
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setLineWidth(1)

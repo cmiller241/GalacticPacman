@@ -16,52 +16,25 @@
 
 local Planetoid = require("lua.world.Planetoid")
 local Vector2 = require("lua.vector2")
+local GlowOrb = require("lua.effects.GlowOrb")
 
 local Sphere = {}
 
 Sphere.DEFAULT_RADIUS = 30
 Sphere.COLOR = { 0.6, 0.63, 0.67, 1 }
 
-local RIM_COLOR = { 0.18, 0.19, 0.22, 1 }
-local SHADOW_COLOR = { 0, 0, 0, 0.35 }
-local HIGHLIGHT_COLOR = { 1, 1, 1, 0.55 }
-local SPECULAR_COLOR = { 1, 1, 1, 0.9 }
+-- GPU-shaded metallic look (see lua/effects/GlowOrb.lua) — a cool,
+-- silvery gradient with a soft blue-white ambient glow, replacing the
+-- old flat stencil-circle shadow/highlight/specular hack.
+local ORB_COLORS = {
+  dark = { 0.22, 0.24, 0.28 },
+  light = { 0.78, 0.81, 0.86 },
+  rim = { 0.92, 0.95, 1.0 },
+  glow = { 0.55, 0.70, 0.95 },
+}
 
--- Flat, per-frame shading (a handful of circles inside a stencil clip) —
--- no baked canvas the way Planetoid's own ensureBodyCanvas needs, since
--- this is small and there are only ever a few of them, unlike the
--- hundreds of belt planetoids that pattern exists to amortize.
 local function drawMetallic(self)
-  local x, y, r = self.pos.x, self.pos.y, self.radius
-
-  love.graphics.stencil(function()
-    love.graphics.circle("fill", x, y, r)
-  end, "replace", 1)
-  love.graphics.setStencilTest("greater", 0)
-
-  love.graphics.setColor(self.color)
-  love.graphics.circle("fill", x, y, r)
-
-  -- Shadowed side, away from the light (upper-left).
-  love.graphics.setColor(SHADOW_COLOR)
-  love.graphics.circle("fill", x + r * 0.4, y + r * 0.4, r * 0.9)
-
-  -- Broad soft highlight toward the light.
-  love.graphics.setColor(HIGHLIGHT_COLOR)
-  love.graphics.circle("fill", x - r * 0.35, y - r * 0.35, r * 0.45)
-
-  -- Tight specular point.
-  love.graphics.setColor(SPECULAR_COLOR)
-  love.graphics.circle("fill", x - r * 0.45, y - r * 0.45, r * 0.15)
-
-  love.graphics.setStencilTest()
-
-  love.graphics.setColor(RIM_COLOR)
-  love.graphics.setLineWidth(math.max(1, r * 0.15))
-  love.graphics.circle("line", x, y, r)
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.setLineWidth(1)
+  GlowOrb.draw(self.pos.x, self.pos.y, self.radius, ORB_COLORS)
 end
 
 -- x, y: world position of the sphere's CENTER.
