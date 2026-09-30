@@ -26,6 +26,7 @@ local Fisherman = require("lua.entities.Fisherman")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
 local Spikey = require("lua.world.Spikey")
+local SpikeyVertical = require("lua.world.SpikeyVertical")
 local Lever = require("lua.world.Lever")
 local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
@@ -337,6 +338,53 @@ function love.load()
       table.insert(state.spikeys, Spikey.new(spawn.x, spawn.y))
     end
 
+    -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua):
+    -- same hazard, but patrols up and down within a shaft.
+    -- TiledTerrain.lua's own tile-grid scan already resolved topY/
+    -- bottomY against the nearest WALL in each direction, where one
+    -- exists — this pass additionally clamps (or, if that scan found
+    -- no wall at all on a given side, ENTIRELY SUPPLIES) those bounds
+    -- against any Spikey (from the loop just above) sitting in the
+    -- same column, so "collides with a wall OR another Spikey" holds
+    -- as two genuinely equal alternatives, not "a wall, with Spikeys
+    -- only ever narrowing that further." A shaft with a wall ceiling
+    -- but no floor tile at all — bounded only by a stack of ordinary
+    -- Spikeys below it — is exactly the case this fixes: TiledTerrain's
+    -- own scan leaves bottomY nil there, and this pass is what actually
+    -- resolves it instead of leaving the whole spawn dead on arrival.
+    -- Added to the same state.spikeys list as everything else here, so
+    -- it's collided with/drawn exactly like a plain Spikey with zero
+    -- extra wiring anywhere else.
+    local SPIKEY_VERTICAL_RADIUS = Spikey.DEFAULT_RADIUS
+    for _, spawn in ipairs(terrainLevel.spikeyVerticalSpawns or {}) do
+      local topY, bottomY = spawn.topY, spawn.bottomY
+      for _, other in ipairs(state.spikeys) do
+        -- "Same column" fuzziness — both radii, not just one, since
+        -- either body's own width can bring them into contact even
+        -- when their CENTERS aren't perfectly aligned.
+        if math.abs(other.pos.x - spawn.x) < other.radius + SPIKEY_VERTICAL_RADIUS then
+          if other.pos.y < spawn.y then
+            local bound = other.pos.y + other.radius + SPIKEY_VERTICAL_RADIUS
+            topY = topY and math.max(topY, bound) or bound
+          elseif other.pos.y > spawn.y then
+            local bound = other.pos.y - other.radius - SPIKEY_VERTICAL_RADIUS
+            bottomY = bottomY and math.min(bottomY, bound) or bound
+          end
+        end
+      end
+      -- Only NOW (after both a wall AND a nearby-Spikey chance) is this
+      -- actually a failure — nothing at all bounds one side, which
+      -- would let it patrol forever in that direction with nothing to
+      -- ever turn it around.
+      if topY and bottomY and bottomY > topY then
+        table.insert(state.spikeys, SpikeyVertical.new(spawn.x, topY, bottomY, SPIKEY_VERTICAL_RADIUS, spawn.speed))
+      else
+        print(string.format(
+          "main.lua: Spikey-Vertical at (%.1f, %.1f) found no wall or nearby Spikey to bound it on one side (topY=%s, bottomY=%s) — not spawned.",
+          spawn.x, spawn.y, tostring(topY), tostring(bottomY)))
+      end
+    end
+
     -- "Lever" objects (see lua/world/Lever.lua): placed on the ground
     -- via the exact same raycast-down approach as Ooombas above (loosely
     -- placed in Tiled, snapped onto whatever TerrainShape surface
@@ -518,6 +566,15 @@ function love.update(dt)
 
   WaterPlanet.updateSharedClock()
   Spikey.updateSharedClock()
+
+  -- Duck-typed: a plain Spikey has no :update() at all (it never
+  -- moves), only SpikeyVertical does — this one loop covers both kinds
+  -- without state.spikeys needing to be split into separate lists.
+  if state.spikeys then
+    for _, sp in ipairs(state.spikeys) do
+      if sp.update then sp:update() end
+    end
+  end
 
   if state.levers then
     for _, lever in ipairs(state.levers) do
