@@ -25,8 +25,10 @@ local RobotButler = require("lua.entities.RobotButler")
 local Fisherman = require("lua.entities.Fisherman")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
+local SphereMove = require("lua.world.SphereMove")
 local Spikey = require("lua.world.Spikey")
 local SpikeyVertical = require("lua.world.SpikeyVertical")
+local SpikeyOrbit = require("lua.world.SpikeyOrbit")
 local Lever = require("lua.world.Lever")
 local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
@@ -322,8 +324,30 @@ function love.load()
     -- other planetoid. Unlike Ooombas above, the spawn point IS the
     -- sphere's own center — no raycast-onto-terrain needed for a
     -- freestanding body.
+    --
+    -- entitiesById collects every spawned Sphere/Spikey by its own
+    -- Tiled object id as it goes, so a Spikey-Orbit object further down
+    -- this same loop set (spawned after all of these, see
+    -- spikeyOrbitSpawns below) can resolve its own "orbit" property —
+    -- just the raw id at this point, read by TiledTerrain.lua — back to
+    -- the actual entity it names, whichever of these two lists it came
+    -- from.
+    local entitiesById = {}
     for _, spawn in ipairs(terrainLevel.sphereSpawns or {}) do
-      table.insert(state.planetoids, Sphere.new(spawn.x, spawn.y))
+      local sphere = Sphere.new(spawn.x, spawn.y)
+      table.insert(state.planetoids, sphere)
+      if spawn.id then entitiesById[spawn.id] = sphere end
+    end
+
+    -- "Sphere-Move" objects (see lua/world/SphereMove.lua): same Sphere,
+    -- just shuttling back and forth between two points instead of
+    -- sitting still. Added straight into state.planetoids too — it's a
+    -- full Planetoid in every other respect (gravity, landing,
+    -- pull-beam targeting), so it needs no separate list or wiring
+    -- anywhere else, just like plain Sphere above.
+    for _, spawn in ipairs(terrainLevel.sphereMoveSpawns or {}) do
+      table.insert(state.planetoids, SphereMove.new(
+        spawn.x, spawn.y, spawn.startX, spawn.startY, spawn.endX, spawn.endY, nil, spawn.speed))
     end
 
     -- "Spikey" objects (see lua/world/Spikey.lua): gray, spike-ringed
@@ -335,7 +359,9 @@ function love.load()
     -- just above.
     state.spikeys = {}
     for _, spawn in ipairs(terrainLevel.spikeySpawns or {}) do
-      table.insert(state.spikeys, Spikey.new(spawn.x, spawn.y))
+      local spikey = Spikey.new(spawn.x, spawn.y)
+      table.insert(state.spikeys, spikey)
+      if spawn.id then entitiesById[spawn.id] = spikey end
     end
 
     -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua):
@@ -382,6 +408,24 @@ function love.load()
         print(string.format(
           "main.lua: Spikey-Vertical at (%.1f, %.1f) found no wall or nearby Spikey to bound it on one side (topY=%s, bottomY=%s) — not spawned.",
           spawn.x, spawn.y, tostring(topY), tostring(bottomY)))
+      end
+    end
+
+    -- "Spikey-Orbit" objects (see lua/world/SpikeyOrbit.lua): same
+    -- hazard again, but orbits clockwise around whatever entity its own
+    -- "orbit" property names (resolved here against entitiesById, built
+    -- above as the Sphere/Spikey spawns happened — this is why this
+    -- loop has to come after both of those, not before). The orbit's
+    -- own radius/starting angle come from however far apart the two
+    -- objects actually are in Tiled right now — see SpikeyOrbit.new.
+    for _, spawn in ipairs(terrainLevel.spikeyOrbitSpawns or {}) do
+      local center = spawn.orbitId and entitiesById[spawn.orbitId]
+      if center then
+        table.insert(state.spikeys, SpikeyOrbit.new(spawn.x, spawn.y, center, Spikey.DEFAULT_RADIUS, spawn.speed))
+      else
+        print(string.format(
+          "main.lua: Spikey-Orbit at (%.1f, %.1f) names orbit id %s, which isn't a spawned Sphere/Spikey — not spawned.",
+          spawn.x, spawn.y, tostring(spawn.orbitId)))
       end
     end
 
@@ -532,6 +576,14 @@ function love.update(dt)
   state.timeScale = state.vatsMultiplier * frameNorm
 
   updatePlanetoidsPhysics()
+
+  -- Duck-typed, same pattern state.spikeys' own update loop already
+  -- uses: only SphereMove (so far) actually has an :update() of its
+  -- own, driving self.pos directly along its fixed patrol path — every
+  -- other planetoid type is left untouched here, same as always.
+  for _, p in ipairs(state.planetoids) do
+    if p.update then p:update() end
+  end
 
   if state.asteroids then
     for _, a in ipairs(state.asteroids) do
