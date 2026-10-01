@@ -1945,6 +1945,23 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- shapes/walls lists.
   local gateSpawns = {}
   local GATE_HALF_WIDTH = 16 -- world units — a thin vertical bar, not a full tile-wide wall
+  -- "Spikey-Orbit" objects (see lua/world/SpikeyOrbit.lua): a Spikey that
+  -- orbits another entity instead of sitting still or patrolling a
+  -- shaft. orbitId is the raw Tiled object id its own "orbit" custom
+  -- property names (a String property in practice, per Tiled's own
+  -- export — tonumber here turns it back into the number main.lua needs
+  -- to look it up against the OTHER spawn lists' own `id` fields, which
+  -- is where the actual resolution happens: this function only knows the
+  -- tile grid and this object layer's own data, not which entities main.lua
+  -- ends up spawning from any of it).
+  local spikeyOrbitSpawns = {}
+  -- "Sphere-Move" objects (see lua/world/SphereMove.lua): a Sphere that
+  -- shuttles back and forth between two points instead of sitting still.
+  -- Its own x/y (like plain Sphere) is just where it starts out; the
+  -- startX/startY/endX/endY/speed custom properties (Strings in Tiled's
+  -- own export, same as every other custom property here — tonumber'd
+  -- below) describe the actual path.
+  local sphereMoveSpawns = {}
 
   -- Scans column `col` outward from `startRow` in direction `dRow`
   -- (+1 = downward/floor search, -1 = upward/ceiling search) for the
@@ -1977,11 +1994,18 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
           table.insert(sphereSpawns, {
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
+            -- Tiled's own object id — exposed so a Spikey-Orbit object
+            -- elsewhere in this same layer can reference this one by it
+            -- (see spikeyOrbitSpawns below and main.lua's own spawn
+            -- wiring, which is where that reference actually gets
+            -- resolved to the real spawned Sphere).
+            id = obj.id,
           })
         elseif obj.class == "Spikey" then
           table.insert(spikeySpawns, {
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
+            id = obj.id,
           })
         elseif obj.class == "Lever" then
           table.insert(leverSpawns, {
@@ -2057,6 +2081,33 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             -- back to SpikeyVertical.DEFAULT_SPEED) when not set.
             speed = obj.properties and obj.properties.speed,
           })
+        elseif obj.class == "Spikey-Orbit" then
+          -- Both custom properties come through as Strings in Tiled's own
+          -- lua export (confirmed directly against tiled/Level1.lua's own
+          -- data) — tonumber turns "28"/"3.5" back into real numbers.
+          table.insert(spikeyOrbitSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            orbitId = obj.properties and tonumber(obj.properties.orbit),
+            speed = obj.properties and tonumber(obj.properties.speed),
+          })
+        elseif obj.class == "Sphere-Move" then
+          local props = obj.properties or {}
+          -- startX/startY/endX/endY are authored in the SAME raw,
+          -- unscaled tile-pixel space obj.x/y themselves are (that's the
+          -- only coordinate space a level designer placing points in
+          -- Tiled ever sees), so they need the identical
+          -- anchor+TILE_SCALE conversion applied to obj.x/y just below,
+          -- not a bare pass-through.
+          table.insert(sphereMoveSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            startX = anchorX + (tonumber(props.startX) or obj.x) * TILE_SCALE,
+            startY = anchorY + (tonumber(props.startY) or obj.y) * TILE_SCALE,
+            endX = anchorX + (tonumber(props.endX) or obj.x) * TILE_SCALE,
+            endY = anchorY + (tonumber(props.endY) or obj.y) * TILE_SCALE,
+            speed = tonumber(props.speed),
+          })
         end
       end
     end
@@ -2111,6 +2162,8 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     leverSpawns = leverSpawns,
     gateSpawns = gateSpawns,
     spikeyVerticalSpawns = spikeyVerticalSpawns,
+    spikeyOrbitSpawns = spikeyOrbitSpawns,
+    sphereMoveSpawns = sphereMoveSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,
