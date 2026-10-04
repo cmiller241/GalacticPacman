@@ -90,14 +90,33 @@ local function drawPullIndicator()
 
   -- Outline around the target
   if target.isRoundedRect then
-    -- Simple fallback: still draw a circle-ish outline for now
+    -- A true rotated rounded-rect outline, matching the target's own
+    -- actual silhouette (halfWidth/halfHeight/cornerRadius/
+    -- rotationAngle — RoundedRectPlanetoid.lua's own fields; SkyDome/
+    -- JumpPlatform are also isRoundedRect but isPullExempt, so they
+    -- never actually reach here) — not the plain circle this used to
+    -- fall back to. Each half-extent AND the corner radius all get the
+    -- same OUTLINE_PADDING added, so the outline sits evenly outset
+    -- from the real edge all the way around rather than just being a
+    -- bigger rectangle with the original (now disproportionately
+    -- tight) corners.
+    local hw = (target.halfWidth or target.radius) + OUTLINE_PADDING
+    local hh = (target.halfHeight or target.radius) + OUTLINE_PADDING
+    local cr = (target.cornerRadius or 0) + OUTLINE_PADDING
+
+    love.graphics.push()
+    love.graphics.translate(target.pos.x, target.pos.y)
+    love.graphics.rotate(target.rotationAngle or 0)
+
     love.graphics.setLineWidth(OUTLINE_GLOW_WIDTH)
     love.graphics.setColor(120/255, 210/255, 255/255, 0.3 * (0.4 + pulse * 0.4))
-    love.graphics.circle("line", target.pos.x, target.pos.y, (target.halfWidth or target.radius) + OUTLINE_PADDING)
+    love.graphics.rectangle("line", -hw, -hh, hw * 2, hh * 2, cr, cr)
 
     love.graphics.setLineWidth(OUTLINE_CORE_WIDTH)
     love.graphics.setColor(120/255, 210/255, 255/255, 0.7 + pulse * 0.3)
-    love.graphics.circle("line", target.pos.x, target.pos.y, (target.halfWidth or target.radius) + OUTLINE_PADDING)
+    love.graphics.rectangle("line", -hw, -hh, hw * 2, hh * 2, cr, cr)
+
+    love.graphics.pop()
   else
     love.graphics.setLineWidth(OUTLINE_GLOW_WIDTH)
     love.graphics.setColor(120/255, 210/255, 255/255, 0.3 * (0.4 + pulse * 0.4))
