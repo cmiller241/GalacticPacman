@@ -194,16 +194,40 @@
 // shows degrees and converts), so nothing here needs unit conversion
 // when you report it back.
 //
-// The fisherman only has three source images (arms/body/head — no
+// The fisherman only has four source images (body/arms/head/line — no
 // separate left/right limbs or boots the way the astronaut rig has),
-// so this is the same tool with a shorter default layer list.
+// so this is the same tool with a shorter default layer list. "line"
+// (the fishing line + hook) is a plain "limb" layer like "arms" — it
+// isn't drawn by Fisherman.lua at all yet, so there's no real in-game
+// pose to match it to (see DEFAULT_LAYERS' own comment on where its
+// starting position actually came from).
 // ---------------------------------------------------------------------
 
 const DEFAULT_LAYERS = [
-  // name    file                       kind    x    y     jointX jointY  flip
-  ["body",  "img/Fisherman-Body.png",  "body", 0,    0,    null,  null,  false],
-  ["arms",  "img/Fisherman-Arms.png",  "limb", 0,    0,    null,  null,  false],
-  ["head",  "img/Fisherman-Head.png",  "head", 0,   -100,  null,  0.9,   false],
+  // name    file                       kind    x        y         jointX   jointY    flip
+  ["body",  "img/Fisherman-Body.png",  "body", 0,       0,        null,    null,    false],
+  // arms/head values below are Fisherman.lua's own CURRENT live POSE
+  // table (lua/entities/Fisherman.lua, as of this tool's last sync with
+  // it) — not placeholders. Loading this tool used to start you from a
+  // generic x=0/y=0/y=-100 guess that didn't match what's actually
+  // on screen in-game; these are the real numbers, so the tool now
+  // opens already showing the fisherman exactly as he currently looks.
+  ["arms",  "img/Fisherman-Arms.png",  "limb", 95.59,  -66.91,    349.32,  1071.05, false],
+  ["head",  "img/Fisherman-Head.png",  "head", -73.28, -237.01,   null,    0.9,     false],
+  // "line" is new — Fisherman.lua doesn't draw it yet at all, so there's
+  // no real pose to sync it to. Its starting x/y here is an ESTIMATE
+  // (worked out by eye from Fisherman-Arms.png's own rod tip, roughly
+  // pixel (1530, 20) in that image, converted into the same
+  // body-origin-relative/pre-scale units armsX/armsY use: armsX +
+  // (tipPixelX - armsJointX), armsY + (tipPixelY - armsJointY)) meant
+  // to land it IN THE NEIGHBORHOOD of the rod tip so there's something
+  // reasonable to drag into exact place, not a real measurement — nudge
+  // it the rest of the way by eye. jointX/jointY (84, 0) is the source
+  // image's own top-center pixel (Fisherman-Line.png is 168x9920, line
+  // running down from the very top to a hook near the bottom), so the
+  // line hangs down from wherever it's attached, same as it would from
+  // an actual rod tip.
+  ["line",  "img/Fisherman-Line.png",  "limb", 1276,   -1118,     84,      0,       false],
 ];
 
 let layers = [];       // z-order array, index 0 = drawn first (back)

@@ -87,6 +87,29 @@ local PLANET_COLORS = {
   { 0.80, 0.55, 0.35, 1 },
 }
 
+-- The reference point cell streaming (generation, culling, and the
+-- belt drip spawn) centers on. Ordinarily this IS wherever the player
+-- is — state.camera is always player-centered during normal play (see
+-- main.lua's own per-frame camera computation) — but while
+-- RobotButler.lua's intro script is panning the camera off on a tour
+-- (CameraDirector.lua) with the player himself standing still back in
+-- the dome, state.camera follows the TOUR instead. Reading the current
+-- camera center here rather than state.player.pos directly means the
+-- world actually finishes generating/culling around wherever the
+-- player is currently being SHOWN, not just wherever they physically
+-- are — so a scripted pan over the belt or any other streamed area
+-- doesn't reveal empty space that nothing has spawned into yet.
+function worldGen.streamFocus()
+  local cam = state.camera
+  if not cam then
+    if not state.player then return nil, nil end
+    return state.player.pos.x, state.player.pos.y
+  end
+  local cx = cam.x + (state.visibleWidth or 0) / 2
+  local cy = cam.y + (state.visibleHeight or 0) / 2
+  return cx, cy
+end
+
 function worldGen.cellCoordFor(worldX, worldY)
   return {
     col = math.floor(worldX / worldGen.CELL_SIZE),
@@ -363,14 +386,14 @@ local function countBeltPlanetoids()
 end
 
 -- Same 3x3 neighborhood updateActiveCells() streams, checked directly
--- from the player's live position so the drip can start the instant
--- they're near belt territory rather than waiting on activeCells.
-local function playerNearBelt()
-  if not state.player then return false end
-  local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+-- from the live streaming focus (see worldGen.streamFocus) so the drip
+-- can start the instant it's near belt territory rather than waiting
+-- on activeCells.
+local function focusNearBelt(fx, fy)
+  local focusCell = worldGen.cellCoordFor(fx, fy)
   for dRow = -1, 1 do
     for dCol = -1, 1 do
-      if worldGen.cellIntersectsBelt(playerCell.col + dCol, playerCell.row + dRow) then
+      if worldGen.cellIntersectsBelt(focusCell.col + dCol, focusCell.row + dRow) then
         return true
       end
     end
@@ -378,21 +401,22 @@ local function playerNearBelt()
   return false
 end
 
-local lastPlayerBeltTheta = nil
+local lastFocusBeltTheta = nil
 
 -- Called on its own cadence (worldGen.BELT_SPAWN_INTERVAL, from
 -- main.lua) rather than piggybacking on updateActiveCells -- the drip
 -- needs to run much more often than the cell-generation pass to read
 -- as a steady trickle instead of periodic bursts.
 function worldGen.updateBeltSpawning()
-  if not playerNearBelt() then
-    lastPlayerBeltTheta = nil
+  local fx, fy = worldGen.streamFocus()
+  if not fx or not focusNearBelt(fx, fy) then
+    lastFocusBeltTheta = nil
     return
   end
 
   local sunX, sunY = worldGen.sunPos()
-  local dx = state.player.pos.x - sunX
-  local dy = state.player.pos.y - sunY
+  local dx = fx - sunX
+  local dy = fy - sunY
   local dist = math.sqrt(dx * dx + dy * dy)
   if dist < 1 then dist = 1 end
   local theta = math.atan2(dy, dx)
@@ -405,21 +429,22 @@ function worldGen.updateBeltSpawning()
   -- comment for why.
   local pacingR = math.max(inner + 10, math.min(outer - 10, dist))
 
-  -- Pace the spawn count by how far the player has actually traveled
-  -- around the ring since the last check (arc length = angle * radius)
-  -- rather than by elapsed time alone -- a player sweeping through the
-  -- belt fast would otherwise outrun a purely time-based trickle and
-  -- see it thin out, same reasoning as the distance-paced drip in the
-  -- diagonal-corridor belt (js/world/CellManifest.js).
+  -- Pace the spawn count by how far the streaming focus has actually
+  -- traveled around the ring since the last check (arc length = angle
+  -- * radius) rather than by elapsed time alone -- sweeping through
+  -- the belt fast (on foot, or via a scripted camera pan) would
+  -- otherwise outrun a purely time-based trickle and see it thin out,
+  -- same reasoning as the distance-paced drip in the diagonal-corridor
+  -- belt (js/world/CellManifest.js).
   local spawnsNeeded = 1
-  if lastPlayerBeltTheta ~= nil then
-    local d = theta - lastPlayerBeltTheta
+  if lastFocusBeltTheta ~= nil then
+    local d = theta - lastFocusBeltTheta
     while d > math.pi do d = d - 2 * math.pi end
     while d < -math.pi do d = d + 2 * math.pi end
     local arcMoved = math.abs(d) * pacingR
     spawnsNeeded = math.max(1, math.ceil(arcMoved / BELT_SPAWN_ARC_SPACING))
   end
-  lastPlayerBeltTheta = theta
+  lastFocusBeltTheta = theta
 
   local total = countBeltPlanetoids()
   for _ = 1, spawnsNeeded do
@@ -712,9 +737,7 @@ local function generateCell(col, row)
   generateFireBarsForCell(col, row)
 end
 
-local function cullDistantObjects(activeCellKeys)
-  local playerX = state.player and state.player.pos.x
-  local playerY = state.player and state.player.pos.y
+local function cullDistantObjects(activeCellKeys, focusX, focusY)
   local beltCullRadius = worldGen.BELT_CULL_RADIUS_CELLS * worldGen.CELL_SIZE
 
   for i = #state.planetoids, 1, -1 do
@@ -723,8 +746,8 @@ local function cullDistantObjects(activeCellKeys)
       if p.isBeltPlanetoid then
         -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
         -- comment above for why cell membership doesn't work here.
-        if playerX then
-          local dx, dy = p.pos.x - playerX, p.pos.y - playerY
+        if focusX then
+          local dx, dy = p.pos.x - focusX, p.pos.y - focusY
           if dx * dx + dy * dy > beltCullRadius * beltCullRadius then
             table.remove(state.planetoids, i)
           end
@@ -790,15 +813,16 @@ local function cullDistantObjects(activeCellKeys)
 end
 
 function worldGen.updateActiveCells()
-  if not state.player then return end
+  local fx, fy = worldGen.streamFocus()
+  if not fx then return end
 
-  local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+  local focusCell = worldGen.cellCoordFor(fx, fy)
   local activeCellKeys = {}
 
   for dRow = -1, 1 do
     for dCol = -1, 1 do
-      local col = playerCell.col + dCol
-      local row = playerCell.row + dRow
+      local col = focusCell.col + dCol
+      local row = focusCell.row + dRow
       if col >= 0 and col < worldGen.GRID_SIZE and row >= 0 and row < worldGen.GRID_SIZE then
         local key = worldGen.cellKey(col, row)
         activeCellKeys[key] = true
@@ -813,7 +837,7 @@ function worldGen.updateActiveCells()
     end
   end
 
-  cullDistantObjects(activeCellKeys)
+  cullDistantObjects(activeCellKeys, fx, fy)
 end
 
 function worldGen.initWorldSize()
