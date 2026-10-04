@@ -11,6 +11,7 @@ local Ooomba = require("lua.entities.Ooomba")
 local Explosion = require("lua.entities.Explosion")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
+local CameraDirector = require("lua.systems.CameraDirector")
 local Starfield = require("lua.world.Starfield")
 local Sun = require("lua.world.Sun")
 local PullBeam = require("lua.effects.PullBeam")
@@ -26,10 +27,12 @@ local Fisherman = require("lua.entities.Fisherman")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
 local SphereMove = require("lua.world.SphereMove")
+local RoundedRectPlanetoid = require("lua.world.RoundedRectPlanetoid")
 local Spikey = require("lua.world.Spikey")
 local SpikeyVertical = require("lua.world.SpikeyVertical")
 local SpikeyOrbit = require("lua.world.SpikeyOrbit")
 local Lever = require("lua.world.Lever")
+local Beam = require("lua.world.Beam")
 local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
@@ -89,6 +92,13 @@ function love.load()
   state.showCollisionDebug = false
   state.showBeltCellDebug = false
   state.showInfluenceRings = false
+  -- Global record of which one-time scripted NPC sequences (see
+  -- Script.lua/CameraDirector.lua) have already played out, keyed by an
+  -- arbitrary id each script chooses for itself (e.g. "robotButlerIntro")
+  -- — checked by the NPC's own tryInteract so the full sequence only ever
+  -- plays once per session, falling back to an ordinary one-line
+  -- greeting afterward.
+  state.scriptsCompleted = {}
   state.vatsActive = false
   state.vatsAutoEnterOnLock = true
   state.vatsTimeScale = VATS_TIME_SCALE
@@ -229,6 +239,64 @@ function love.load()
     end
   end
 
+  -- Rounded-rectangle landmark planetoid (see
+  -- lua/world/RoundedRectPlanetoid.lua, ported from the old JS game's
+  -- RoundedRectPlanetoid.js) — unlike every circular planetoid, the
+  -- player can land and walk all the way around this one, not just
+  -- stand on top. Placed directly above the SECOND water planet
+  -- (state.waterPlanet2, not the largest one) — needs that table
+  -- already populated, which is why this block runs AFTER the water
+  -- block above rather than right next to the dome the way an earlier
+  -- version of this did. Locked level (rotationAngle/rotationSpeed = 0,
+  -- overriding the random spin the constructor gives it by default) and
+  -- made a fixed landmark (isImmovable/isPermanent, vel zeroed) — same
+  -- override-after-construction convention the belt-landing Sphere
+  -- below already uses, not something the constructor itself forces.
+  do
+    -- Halved from this landmark's own original size (600x400, corner
+    -- 60) per explicit request.
+    local ROUNDED_RECT_HALF_WIDTH = 150
+    local ROUNDED_RECT_HALF_HEIGHT = 100
+    local ROUNDED_RECT_CORNER_RADIUS = 30
+    -- How far (world units) the fisherman's own hook dangles below
+    -- wherever he's standing, once planted at the rect's own top surface
+    -- — worked out from his actual rig, not guessed: his own origin
+    -- sits bodyHalfHeight (24.85, from Fisherman-Body.png's 497px height
+    -- * BODY_SCALE 0.1 / 2) ABOVE his feet, the rod tip (POSE.lineY =
+    -- -1118, same pre-scale units as every other POSE offset) sits
+    -- 111.8 world units above THAT, and the hook (the line's own far
+    -- end, 9920px long, jointY=26 near its top) hangs
+    -- (9920-26)*BODY_SCALE = 989.4 world units below the rod tip. Net:
+    -- 989.4 - 111.8 - 24.85 = 852.75 world units below his own feet.
+    local FISHERMAN_HOOK_REACH = 852.75
+    -- How far INTO the water the hook should actually end up, past its
+    -- own surface — purely a "does it look right" number, easiest of
+    -- all these to retune by eye once this is actually on screen.
+    local FISHERMAN_HOOK_WATER_DIP = 80
+    local groundY = state.waterPlanet2.pos.y - state.waterPlanet2.radius
+      - FISHERMAN_HOOK_WATER_DIP - FISHERMAN_HOOK_REACH
+    local rectY = groundY + ROUNDED_RECT_HALF_HEIGHT
+    local rectX = state.waterPlanet2.pos.x
+    -- Manual nudge on top of the computed placement above, per several
+    -- explicit requests after seeing it on screen each time — cumulative:
+    -- (-50, 80), then (-50, 50), then (-50, 80).
+    local ROUNDED_RECT_NUDGE_X = -150
+    local ROUNDED_RECT_NUDGE_Y = 210
+    rectX = rectX + ROUNDED_RECT_NUDGE_X
+    rectY = rectY + ROUNDED_RECT_NUDGE_Y
+    local roundedRectPlanet = RoundedRectPlanetoid.new(
+      rectX, rectY,
+      ROUNDED_RECT_HALF_WIDTH, ROUNDED_RECT_HALF_HEIGHT, ROUNDED_RECT_CORNER_RADIUS,
+      { 0.68, 0.56, 0.42, 1 })
+    roundedRectPlanet.isImmovable = true
+    roundedRectPlanet.isPermanent = true
+    roundedRectPlanet.vel.x, roundedRectPlanet.vel.y = 0, 0
+    roundedRectPlanet.rotationAngle = 0
+    roundedRectPlanet.rotationSpeed = 0
+    table.insert(state.planetoids, roundedRectPlanet)
+    state.roundedRectPlanet = roundedRectPlanet
+  end
+
   -- Robot butler NPC — paces back and forth just to the right of the
   -- shelter's own footprint (see RobotButler.lua). Positioned off the
   -- shelter's own right edge (pos.x + half its drawn width) plus a
@@ -239,13 +307,70 @@ function love.load()
   state.robotButler = RobotButler.new(robotHomeX, dome:trueSurfaceY())
 
   -- Fisherman NPC — same decorative/interactive role as the robot
-  -- butler above, mirrored to the dome's own RIGHT edge instead (a
-  -- fixed inset from the true edge so his art doesn't clip off the
-  -- walkable deck — see SkyDomePlanetoid.lua's own halfWidth/
-  -- trueSurfaceY for the deck's actual bounds).
-  local FISHERMAN_GAP_FROM_EDGE = 300
-  local fishermanHomeX = dome.pos.x + dome.halfWidth - FISHERMAN_GAP_FROM_EDGE
-  state.fisherman = Fisherman.new(fishermanHomeX, dome:trueSurfaceY())
+  -- butler above. Stands at the RIGHT edge of the new rounded-rect
+  -- landmark (state.roundedRectPlanet, directly above the second water
+  -- planet — see that block's own comment) rather than the dome, so his
+  -- line+hook actually dangle down into the water below instead of
+  -- dangling over empty space. FISHERMAN_GAP_FROM_EDGE here is a small
+  -- clip margin (the rect has a flat edge, not the dome's own huge
+  -- curve, so it doesn't need nearly as much inset to keep his art from
+  -- visually hanging off it).
+  local FISHERMAN_GAP_FROM_EDGE = 50
+  local fishermanHomeX = state.roundedRectPlanet.pos.x + state.roundedRectPlanet.halfWidth - FISHERMAN_GAP_FROM_EDGE
+  local fishermanGroundY = state.roundedRectPlanet.pos.y - state.roundedRectPlanet.halfHeight
+  state.fisherman = Fisherman.new(fishermanHomeX, fishermanGroundY)
+
+  -- === Beam pair: shelter <-> belt-edge landing planet ===
+  -- See lua/world/Beam.lua (ported from the old JS game's
+  -- BeamPlanetoid, minus the maze/platform "interior" concept that
+  -- version tied a beam to — this is just a point-to-point teleporter).
+  -- homeBeam sits just left of the shelter, on the dome's own deck.
+  -- beltBeam sits on TOP of a small new landing planet placed along the
+  -- SAME radial line from the sun the dome itself already sits on (the
+  -- closest "under the dome" can mean while ALSO being near the belt,
+  -- since the dome's own position is already well outside the belt's
+  -- outer edge — literally directly below the dome in x/y would never
+  -- be close enough), pulled in to just past the belt's outer radius —
+  -- then nudged further down the screen from there (BELT_PLANET_EXTRA_DOWN)
+  -- so it reads more clearly as its own separate landmark. Both beams
+  -- planted exactly like Lever.lua's own ground objects: pointing
+  -- straight up, away from whatever surface they're standing on.
+  do
+    local BEAM_GAP_FROM_SHELTER = 150
+    local homeBeam = Beam.new(
+      state.spaceShelter.pos.x - state.spaceShelter.drawWidth / 2 - BEAM_GAP_FROM_SHELTER,
+      dome:trueSurfaceY(), -math.pi / 2)
+
+    local sunX, sunY = worldGen.sunPos()
+    local _, beltOuterRadius = worldGen.beltRadii()
+    local dirX, dirY = domeX - sunX, domeY - sunY
+    local dirLen = math.sqrt(dirX * dirX + dirY * dirY)
+    dirX, dirY = dirX / dirLen, dirY / dirLen
+
+    local BELT_PLANET_RADIUS = 120
+    -- Clear space between the landing planet's own surface and the
+    -- belt's outer edge — real but short, same spirit as Fish.lua's own
+    -- cross-pool jump margins (a gap the player is clearly MEANT to
+    -- clear, not one that's borderline).
+    local BELT_PLANET_GAP = 260
+    local beltPlanetDist = beltOuterRadius + BELT_PLANET_RADIUS + BELT_PLANET_GAP
+    local beltPlanetX = sunX + dirX * beltPlanetDist
+    -- A plain screen-space downward nudge from there (NOT further along
+    -- dirX/dirY — the dome sits slightly ABOVE the sun, so dirY itself
+    -- is negative, and pushing further along it would actually move the
+    -- planet UP, the opposite of what's wanted here).
+    local BELT_PLANET_EXTRA_DOWN = 500
+    local beltPlanetY = sunY + dirY * beltPlanetDist + BELT_PLANET_EXTRA_DOWN
+
+    local beltLandingPlanet = Sphere.new(beltPlanetX, beltPlanetY, BELT_PLANET_RADIUS)
+    table.insert(state.planetoids, beltLandingPlanet)
+
+    local beltBeam = Beam.new(beltPlanetX, beltPlanetY - BELT_PLANET_RADIUS, -math.pi / 2)
+
+    homeBeam.destination = beltBeam
+    beltBeam.destination = homeBeam
+    state.beams = { homeBeam, beltBeam }
+  end
 
   -- === TILED HILL TERRAIN above the sky dome's ground ===
   -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
@@ -634,6 +759,12 @@ function love.update(dt)
     end
   end
 
+  if state.beams then
+    for _, beam in ipairs(state.beams) do
+      beam:update()
+    end
+  end
+
   if state.gates then
     for _, gate in ipairs(state.gates) do
       gate:update(state.timeScale or 1)
@@ -716,6 +847,7 @@ function love.update(dt)
   end
 
   collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
+  collisionSystem:handlePlayerSkyDomeContainment(state.player, state.skyDomePlanet)
 
   -- Belt planetoids alone can number in the hundreds
   -- (worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500), and almost all of them
@@ -877,29 +1009,48 @@ function love.update(dt)
     worldGen.updateBeltSpawning()
   end
 
-  if state.keys['+'] or state.keys['='] then
-    state.zoom = math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME)
-    state.zoomTarget = nil
-  end
-  if state.keys['-'] or state.keys['_'] then
-    state.zoom = math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME)
-    state.zoomTarget = nil
+  -- Manual zoom input is ignored while CameraDirector.lua is actively
+  -- directing (a scripted sequence — see RobotButler.lua's own intro
+  -- script) — fighting a scripted camera move with +/- would just look
+  -- broken, and it releases control back on its own once the sequence
+  -- ends anyway.
+  if not CameraDirector.isActive() then
+    if state.keys['+'] or state.keys['='] then
+      state.zoom = math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME)
+      state.zoomTarget = nil
+    end
+    if state.keys['-'] or state.keys['_'] then
+      state.zoom = math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME)
+      state.zoomTarget = nil
+    end
   end
 
-  local zoom = state.zoom
-  local visibleWidth = love.graphics.getWidth() / zoom
-  local visibleHeight = love.graphics.getHeight() / zoom
-  local camera = {
-    x = state.player.pos.x - visibleWidth / 2,
-    y = state.player.pos.y - visibleHeight / 2,
-  }
-  local maxCameraX = state.sceneWidth - visibleWidth
-  local maxCameraY = state.sceneHeight - visibleHeight
-  camera.x = maxCameraX > 0 and math.min(math.max(camera.x, 0), maxCameraX) or maxCameraX / 2
-  camera.y = maxCameraY > 0 and math.min(math.max(camera.y, 0), maxCameraY) or maxCameraY / 2
-  state.camera = camera
-  state.visibleWidth = visibleWidth
-  state.visibleHeight = visibleHeight
+  -- CameraDirector.update already sets state.camera/state.zoom itself
+  -- (and returns true) while a scripted sequence is driving — the
+  -- ordinary player-centered computation below only runs when it isn't,
+  -- so the handoff between the two is a single smooth eased transition
+  -- (CameraDirector.release), never a one-frame pop between two
+  -- independently-computed camera positions.
+  if not CameraDirector.update(state.timeScale) then
+    local zoom = state.zoom
+    local visibleWidth = love.graphics.getWidth() / zoom
+    local visibleHeight = love.graphics.getHeight() / zoom
+    local camera = {
+      x = state.player.pos.x - visibleWidth / 2,
+      y = state.player.pos.y - visibleHeight / 2,
+    }
+    local maxCameraX = state.sceneWidth - visibleWidth
+    local maxCameraY = state.sceneHeight - visibleHeight
+    camera.x = maxCameraX > 0 and math.min(math.max(camera.x, 0), maxCameraX) or maxCameraX / 2
+    camera.y = maxCameraY > 0 and math.min(math.max(camera.y, 0), maxCameraY) or maxCameraY / 2
+    state.camera = camera
+  end
+
+  -- Kept up to date regardless of which of the two paths above actually
+  -- drove state.camera/state.zoom this frame — other systems (VatsOverlay.lua,
+  -- etc.) read these directly and need them correct either way.
+  state.visibleWidth = love.graphics.getWidth() / state.zoom
+  state.visibleHeight = love.graphics.getHeight() / state.zoom
 end
 
 function love.draw()
@@ -1161,7 +1312,12 @@ function love.draw()
 
   if state.fisherman then
     local f = state.fisherman
-    if utils.isOnScreen(f.pos.x, f.pos.y, math.max(f.halfWidth, f.halfHeight), 20) then
+    -- f.drawBoundRadius (not just halfWidth/halfHeight) — his fishing
+    -- line reaches far below his own compact body, and this needs to
+    -- cover that full reach or the whole rig (hook included) vanishes
+    -- the instant the camera's near the water the line dangles into but
+    -- far from his own actual position. See Fisherman.lua's own comment.
+    if utils.isOnScreen(f.pos.x, f.pos.y, f.drawBoundRadius, 20) then
       f:draw()
       f:drawTooltip()
     end
@@ -1179,6 +1335,20 @@ function love.draw()
     for _, bar in ipairs(state.fireBars) do
       if utils.isOnScreen(bar.pos.x, bar.pos.y, bar.barLength + bar.fireballRadius, 50) then
         bar:draw()
+      end
+    end
+  end
+
+  -- Drawn BEFORE the player (just below), so he renders IN FRONT of the
+  -- beam rather than behind it while standing at one (interacting, or
+  -- mid-teleport) — his own silhouette glow (Player:drawBeamGlow, called
+  -- from Player:draw itself) is what actually signals "near a beam" now,
+  -- so he no longer needs to duck behind it for that to read clearly.
+  if state.beams then
+    for _, beam in ipairs(state.beams) do
+      if utils.isOnScreen(beam.pos.x, beam.pos.y, Beam.LENGTH, 60) then
+        beam:draw()
+        beam:drawTooltip()
       end
     end
   end
@@ -1238,6 +1408,43 @@ function love.draw()
         love.graphics.circle("line", sp.pos.x, sp.pos.y, sp.radius + state.player.radius + constants.SURFACE_TOLERANCE)
       end
     end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setLineWidth(1)
+  end
+
+  -- Debug: SkyDomePlanetoid's own containment boundary (same 'C' toggle
+  -- as every other debug view here) — see
+  -- CollisionSystem:handlePlayerSkyDomeContainment's own comment for why
+  -- this is two separate pieces rather than one shape: the two vertical
+  -- side walls at the deck's own true left/right edges (floor to dome
+  -- top), plus the glass dome's own upper ellipse — only the half that
+  -- function actually enforces (it never applies below
+  -- dome:domeAnchorY()), so only that half is drawn here too, rather
+  -- than a full ellipse that would overstate what's actually solid.
+  -- Drawn in yellow, distinct from every other debug color already used
+  -- here (red/blue/green terrain, magenta player capsule, orange
+  -- Spikey).
+  if state.showCollisionDebug and state.skyDomePlanet then
+    local dome = state.skyDomePlanet
+    love.graphics.setLineWidth(3)
+    love.graphics.setColor(1, 1, 0.2, 1)
+
+    local deckY = dome:trueSurfaceY()
+    local domeTopY = dome:domeAnchorY() - dome.domeRadiusY
+    love.graphics.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x - dome.halfWidth, domeTopY)
+    love.graphics.line(dome.pos.x + dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, domeTopY)
+
+    local cx, cy = dome.pos.x, dome:domeAnchorY()
+    local rx, ry = dome.domeRadiusX, dome.domeRadiusY
+    local segments = 72
+    local points = {}
+    for i = 0, segments do
+      local t = math.pi + (i / segments) * math.pi
+      points[#points + 1] = cx + math.cos(t) * rx
+      points[#points + 1] = cy + math.sin(t) * ry
+    end
+    love.graphics.line(points)
+
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setLineWidth(1)
   end

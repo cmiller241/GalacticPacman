@@ -7,14 +7,17 @@
 --   - Basic left-arm aim toward mouse / pull target
 --   - SkyDome pull/aim/walk toward grass deck (trueSurfaceY)
 --
--- Not yet ported (deliberately): maze/platform modes, death/teleport
--- animations, Pixi path, invincibility flicker, etc.
+-- Not yet ported (deliberately): maze/platform modes, death animations,
+-- Pixi path, etc. Beam.lua teleport IS ported (Player:startTeleport/
+-- updateTeleport/getTeleportPulse), including its own brief post-arrival
+-- invincibility flicker (Player:isInvincible).
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local DustPuff = require("lua.effects.DustPuff")
 local Splash = require("lua.effects.Splash")
+local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
 local TargetLock = require("lua.systems.TargetLock")
 
 local Player = {}
@@ -65,6 +68,33 @@ local BALL_SPEED_MULTIPLIER  = 2.1  -- 1.25 * 1.2 * 1.4 — bumped 20%, then ano
 -- whole stand-back-up animation too, only becoming humanoid again once
 -- he's actually fully stood up.
 local BALL_MORPH_SEGMENT_TICKS = 8 -- baseline (60fps) ticks each of the two keyframe blends takes — a full transition either direction is 2x this, ~0.27s at 60fps
+
+-- Teleport (Beam.lua's own :tryInteract) — a freeze-then-snap, not a
+-- fade/cutscene: TELEPORT_OUT_TICKS is the pause before he vanishes
+-- from the origin beam, with Player:getTeleportPulse's own scale/glow
+-- blip playing out over it (see that function's own comment — ONLY this
+-- half gets the blip, not the arrival half: a visible "launching" swell
+-- on the way out, not a symmetric one on both ends). TELEPORT_IN_TICKS
+-- is the equally paced, but visually plain, "arriving" pause right
+-- after landing at the destination — just holds him still a beat longer
+-- before normal input resumes, no scale/glow of its own. Both in
+-- baseline (60fps) ticks; 30 = 0.5s, close to half of the old JS game's
+-- own single 900ms teleportDuration (js/entities/Player.js), since that
+-- one pulse covered a whole mode-switch and this one only needs to
+-- cover the departure half.
+local TELEPORT_OUT_TICKS = 30
+local TELEPORT_IN_TICKS = 30
+
+-- Brief post-arrival invincibility (same name/duration/flicker-rate as
+-- the old JS game's own invincibleDuration/isInvincible — see that
+-- file's own "so an enemy sitting near the beam entrance can't get a
+-- free kill the instant he arrives somewhere new" comment, which
+-- applies exactly as much to arriving via Beam.lua here). Counted down
+-- in baseline (60fps) ticks like everything else in this file, not
+-- wall-clock time the way the JS original's Date.now()-based version
+-- was — 120 ticks = 2s at 60fps, matching its own 2000ms.
+local INVINCIBLE_TICKS = 120
+local INVINCIBLE_FLICKER_INTERVAL = 0.1 -- seconds per blink phase — matches the JS original's own 100ms
 local BUBBLE_HEAD_GAP         = 1.4  -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
 local BUBBLE_FADE_DISTANCE    = 20   -- world units of travel, just before reaching the water's own radius, that a bubble fades out over
 local BUBBLE_RISE_SPEED_MIN   = 0.5  -- world units per baseline frame, radially outward
@@ -111,6 +141,22 @@ function Player.new(x, y)
   -- from 0 at the start of whichever transition is currently playing.
   self.morphState = nil
   self.morphElapsed = 0
+
+  -- Beam.lua teleport (see Player:startTeleport/updateTeleport below):
+  -- isTeleporting is the one guard every other system checks (movement,
+  -- jumping, ball morph, target locking); teleportState/teleportTimer/
+  -- teleportOrigin/teleportDestination are updateTeleport's own private
+  -- bookkeeping.
+  self.isTeleporting = false
+  self.teleportState = nil
+  self.teleportTimer = 0
+  self.teleportOrigin = nil
+  self.teleportDestination = nil
+
+  -- Post-arrival invincibility (see Player:isInvincible/INVINCIBLE_TICKS)
+  -- — ticks remaining, counted down in Player:update(); 0/negative means
+  -- not currently invincible.
+  self.invincibleTimer = 0
 
   self.onSurface = false
   self.currentPlanet = nil
@@ -334,7 +380,7 @@ end
 -- Player:move/jump, and starting a morph mid-conversation would be the
 -- same kind of "moving" while supposedly standing still talking).
 function Player:enterBallMode()
-  if self.isBall or self.morphState or state.dialogueActive then return end
+  if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting then return end
   self.morphState = "toBall"
   self.morphElapsed = 0
 end
@@ -344,7 +390,7 @@ end
 -- a ball, already mid-transition either direction, or talking to an NPC
 -- (same reasoning as enterBallMode's own dialogueActive check above).
 function Player:exitBallMode()
-  if not self.isBall or self.morphState or state.dialogueActive then return end
+  if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting then return end
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -367,6 +413,98 @@ function Player:updateBallMorph(ts)
     self.morphState = nil
     self.morphElapsed = 0
   end
+end
+
+------------------------------------------------------------------
+-- Teleport (Beam.lua)
+------------------------------------------------------------------
+
+-- Starts the teleport sequence toward another Beam's own planted base —
+-- called from Beam:tryInteract, same "the object itself decides whether
+-- the player's close enough" split Lever.lua's own tryInteract uses.
+-- origin: the beam he's actually standing at (used only for
+-- Player:getTeleportPulse's own glow color — see that function's own
+-- comment). Ignored while already teleporting, curling into/out of a
+-- ball, or talking to an NPC (same reasoning as enterBallMode's own
+-- guard above) — Beam:tryInteract also checks isTeleporting itself
+-- before even calling this, but the guard belongs here too since
+-- nothing stops some OTHER future caller from reaching this directly.
+function Player:startTeleport(origin, destination)
+  if self.isTeleporting or self.morphState or state.dialogueActive then return end
+  if not destination then return end
+  self.isTeleporting = true
+  self.teleportState = "out"
+  self.teleportTimer = TELEPORT_OUT_TICKS
+  self.teleportOrigin = origin
+  self.teleportDestination = destination
+  self.vel.x, self.vel.y = 0, 0
+end
+
+-- Advances the freeze-then-snap sequence above (see Player:getTeleportPulse
+-- for the scale/glow blip, which only plays over the "out" half — see
+-- that function's own comment on why not both). The actual position
+-- swap happens the instant the "out" pause reaches zero: lands at the
+-- destination beam's own PLANTED BASE (destination.pos), not its portal
+-- tip (Beam:getPortalPosition, Beam.LENGTH further out) — landing at the
+-- tip was leaving him outside whatever he's meant to land ON (e.g. well
+-- past a small landing planet's own gravity influence entirely), rather
+-- than standing on it. Offset outward from that base by his own radius,
+-- along the beam's own facing direction, same as standing on any
+-- ordinary surface (his CENTER sits radius above the ground, not
+-- exactly on it). Then clears onSurface/currentPlanet/touchingWall so
+-- gravity/landing re-acquire completely fresh from the new position
+-- next frame — exactly the ordinary way every other arrival at a planet
+-- already works (falling in from open space), rather than trying to
+-- force an instant landing onto whatever happens to be below — and
+-- starts the post-arrival invincibility window (Player:isInvincible),
+-- same reasoning as the old JS game's own equivalent (see
+-- INVINCIBLE_TICKS's own comment). A short "in" pause (just holding him
+-- still a beat longer, no visual pulse of its own) follows before
+-- isTeleporting finally clears and normal input resumes — invincibility
+-- itself outlasts this pause and keeps flickering for a bit after he
+-- can already move again.
+function Player:updateTeleport(ts)
+  if not self.teleportState then return end
+  self.teleportTimer = self.teleportTimer - ts
+  if self.teleportTimer > 0 then return end
+
+  if self.teleportState == "out" then
+    local destination = self.teleportDestination
+    if destination then
+      local dirX, dirY = math.cos(destination.angle), math.sin(destination.angle)
+      self.pos.x = destination.pos.x + dirX * self.radius
+      self.pos.y = destination.pos.y + dirY * self.radius
+      -- Also re-anchor prevPos to the SAME spot: it was captured at the
+      -- top of this frame's own Player:update(), before this jump, so
+      -- left alone it would describe a single-frame "travel" spanning
+      -- the entire distance from the origin beam to here — exactly the
+      -- kind of large motion CollisionSystem's own swept checks
+      -- (findLandingCrossing, sweptCircleEntryT) are built to catch, and
+      -- would risk a spurious collision against anything that happened
+      -- to sit along that straight line between the two beams.
+      self.prevPos = self.pos:clone()
+    end
+    self.onSurface = false
+    self.currentPlanet = nil
+    self.touchingWall = nil
+    self.wallContactNormal = nil
+    self.invincibleTimer = INVINCIBLE_TICKS
+    self.teleportState = "in"
+    self.teleportTimer = TELEPORT_IN_TICKS
+  else
+    self.isTeleporting = false
+    self.teleportState = nil
+    self.teleportOrigin = nil
+    self.teleportDestination = nil
+  end
+end
+
+-- See INVINCIBLE_TICKS's own comment. Checked by Player:startDeath
+-- (currently a no-op stub either way — see that function's own comment
+-- — but correct/future-proof for whenever real death handling lands)
+-- and by Player:draw for the flicker itself.
+function Player:isInvincible()
+  return self.invincibleTimer > 0
 end
 
 ------------------------------------------------------------------
@@ -481,8 +619,9 @@ function Player:jump()
   -- frame from every NPC's own dialogueActive) — a single guard here
   -- covers every input source (keyboard Space, gamepad Cross) that
   -- calls this, rather than needing the same check patched into each
-  -- one separately.
-  if self.morphState or state.dialogueActive then return end
+  -- one separately. isTeleporting (Beam.lua) gets the same treatment —
+  -- same reasoning, frozen-in-place for a moment rather than mid-action.
+  if self.morphState or state.dialogueActive or self.isTeleporting then return end
 
   -- Requires actually MOVING at run speed, not just holding the run
   -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
@@ -673,8 +812,8 @@ function Player:move(keys)
   -- anywhere, while everything else this function still does
   -- (gravity-airborne handling, wall-climb bookkeeping, arc-position
   -- resync, etc.) keeps running exactly as normal rather than being
-  -- skipped wholesale.
-  if self.morphState or state.dialogueActive then keys = {} end
+  -- skipped wholesale. isTeleporting (Beam.lua) gets the same treatment.
+  if self.morphState or state.dialogueActive or self.isTeleporting then keys = {} end
 
   if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
     local planet = self.currentPlanet
@@ -1035,6 +1174,11 @@ function Player:update()
   self.prevPos = self.pos:clone()
 
   self:updateBallMorph(state.timeScale)
+  self:updateTeleport(state.timeScale)
+
+  if self.invincibleTimer > 0 then
+    self.invincibleTimer = math.max(0, self.invincibleTimer - state.timeScale)
+  end
 
   if self.swimStrokeTimer > 0 then
     self.swimStrokeTimer = math.max(0, self.swimStrokeTimer - state.timeScale)
@@ -1746,7 +1890,134 @@ function Player:drawBallMode(orientation)
   love.graphics.pop()
 end
 
+-- Scale/glow "blip" pulse during a Beam.lua teleport — ported from the
+-- old JS game's own teleportScale/teleportGlow (startTeleport/update in
+-- js/entities/Player.js): pulse = sin(t*pi), scale = 1 + pulse*1.2, glow
+-- intensity = pulse — 0 at the phase's own start/end, peaking at its own
+-- midpoint. ONLY plays over the "out" half (departing the origin beam),
+-- not the "in" half (arriving at the destination) — the arrival moment
+-- gets its own, different cue instead (the post-arrival invincibility
+-- flicker — see Player:isInvincible/draw), not a second scale/glow
+-- blip. Returns 1, 0 (no pulse at all) whenever he isn't currently
+-- departing.
+function Player:getTeleportPulse()
+  if self.teleportState ~= "out" then return 1, 0 end
+  local elapsed = TELEPORT_OUT_TICKS - self.teleportTimer
+  local t = (TELEPORT_OUT_TICKS > 0) and math.max(0, math.min(1, elapsed / TELEPORT_OUT_TICKS)) or 1
+  local pulse = math.sin(t * math.pi)
+  return 1 + pulse * 1.2, pulse
+end
+
+-- Any Beam.lua teleporter currently close enough to interact with — nil
+-- when none is — plus how close, as a 0..1 proximity fraction (1 right
+-- at the beam's own planted base, fading linearly to 0 at its own
+-- interactRadius, same reach Beam:tryInteract/drawTooltip already use
+-- for "close enough," just measured continuously here instead of as a
+-- flat yes/no). Recomputed directly rather than trusting a beam's own
+-- cached self.playerNearby from its last :update(), so this can't end
+-- up a frame stale relative to whatever :draw() is about to show
+-- regardless of update/draw ordering. When more than one beam is
+-- somehow in range at once, picks whichever one he's actually closer to.
+function Player:getNearbyBeam()
+  if not state.beams then return nil, 0 end
+  local best, bestProximity = nil, 0
+  for _, beam in ipairs(state.beams) do
+    local dx, dy = self.pos.x - beam.pos.x, self.pos.y - beam.pos.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist <= beam.interactRadius then
+      local proximity = 1 - dist / beam.interactRadius
+      if not best or proximity > bestProximity then
+        best = beam
+        bestProximity = proximity
+      end
+    end
+  end
+  return best, bestProximity
+end
+
 function Player:draw()
+  local scale, pulseGlow = self:getTeleportPulse()
+
+  -- Outer glow hugging his own real silhouette (SilhouetteGlow.lua —
+  -- not a plain circle, an actual shader-dilated copy of his rendered
+  -- shape) whenever he's close enough to a beam to interact with it,
+  -- tinted to match THAT beam's own color (Beam.lua's own self.color)
+  -- rather than a hardcoded color — both of main.lua's current beams
+  -- are violet, so this reads as purple today, but it'll follow
+  -- whatever color a future beam actually uses. Fades out with distance
+  -- (proximity, 1 right at the beam down to 0 at its own interactRadius
+  -- — see Player:getNearbyBeam) rather than snapping on at full
+  -- strength the instant he's in range, and is boosted a bit extra
+  -- during the departure pulse itself (pulseGlow, see
+  -- Player:getTeleportPulse) so interacting still reads as more intense
+  -- than just standing nearby, without needing a second, separate glow
+  -- effect for that moment.
+  --
+  -- The mask drawFn below applies the SAME scale transform the real
+  -- draw further down uses (see the scale~=1 branch there) rather than
+  -- always rendering him at scale=1 — without this, the glow stayed
+  -- silhouette-shaped for his NORMAL size the whole time, visibly
+  -- mismatched against his own body actually ballooning up through the
+  -- pulse. boundWorldRadius is scaled right along with it (self.radius*
+  -- 4*scale, not a fixed *4) so the mask canvas stays big enough to fit
+  -- him without clipping at the pulse's own largest point.
+  local nearbyBeam, proximity = self:getNearbyBeam()
+  if nearbyBeam then
+    SilhouetteGlow.draw(
+      self.pos.x, self.pos.y,
+      self.radius * 4 * scale, 14,
+      nearbyBeam.color, 0.8 * proximity * (1 + pulseGlow * 0.6),
+      function()
+        if scale == 1 then
+          self:drawRig()
+          return
+        end
+        love.graphics.push()
+        love.graphics.translate(self.pos.x, self.pos.y)
+        love.graphics.scale(scale, scale)
+        love.graphics.translate(-self.pos.x, -self.pos.y)
+        self:drawRig()
+        love.graphics.pop()
+      end)
+  end
+
+  -- Post-arrival invincibility flicker (Player:isInvincible) — a hard
+  -- on/off blink (skip drawing him entirely on the "off" beat) rather
+  -- than the old JS game's own alternating-alpha version: drawRig below
+  -- sets its own opaque color on nearly every piece of the rig it draws
+  -- (suit, visor, boots, ...), so a single love.graphics.setColor(...,
+  -- alpha) wrapped around the whole call would just get overwritten by
+  -- the first of those and never actually dim anything. A true skipped
+  -- frame can't be overwritten the same way, and reads just as clearly
+  -- as "flickering" — same ~100ms-per-phase rate the JS original used
+  -- (INVINCIBLE_FLICKER_INTERVAL), driven off love.timer.getTime()
+  -- rather than state.timeScale-scaled ticks since it's a pure visual
+  -- readability cue, not gameplay timing: it should blink at a
+  -- consistent real-world rate regardless of VATS slow-mo.
+  if self:isInvincible() then
+    local phase = math.floor(love.timer.getTime() / INVINCIBLE_FLICKER_INTERVAL) % 2
+    if phase ~= 0 then return end
+  end
+
+  if scale == 1 then
+    self:drawRig()
+    return
+  end
+
+  love.graphics.push()
+  love.graphics.translate(self.pos.x, self.pos.y)
+  love.graphics.scale(scale, scale)
+  love.graphics.translate(-self.pos.x, -self.pos.y)
+  self:drawRig()
+  love.graphics.pop()
+end
+
+-- Everything draw() USED to be, unchanged — just renamed so draw()
+-- itself could become a thin wrapper applying the teleport pulse above
+-- (scale transform + glow) around whichever branch below actually
+-- draws him, without needing to duplicate that wrapper at each of this
+-- function's own early returns.
+function Player:drawRig()
   local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
   local downDir = self:visualDownDirection(planet)
   local downAngle = math.atan2(downDir.y, downDir.x)
@@ -1784,7 +2055,7 @@ end
 ------------------------------------------------------------------
 
 function Player:trySelectPullTarget(explicitTarget)
-  if self.mode ~= "space" or self.isBall then return end
+  if self.mode ~= "space" or self.isBall or self.isTeleporting then return end
 
   local best = nil
   if explicitTarget then
@@ -1852,6 +2123,11 @@ function Player:applyPullForce()
   -- request), so there's nothing for a stale pullTarget to resume once
   -- he un-morphs either.
   if self.isBall then self.pullTarget = nil; return end
+  -- Same reasoning, for mid-teleport (Beam.lua) instead of ball mode —
+  -- he's frozen in place either way, so a pull target left over from
+  -- right before interacting with a beam shouldn't resume once he
+  -- arrives somewhere else entirely.
+  if self.isTeleporting then self.pullTarget = nil; return end
 
   local stillActive = false
   for _, p in ipairs(state.planetoids) do
@@ -1888,7 +2164,7 @@ end
 
 function Player:shootFireball()
   if self.mode ~= "space" and self.mode ~= "platform" then return end
-  if self.isBall then return end
+  if self.isBall or self.isTeleporting then return end
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0
@@ -1901,11 +2177,55 @@ function Player:shootFireball()
     angle = angle + self.blasterAngleOffset
   end
 
+  -- Exact muzzle pixel within leftarm.png (602x256) — NOT the old
+  -- fixed-distance-along-the-aim-angle approximation (blasterMuzzleLength),
+  -- which only ever put the origin somewhere along the right ray, not
+  -- necessarily where the blaster's own muzzle actually is once the arm's
+  -- real rotation/scale/mirroring are accounted for.
+  local MUZZLE_PX_X, MUZZLE_PX_Y = 530, 120
+
   local originX, originY
   if self.aimShoulderPos then
-    local muzzleDist = (self.blasterMuzzleLength or 300) * (self.bodyScale or 0.1)
-    originX = self.aimShoulderPos.x + math.cos(angle) * muzzleDist
-    originY = self.aimShoulderPos.y + math.sin(angle) * muzzleDist
+    local cfg = self.bodyPartsConfig
+    local s = self.bodyScale
+    local dirSign = self.facingDirection < 0 and -1 or 1
+    local aimWorldAngle = self.aimWorldAngle or 0
+
+    -- Raw offset (world units) from the arm's own joint pivot
+    -- (leftArmJointX/Y — the pixel drawLimb lands exactly on the
+    -- shoulder attach point) to the target muzzle pixel, still in the
+    -- image's own unrotated local space.
+    local vx = (MUZZLE_PX_X - cfg.leftArmJointX) * s
+    local vy = (MUZZLE_PX_Y - cfg.leftArmJointY) * s
+
+    local worldVX, worldVY
+    if dirSign > 0 then
+      -- Facing right (unmirrored): drawLimb's own rotate(orientation+
+      -- localAngle) is exactly aimWorldAngle in world space (see
+      -- computeLeftArmAimAngle/worldAngleToLocalRotation — the two
+      -- cancel out cleanly for this case), so this local offset just
+      -- rotates by aimWorldAngle directly.
+      local c, sn = math.cos(aimWorldAngle), math.sin(aimWorldAngle)
+      worldVX = vx * c - vy * sn
+      worldVY = vx * sn + vy * c
+    else
+      -- Facing left: the whole rig is additionally mirrored by
+      -- Player:drawRig's own outer scale(dirSign,1) (reflecting about
+      -- the line through self.pos at angle `orientation`), which does
+      -- NOT commute with the arm's own extra rotate(localAngle) the
+      -- naive way. Working through the actual composed transform (same
+      -- identity worldAngleToLocalRotation's own dirSign<0 branch is
+      -- built on) reduces it to: flip this local offset horizontally,
+      -- then rotate by (aimWorldAngle - pi) — not aimWorldAngle itself.
+      local rot = aimWorldAngle - math.pi
+      local c, sn = math.cos(rot), math.sin(rot)
+      local fx, fy = -vx, vy
+      worldVX = fx * c - fy * sn
+      worldVY = fx * sn + fy * c
+    end
+
+    originX = self.aimShoulderPos.x + worldVX
+    originY = self.aimShoulderPos.y + worldVY
   else
     originX = self.pos.x
     originY = self.pos.y
@@ -1949,12 +2269,19 @@ function Player:clearLockTarget()
   self.lockedTarget = nil
 end
 
--- Deliberate no-op stub -- death/teleport animations aren't ported yet
--- (see the file-header comment). Several CollisionSystem call sites
--- (lava, FireBar, etc.) call player:startDeath() unconditionally on a
+-- Deliberate no-op stub -- death animations aren't ported yet (see the
+-- file-header comment). Several CollisionSystem call sites (lava,
+-- FireBar, Spikey, etc.) call player:startDeath() unconditionally on a
 -- lethal hit; without this method existing at all, that was a nil-call
 -- crash straight to a blue screen. This just absorbs the call so a
 -- lethal hit is silently survived until real death handling is ported.
-function Player:startDeath() end
+-- The isInvincible() check is real/functional already, though (see
+-- Player:startTeleport/updateTeleport and INVINCIBLE_TICKS's own
+-- comment) — matches the old JS game's own startDeath, which checked it
+-- first for exactly the same reason, so this stays correct rather than
+-- needing a second change once death itself actually lands.
+function Player:startDeath()
+  if self:isInvincible() then return end
+end
 
 return Player

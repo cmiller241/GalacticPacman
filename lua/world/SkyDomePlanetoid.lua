@@ -815,6 +815,23 @@ function SkyDomePlanetoid:drawGrassCap()
   local startX = self.pos.x - self.halfWidth
   local h = self.grassHeight
 
+  -- Clipped to the SAME glass-dome ellipse drawDome's own stencil uses
+  -- (closedHalf, upper half + flat base at domeAnchorY) — the grass
+  -- band is a plain rectangle spanning the full deck width, but the
+  -- dome's own silhouette has already started curving inward by
+  -- grassHeight above its own equator (domeAnchorY), so at the deck's
+  -- own outer edges the uncapped rectangle pokes out past the visible
+  -- glass by a sliver — visible as a small notch of bare grass jutting
+  -- into open space right where the dome's curve recedes. This stencil
+  -- guarantees the grass never renders outside the dome's own visible
+  -- silhouette regardless of exactly how big that sliver is.
+  local cx, cy = self.pos.x, self:domeAnchorY()
+  local rx, ry = self.domeRadiusX, self.domeRadiusY
+  love.graphics.stencil(function()
+    love.graphics.polygon("fill", closedHalf(cx, cy, rx, ry, true))
+  end, "replace", 1)
+  love.graphics.setStencilTest("greater", 0)
+
   if state.grassTexture then
     local img = state.grassTexture
     local scale = 2
@@ -828,6 +845,7 @@ function SkyDomePlanetoid:drawGrassCap()
     love.graphics.rectangle("fill", startX, topY, fullW, h)
   end
 
+  love.graphics.setStencilTest()
   love.graphics.setColor(1, 1, 1, 1)
 end
 

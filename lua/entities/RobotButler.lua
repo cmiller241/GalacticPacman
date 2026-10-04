@@ -17,6 +17,9 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local DustPuff = require("lua.effects.DustPuff")
+local Script = require("lua.systems.Script")
+local CameraDirector = require("lua.systems.CameraDirector")
+local worldGen = require("lua.setup.worldGen")
 
 local RobotButler = {}
 RobotButler.__index = RobotButler
@@ -58,6 +61,103 @@ local function ensureFrameQuads(img)
   for i = 0, FRAME_COUNT - 1 do
     frameQuads[i + 1] = love.graphics.newQuad(i * sheetFrameW, 0, sheetFrameW, sheetFrameH, fullW, fullH)
   end
+end
+
+-- Keyed into state.scriptsCompleted (see main.lua's own setup) — true
+-- once the one-time welcome/tour sequence below has played all the way
+-- through, so every interaction after that just gets :startDialogue's
+-- plain "Hello again!" instead.
+local INTRO_SCRIPT_ID = "robotButlerIntro"
+
+-- The one-time welcome/tour sequence (see Script.lua/CameraDirector.lua)
+-- played the FIRST time the player ever talks to him. Built lazily, not
+-- at require-time, since it reads state.skyDomePlanet/state.beams —
+-- neither exists yet when this file is first required, both do by the
+-- time the player can actually walk up and interact.
+local function buildIntroScript()
+  local dome = state.skyDomePlanet
+  local beam = state.beams and state.beams[1] -- homeBeam — sits just left of the shelter, on the dome's own deck
+  local screenW = love.graphics.getWidth()
+
+  local beats = { { text = "Welcome to a demo of Asteroid Bob!" } }
+
+  if dome then
+    -- Zoomed out until the whole dome's width fits on screen, with a
+    -- little breathing room either side, centered on the dome itself
+    -- rather than wherever the player happens to be standing in it.
+    local fitZoom = screenW / (dome.halfWidth * 2 * 1.35)
+    table.insert(beats, {
+      text = "Right now you're standing in a domed playground",
+      camera = { { x = dome.pos.x, y = dome:domeAnchorY(), zoom = fitZoom, duration = 2.5 } },
+    })
+
+    -- A slow pan across the deck — left end, dome center, right end —
+    -- reading as a tour THROUGH the dome rather than just holding on
+    -- one static view of it. cameraLoop = true: this keeps repeating
+    -- for as long as this line is up, instead of playing once and
+    -- holding on the last waypoint — only the player's own next
+    -- Enter/Circle press (advancing to the NEXT beat) stops it.
+    local deckY = dome:trueSurfaceY()
+    local panZoom = 1
+    table.insert(beats, {
+      text = "It's a perfect place for showcasing Bob's abilities!",
+      camera = {
+        { x = dome.pos.x - dome.halfWidth * 0.6, y = deckY,                     zoom = panZoom, duration = 2.0 },
+        { x = dome.pos.x - dome.halfWidth * 0.3, y = deckY - dome.halfWidth * 0.2, zoom = panZoom, duration = 2.5 },
+        { x = dome.pos.x + dome.halfWidth * 0.3, y = deckY - dome.halfWidth * 0.2, zoom = 0.6,     duration = 2.5 },
+      },
+      cameraLoop = true,
+    })
+  else
+    table.insert(beats, { text = "Right now you're standing in a domed playground" })
+    table.insert(beats, { text = "It's a perfect place for showcasing Bob's abilities!" })
+  end
+
+  table.insert(beats, {
+    text = "Or you can teleport out of the dome and explore the galaxy.",
+    camera = beam and { { x = beam.pos.x, y = beam.pos.y, zoom = 1.3, duration = 2.0 } } or nil,
+  })
+
+  -- A short tour — the sun, then a sweep across the asteroid belt
+  -- ring, then the water planets — all under one line of dialogue.
+  -- cameraLoop = true, same as beat 3: it keeps cycling through this
+  -- whole tour for as long as this line is up, only stopping once the
+  -- player actually presses on. worldGen.streamFocus() follows state.camera (see its own
+  -- comment), which is what's actually driving generation/culling of
+  -- the belt's planetoids/fire bars — panning the camera out here is
+  -- what makes that ring stream in ahead of actually arriving there on
+  -- foot, rather than revealing empty space that hasn't spawned yet.
+  local tourWaypoints = {}
+
+  local sun = state.sun
+  if sun then
+    local sunZoom = screenW / (sun.radius * 2 * 1.5)
+    table.insert(tourWaypoints, { x = sun.pos.x, y = sun.pos.y, zoom = sunZoom, duration = 2.0 })
+  end
+
+  do
+    local sunX, sunY = worldGen.sunPos()
+    local inner, outer = worldGen.beltRadii()
+    local midR = (inner + outer) / 2
+    local beltZoom = 0.5
+    table.insert(tourWaypoints, { x = sunX + midR, y = sunY, zoom = beltZoom, duration = 5 })
+    table.insert(tourWaypoints, { x = sunX, y = sunY - midR, zoom = beltZoom, duration = 5 })
+  end
+
+  for _, waterPlanet in ipairs({ state.waterPlanet, state.waterPlanet2 }) do
+    if waterPlanet then
+      local waterZoom = screenW / (waterPlanet.radius * 2 * 1.6)
+      table.insert(tourWaypoints, { x = waterPlanet.pos.x, y = waterPlanet.pos.y, zoom = waterZoom * .5, duration = 5})
+    end
+  end
+
+  table.insert(beats, {
+    text = "There's a fair amount of things you can see, even for this demo.",
+    camera = #tourWaypoints > 0 and tourWaypoints or nil,
+    cameraLoop = true,
+  })
+
+  return beats
 end
 
 -- homeX: the LEFT end of the patrol range (and the robot's starting
@@ -108,15 +208,21 @@ function RobotButler.new(homeX, groundY, options)
   -- "close enough to talk to him" is a bigger, more forgiving zone than
   -- his own visual silhouette.
   self.interactRadius = options.interactRadius or 220
-  self.dialogueText = "Hey, welcome to the barebones demo of ASTEROID BOB! In this demo you can walk around using the joystick, run by holding the square button, and jump by pressing X. Use the right joystick to aim Bob's blaster, and press the R2 button to fire. Bob's blaster can also pull him to planetoids - press R1 to slow down time, select a planetoid you want to draw yourself to with the cursor, and then hold L2 to pull yourself there! Press down to morph into a ball to get into tight spaces. Try wall jumping, or running up walls and ceilings!"
+  -- The ordinary one-line greeting — shown by :startDialogue, which now
+  -- only runs AFTER the one-time intro script (see buildIntroScript/
+  -- :showScriptBeat/INTRO_SCRIPT_ID) has already played out once.
+  self.dialogueText = "Hello again!"
   self.playerNearby = false
   self.dialogueActive = false
-  -- Set by :startDialogue, paginated to fit the textbox (see
-  -- paginateDialogueText) — a list of already-wrapped page strings, and
-  -- which one is currently showing. Advancing past the last page is
-  -- what actually closes the dialogue now (see :advanceDialoguePage) —
-  -- there's no more time-based auto-dismiss; a blurb this long needs to
-  -- stay open exactly as long as the player takes to click through it.
+  -- The in-progress intro Script instance, while it's playing; nil the
+  -- rest of the time (including after it finishes — see :tryInteract).
+  self.activeScript = nil
+  -- Set by :startDialogue or :showScriptBeat, paginated to fit the
+  -- textbox (see paginateDialogueText) — a list of already-wrapped page
+  -- strings, and which one is currently showing. Advancing past the
+  -- last page is what actually closes the dialogue (see
+  -- :advanceDialoguePage) or advances to the next beat (see
+  -- :tryInteract) — there's no time-based auto-dismiss.
   self.dialoguePages = nil
   self.dialoguePageIndex = 1
 
@@ -150,6 +256,20 @@ function RobotButler:advanceDialoguePage()
   end
 end
 
+-- Shows one beat of self.activeScript: pages its text through the exact
+-- same box/pagination machinery :startDialogue uses (so it looks and
+-- turns pages identically to an ordinary line of dialogue), then kicks
+-- off that beat's own camera move, if it has one.
+function RobotButler:showScriptBeat(beat)
+  self.dialogueActive = true
+  self.dialoguePageIndex = 1
+  local boxX, boxY, boxW, boxH = computeDialogueBoxRect()
+  self.dialoguePages = paginateDialogueText(beat.text, boxW, boxH)
+  if beat.camera then
+    CameraDirector.run(beat.camera, { loop = beat.cameraLoop })
+  end
+end
+
 -- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
 -- both just call this unconditionally on their own press. While a
 -- conversation is already showing, the SAME button now advances/closes
@@ -158,10 +278,41 @@ end
 -- whole conversation).
 function RobotButler:tryInteract(player)
   if self.dialogueActive then
+    if self.activeScript then
+      -- Still mid-beat (more wrapped pages left on THIS line) — just
+      -- turn the page, same as an ordinary dialogue. Only once the
+      -- beat's own pages are exhausted does the press advance the
+      -- SCRIPT itself to its next beat (or, past the last one, finish
+      -- it and hand the camera back).
+      if self.dialoguePageIndex < #self.dialoguePages then
+        self.dialoguePageIndex = self.dialoguePageIndex + 1
+        return
+      end
+      local nextBeat = self.activeScript:advance()
+      if nextBeat then
+        self:showScriptBeat(nextBeat)
+      else
+        self.dialogueActive = false
+        self.dialoguePages = nil
+        self.dialoguePageIndex = 1
+        self.activeScript = nil
+        state.scriptsCompleted[INTRO_SCRIPT_ID] = true
+        CameraDirector.release()
+      end
+      return
+    end
     self:advanceDialoguePage()
     return
   end
+
   if not self:isPlayerNear(player) then return end
+
+  if not state.scriptsCompleted[INTRO_SCRIPT_ID] then
+    self.activeScript = Script.new(buildIntroScript())
+    self:showScriptBeat(self.activeScript:start())
+    return
+  end
+
   self:startDialogue()
 end
 
@@ -224,6 +375,10 @@ function RobotButler:update()
     self.dialogueActive = false
     self.dialoguePages = nil
     self.dialoguePageIndex = 1
+    if self.activeScript then
+      self.activeScript = nil
+      CameraDirector.release()
+    end
   end
 end
 

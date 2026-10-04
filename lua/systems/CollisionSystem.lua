@@ -432,6 +432,94 @@ function CollisionSystem:handlePlayerSpikeyCollisions(player, spikeys)
   end
 end
 
+-- Keeps the player physically sealed inside the SkyDomePlanetoid — the
+-- ONLY way in or out is meant to be Beam.lua's own teleport (see
+-- main.lua's own homeBeam/beltBeam pair), not walking off the deck's
+-- own edges or jumping high enough to clear the glass dome above it.
+-- Two separate boundaries, since the dome's own shape doesn't seal
+-- itself with just one:
+--   - Side walls at the deck's own left/right edges (dome.pos.x ±
+--     dome.halfWidth), floor to ceiling — the glass dome ellipse ALONE
+--     doesn't actually reach all the way out to these at deck height
+--     (its domeRadiusX only equals the full halfWidth right at its own
+--     widest point, dome:domeAnchorY() — which sits grassHeight BELOW
+--     the walkable deck, so the glass has already curved inward some by
+--     the time it reaches deck height, leaving a small gap/"shoulder"
+--     on each side the flat deck sticks out past it). A plain vertical
+--     wall at the true edges catches that gap directly rather than
+--     trying to make the ellipse math account for it.
+--   - The glass dome's own upper ellipse itself (same geometry
+--     isWithinGravityWindow/nearestDomeSurfacePoint already use),
+--     pushed back INWARD the instant he's within his own radius of it
+--     from the inside — the mirror image of handleImmovableCollisions'
+--     own shield-bounce, which pushes every OTHER planetoid back
+--     OUTWARD when IT touches this same curve approaching from outside.
+function CollisionSystem:handlePlayerSkyDomeContainment(player, dome)
+  if not dome then return end
+  if player.isTeleporting then return end
+
+  local deckY = dome:trueSurfaceY()
+  local domeTopY = dome:domeAnchorY() - dome.domeRadiusY
+  -- Tolerates jumping/falling right at an edge without this flickering
+  -- on and off, without reaching meaningfully further than that.
+  local MARGIN = 200
+
+  -- Only even relevant while he's genuinely within the dome's own
+  -- structure — its horizontal span, floor to ceiling (same box the 'C'
+  -- debug view draws) — NOT a loose "close to dome.pos" RADIUS, which a
+  -- previous version of this used: main.lua's own belt-landing planet
+  -- sits only ~3875 units from dome.pos, comfortably inside that
+  -- version's 4500-unit guard, so the side-wall clamp below (which had
+  -- no vertical limit of its own) stayed active all the way out there
+  -- and silently walled the player OUT of the belt itself — he'd walk
+  -- toward it and just stop, with no visible cause. An axis-aligned box
+  -- actually tied to the dome's own real footprint can't make that
+  -- mistake regardless of how close some other, unrelated piece of the
+  -- level happens to sit to dome.pos.
+  if player.pos.y < domeTopY - MARGIN or player.pos.y > deckY + MARGIN then return end
+  if math.abs(player.pos.x - dome.pos.x) > dome.halfWidth + MARGIN then return end
+
+  local r = player.radius
+
+  local minX = dome.pos.x - dome.halfWidth + r
+  local maxX = dome.pos.x + dome.halfWidth - r
+  if player.pos.x < minX then
+    player.pos.x = minX
+    if player.vel.x < 0 then player.vel.x = 0 end
+  elseif player.pos.x > maxX then
+    player.pos.x = maxX
+    if player.vel.x > 0 then player.vel.x = 0 end
+  end
+
+  local cx, cy = dome.pos.x, dome:domeAnchorY()
+  local rx, ry = dome.domeRadiusX, dome.domeRadiusY
+  if player.pos.y < cy then
+    local nx = (player.pos.x - cx) / rx
+    local ny = (player.pos.y - cy) / ry
+    local nDist = math.sqrt(nx * nx + ny * ny)
+    if nDist > 0.0001 then
+      -- Shrinks the ellipse inward by approximately `r` world units —
+      -- exact when rx == ry (a true circle, which is what main.lua's
+      -- own dome actually is today, domeRadiusX == domeRadiusY ==
+      -- domeHalfW), a reasonable approximation otherwise, same
+      -- "average the two radii" shortcut nearestEllipseSurfacePoint
+      -- elsewhere in this file already leans on.
+      local boundaryDist = 1 - r / ((rx + ry) / 2)
+      if nDist > boundaryDist then
+        local scale = boundaryDist / nDist
+        player.pos.x = cx + nx * rx * scale
+        player.pos.y = cy + ny * ry * scale
+
+        local normal = Vector2.new(nx / rx, ny / ry):normalize()
+        local outward = player.vel:dot(normal)
+        if outward > 0 then
+          player.vel = player.vel:subtract(normal:multiply(outward))
+        end
+      end
+    end
+  end
+end
+
 function CollisionSystem:tryLandOnPlanet(player, planet)
   if planet.isRoundedRect then
     -- SkyDome: only land inside gravity window, while falling / neutral

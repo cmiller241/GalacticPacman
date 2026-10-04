@@ -8,8 +8,8 @@
 -- Enter/gamepad-Circle interact -> dialogue-textbox pattern
 -- RobotButler.lua established.
 --
--- Rig: three source images (img/Fisherman-Body.png, -Arms.png,
--- -Head.png), authored and positioned with paperdoll-fisherman.html at
+-- Rig: four source images (img/Fisherman-Body.png, -Arms.png,
+-- -Head.png, -Line.png), authored and positioned with paperdoll-fisherman.html at
 -- bodyScale 0.1 — POSE below is that tool's own logged output, applied
 -- with the exact same attach-point formulas the tool mirrors from
 -- Player.lua's drawLimb/drawFullBody (see paperdoll-fisherman.html's
@@ -33,9 +33,24 @@ local BODY_SCALE = 0.1
 -- Logged directly from paperdoll-fisherman.html (see that tool's own
 -- "Log current pose" button) — body: y=0 (its own local origin sits at
 -- the image's exact vertical center, see :draw's own body block).
+--
+-- line (the fishing line + hook, img/Fisherman-Line.png) is NOT like
+-- the other limbs here: it's rigidly attached to the rod TIP, which is
+-- itself just a pixel inside the ARMS image — so as armAngle sways, the
+-- tip orbits the arm's own pivot (armsX/armsY), and the line has to
+-- orbit right along with it, not sit at one fixed body-relative point
+-- the way every other limb's own (x,y) does. lineOffsetX/Y is that
+-- orbit's own radius: the tip's position relative to the arm's pivot,
+-- in the ARM's own local (unrotated) pixel space, derived by paperdoll-
+-- fisherman.html's own logged line.x/line.y (a body-relative point, only
+-- valid at that tool's own armAngle=0 preview) minus armsX/armsY —
+-- :draw below re-rotates it by the CURRENT armAngle every frame instead
+-- of trusting that one static snapshot.
 local POSE = {
   armsX = 95.59,  armsY = -66.91, armsJointX = 349.32, armsJointY = 1071.05,
   headX = -73.28, headY = -237.01, headPivotFraction = 0.9,
+  lineOffsetX = 1281 - 95.59, lineOffsetY = -1118 - (-66.91),
+  lineJointX = 113, lineJointY = 26,
 }
 
 -- Idle sway: arms and head rock a few degrees back and forth,
@@ -62,6 +77,18 @@ function Fisherman.new(x, groundY)
   self.drawHeight = bodyH * BODY_SCALE
   self.halfWidth = self.drawWidth / 2
   self.halfHeight = self.drawHeight / 2
+
+  -- How far main.lua's own on-screen cull check (utils.isOnScreen)
+  -- needs to reach past his own compact body — the fishing line (see
+  -- :draw's own line block) hangs roughly lineImage height * BODY_SCALE
+  -- world units below him, which used to go uncounted entirely (that
+  -- check only ever looked at halfWidth/halfHeight, the BODY's own tiny
+  -- size): standing near the hook itself, far from his actual body
+  -- position, the whole rig — hook included — would simply vanish
+  -- rather than draw. +100 is just slack for the attach point's own
+  -- offset and the idle sway swinging the line a little off-vertical.
+  local lineReach = (images and images.line) and (images.line:getHeight() * BODY_SCALE) or 0
+  self.drawBoundRadius = self.halfHeight + lineReach + 100
 
   -- Body art's own local origin sits at its vertical CENTER (pose's
   -- body y=0 — see :draw's own body block), so the true ground line is
@@ -97,7 +124,20 @@ end
 -- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
 -- both just call this unconditionally on their own press; it's the one
 -- place that actually decides whether he's close enough to talk.
+--
+-- A press while the dialogue is ALREADY active closes it immediately,
+-- rather than (what this used to do) just resetting dialogueTimer back
+-- to full again — state.dialogueActive (main.lua computes it fresh each
+-- frame from robotButler.dialogueActive or fisherman.dialogueActive)
+-- freezes the player's own movement for as long as this is true, so
+-- that old behavior meant pressing Enter/Circle while talking to him
+-- never actually let go — it just re-extended the freeze another 4
+-- seconds every time, forever, with no way to dismiss it on purpose.
 function Fisherman:tryInteract(player)
+  if self.dialogueActive then
+    self.dialogueActive = false
+    return
+  end
   if not self:isPlayerNear(player) then return end
   self.dialogueActive = true
   self.dialogueTimer = self.dialogueDurationTicks
@@ -152,7 +192,7 @@ function Fisherman:draw()
   local armAngle = math.sin(self.idleTime * IDLE_ARM_SPEED) * IDLE_ARM_AMPLITUDE
   local headAngle = math.sin(self.idleTime * IDLE_HEAD_SPEED + IDLE_HEAD_PHASE) * IDLE_HEAD_AMPLITUDE
 
-  -- Draw order (back to front): body, arms, head — straight from
+  -- Draw order (back to front): body, arms, head, line — straight from
   -- paperdoll-fisherman.html's own logged z-order.
   if images.body then
     local w, h = images.body:getDimensions()
@@ -173,6 +213,28 @@ function Fisherman:draw()
     love.graphics.draw(images.head, -w * scale / 2, -pivotY, 0, scale, scale)
     love.graphics.pop()
   end
+
+  -- Can't use drawLimb here (unlike every other piece above) — that
+  -- assumes a FIXED body-relative attach point, but the line's own
+  -- attach point (the rod tip) orbits the ARM's pivot as armAngle sways
+  -- (see POSE's own comment on lineOffsetX/Y). Rotating that fixed local
+  -- offset by the CURRENT armAngle and adding it to the arm's own
+  -- (unrotated) pivot point gives the tip's true current position —
+  -- exactly tracking the same rotation drawLimb already applies to the
+  -- arms image itself, so the line stays rigidly attached through the
+  -- whole sway instead of drifting off it.
+  if images.line then
+    local armsAttachX = originPos.x + POSE.armsX * scale
+    local armsAttachY = originPos.y + POSE.armsY * scale
+    local cosA, sinA = math.cos(armAngle), math.sin(armAngle)
+    local lineAttachX = armsAttachX + (POSE.lineOffsetX * cosA - POSE.lineOffsetY * sinA) * scale
+    local lineAttachY = armsAttachY + (POSE.lineOffsetX * sinA + POSE.lineOffsetY * cosA) * scale
+    love.graphics.push()
+    love.graphics.translate(lineAttachX, lineAttachY)
+    love.graphics.rotate(armAngle)
+    love.graphics.draw(images.line, -POSE.lineJointX * scale, -POSE.lineJointY * scale, 0, scale, scale)
+    love.graphics.pop()
+  end
 end
 
 ------------------------------------------------------------------
@@ -184,7 +246,7 @@ end
 
 local TOOLTIP_TEXT = "Press ENTER / Circle to talk"
 local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
-local TOOLTIP_GAP_ABOVE_HEAD = 26
+local TOOLTIP_GAP_ABOVE_HEAD = 66 -- 26 + 40, per explicit request to move it up
 
 -- Not shown while curled into a ball (Player.lua's own isBall) — a
 -- ball can't interact with him at all (see the input-handler guards in

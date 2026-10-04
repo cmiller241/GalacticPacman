@@ -104,13 +104,14 @@ local function loadAssets(onComplete)
   state.textboxTexture = love.graphics.newImage("img/textbox.png")
   state.textboxTexture:setFilter("linear", "linear")
 
-  -- Fisherman NPC rig (see Fisherman.lua) — three paperdoll-style parts
+  -- Fisherman NPC rig (see Fisherman.lua) — four paperdoll-style parts
   -- authored/positioned with paperdoll-fisherman.html, same "linear"
   -- filtering as the other high-res-scaled-down NPC art above.
   state.fishermanImages = {
     body = love.graphics.newImage("img/Fisherman-Body.png"),
     arms = love.graphics.newImage("img/Fisherman-Arms.png"),
     head = love.graphics.newImage("img/Fisherman-Head.png"),
+    line = love.graphics.newImage("img/Fisherman-Line.png"),
   }
   for _, img in pairs(state.fishermanImages) do
     img:setFilter("linear", "linear")
