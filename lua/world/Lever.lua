@@ -9,11 +9,11 @@
 -- exactly on that surface rather than needing pixel-perfect placement
 -- in Tiled itself).
 --
--- Controls a single Gate for now (self.gate, wired directly in
--- main.lua right after both are spawned) — pulling it toggles that
--- gate open/closed. A more general many-levers-to-many-gates linking
--- system can replace this one direct reference later without changing
--- anything else about how the lever itself works.
+-- Controls a single Gate, named in Tiled via this Lever object's own
+-- "gate" custom property (that Gate object's Tiled id) — resolved to
+-- the actual spawned Gate in main.lua, once both lists exist, and
+-- stored directly on self.gate. Pulling the lever toggles that gate
+-- open/closed.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -48,9 +48,13 @@ function Lever.new(x, y)
   local self = setmetatable({}, Lever)
 
   self.pos = Vector2.new(x, y)
-  -- Which Gate this lever opens/closes — set directly by main.lua for
-  -- now (see this file's own header comment).
+  -- Which Gate this lever opens/closes, resolved from this Tiled
+  -- object's own "gate" custom property — set by main.lua once both
+  -- lists exist (see this file's own header comment). self.gateId
+  -- (the raw, not-yet-resolved Tiled id) is set alongside self directly
+  -- in main.lua's own spawn loop, right after Lever.new returns.
   self.gate = nil
+  self.gateId = nil
 
   -- False = closed/off (handle angled left) — the default resting
   -- state a level should normally start in.
@@ -69,16 +73,25 @@ function Lever:isPlayerNear(player)
   return (dx * dx + dy * dy) <= self.interactRadius * self.interactRadius
 end
 
+-- Actually flips the lever and whatever Gate it controls — shared by
+-- :tryInteract below (the player pulling it directly) and
+-- CollisionSystem:handleFireballLeverCollisions (a fireball hitting it
+-- from a distance), neither of which needs to duplicate the toggle
+-- logic itself.
+function Lever:engage()
+  self.isOn = not self.isOn
+  if self.gate then
+    self.gate:setOpen(self.isOn)
+  end
+end
+
 -- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
 -- both just call this unconditionally on their own press; it's the one
 -- place that actually decides whether the player's close enough to
 -- reach it.
 function Lever:tryInteract(player)
   if not self:isPlayerNear(player) then return end
-  self.isOn = not self.isOn
-  if self.gate then
-    self.gate:setOpen(self.isOn)
-  end
+  self:engage()
 end
 
 function Lever:update()

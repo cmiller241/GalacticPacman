@@ -226,6 +226,16 @@ local function attachInputHandlers()
             lever:tryInteract(state.player)
           end
         end
+        if state.cranks then
+          for _, crank in ipairs(state.cranks) do
+            crank:tryInteract(state.player)
+          end
+        end
+        if state.signs then
+          for _, sign in ipairs(state.signs) do
+            sign:tryInteract(state.player)
+          end
+        end
         if state.beams then
           for _, beam in ipairs(state.beams) do
             beam:tryInteract(state.player)
