@@ -1918,6 +1918,14 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- point-placement convention as sphereSpawns above — the object's own
   -- x/y IS the planetoid's center, no raycasting onto terrain below it.
   local spikeySpawns = {}
+  -- "Mirror" objects (see lua/world/Mirror.lua): same point-placement
+  -- convention as sphereSpawns/spikeySpawns above — the object's own
+  -- x/y IS the mirror's own pivot, no raycasting onto terrain below it.
+  -- angle comes from its own "Angle" custom property (a String
+  -- property in Tiled's own export, same as every other custom
+  -- property here — tonumber'd back into a number, degrees, defaulting
+  -- to 0/horizontal if left out).
+  local mirrorSpawns = {}
   -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua): same
   -- hazard, but patrols up and down within a shaft instead of sitting
   -- still. topY/bottomY are the WALL half of its patrol bounds —
@@ -1936,6 +1944,23 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- isn't fully assembled yet at this point in this function), so this
   -- is just the raw spawn point, exactly like ooombaSpawns.
   local leverSpawns = {}
+  -- "Crank" objects (see lua/world/Crank.lua): same "loosely placed,
+  -- snapped down onto whatever's actually below it" convention as
+  -- leverSpawns above — the raycast happens in main.lua's own spawn
+  -- loop, this is just the raw spawn point plus whichever Tiled object
+  -- id its own "Mirror" custom property names, if any (a String
+  -- property in Tiled's own export — tonumber'd back into a number
+  -- here, same as spikeyOrbitSpawns' own orbitId below). Not resolved
+  -- against anything yet; carried along for a future effect to use.
+  local crankSpawns = {}
+  -- "Sign" objects (see lua/world/Sign.lua): same "loosely placed,
+  -- snapped down onto whatever's actually below it" convention as
+  -- leverSpawns/crankSpawns above — the raycast happens in main.lua's
+  -- own spawn loop, this is just the raw spawn point plus its own
+  -- "message" custom property (a String property in Tiled's own
+  -- export, pipe-delimited for more than one message — see Sign.lua's
+  -- own splitMessages).
+  local signSpawns = {}
   -- "Gate" objects (see lua/world/Gate.lua): a vertical barrier that
   -- spans from the nearest wall/top tile BELOW the object's own point
   -- up to the nearest wall/top tile ABOVE it — resolved right here via
@@ -2007,10 +2032,36 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             y = anchorY + obj.y * TILE_SCALE,
             id = obj.id,
           })
+        elseif obj.class == "Mirror" then
+          table.insert(mirrorSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            angle = tonumber(obj.properties and obj.properties["Angle"]) or 0,
+            id = obj.id,
+          })
         elseif obj.class == "Lever" then
           table.insert(leverSpawns, {
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
+            -- The Gate object's own Tiled id this lever opens/closes
+            -- (a String property in Tiled's own export, same as every
+            -- other custom property here — tonumber'd back into a
+            -- number, matched against each gateSpawns entry's own `id`
+            -- below). Resolved to the actual spawned Gate in main.lua,
+            -- once both lists exist.
+            gateId = tonumber(obj.properties and obj.properties["gate"]),
+          })
+        elseif obj.class == "Crank" then
+          table.insert(crankSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            mirrorId = tonumber(obj.properties and obj.properties["Mirror"]),
+          })
+        elseif obj.class == "Sign" then
+          table.insert(signSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            message = (obj.properties and obj.properties["message"]) or "",
           })
         elseif obj.class == "Gate" then
           -- obj.x/y are in the RAW, unscaled tile-pixel space (same as
@@ -2028,6 +2079,12 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
               topY = anchorY + (topRow + 1) * TILE_WORLD_SIZE,
               bottomY = anchorY + bottomRow * TILE_WORLD_SIZE,
               halfWidth = GATE_HALF_WIDTH,
+              -- Tiled's own object id — exposed so a Lever elsewhere in
+              -- this same layer can reference this one by it (see
+              -- leverSpawns' own gateId above and main.lua's own spawn
+              -- wiring, which is where that reference actually gets
+              -- resolved to the real spawned Gate).
+              id = obj.id,
             })
           else
             -- Silent failure otherwise (no gate spawned at all) is
@@ -2159,7 +2216,10 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     ooombaSpawns = ooombaSpawns,
     sphereSpawns = sphereSpawns,
     spikeySpawns = spikeySpawns,
+    mirrorSpawns = mirrorSpawns,
     leverSpawns = leverSpawns,
+    crankSpawns = crankSpawns,
+    signSpawns = signSpawns,
     gateSpawns = gateSpawns,
     spikeyVerticalSpawns = spikeyVerticalSpawns,
     spikeyOrbitSpawns = spikeyOrbitSpawns,

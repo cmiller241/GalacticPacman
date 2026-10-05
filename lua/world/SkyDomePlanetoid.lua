@@ -337,6 +337,12 @@ function SkyDomePlanetoid.new(x, y, options)
   self.isSkyDome     = true
   self.isRoundedRect = true
   self.noSunShading  = true
+  -- Excluded from pull-beam/lock-on target selection (see
+  -- TargetLock.lua/VatsCursor.lua/Player.lua's own isPullExempt
+  -- checks) — the dome itself is huge background scenery the player is
+  -- already standing on/next to, not something to pull-beam to; the
+  -- Spheres/Spikeys/etc. placed inside it are still ordinary targets.
+  self.isPullExempt  = true
 
   -- Stronger than the game's default gravity (GravitySystem:applyTo
   -- checks this per-planet override before falling back to

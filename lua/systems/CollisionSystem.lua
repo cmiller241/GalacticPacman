@@ -790,6 +790,127 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
   return toBreak
 end
 
+-- Fireball vs WALL tiles (TerrainLevel.walls entries flagged isWall —
+-- see TiledTerrain.lua's buildWallShapes; this deliberately excludes
+-- Gate, which lives in the same walls list but has no isWall flag, so
+-- a closed gate still just blocks a fireball's PATH via whatever's
+-- behind/around it rather than detonating it outright). Plain
+-- circle-vs-axis-aligned-box test, same shape math
+-- handlePlayerWallCollisions uses for the player's own capsule, simplified
+-- down to a single circle since a fireball has no "head" to reach
+-- further than its own radius.
+function CollisionSystem:handleFireballWallCollisions(fireballs, walls)
+  local hitFireballs = {}
+  if not walls then return hitFireballs end
+
+  for _, f in ipairs(fireballs) do
+    if not hitFireballs[f] then
+      for _, wall in ipairs(walls) do
+        if wall.isWall then
+          local boxMinX, boxMaxX = wall.pos.x - wall.halfWidth, wall.pos.x + wall.halfWidth
+          local boxMinY, boxMaxY = wall.pos.y - wall.halfHeight, wall.pos.y + wall.halfHeight
+          local closestX = math.max(boxMinX, math.min(f.pos.x, boxMaxX))
+          local closestY = math.max(boxMinY, math.min(f.pos.y, boxMaxY))
+          local dx, dy = f.pos.x - closestX, f.pos.y - closestY
+          if dx * dx + dy * dy < f.radius * f.radius then
+            hitFireballs[f] = true
+            break
+          end
+        end
+      end
+    end
+  end
+
+  return hitFireballs
+end
+
+-- Extra lifetime (baseline 60fps ticks — see Fireball.lua's own
+-- FIREBALL_LIFE, which uses the same unit) granted each time a
+-- fireball bounces off a mirror, so a bounced shot reads as having
+-- some fresh life left in it rather than just continuing to count
+-- down toward a dissipation it was already close to before the bounce.
+local FIREBALL_MIRROR_BOUNCE_EXTRA_LIFE = 60 -- ~1 second
+
+-- Fireball vs Lever: a fireball hitting a lever engages it exactly
+-- like the player pulling it would (see Lever:engage, shared by both
+-- paths) — distance-only, plain circle-vs-circle, radius taken from
+-- Lever.lua's own BASE_RADIUS-sized interactRadius isn't right here
+-- (that's "close enough to reach," not "the lever's own visible
+-- size"), so this uses a fixed hit radius matching the lever's actual
+-- base plate instead. The fireball IS destroyed by this hit — same
+-- "something solid stopped it" treatment as a wall tile — so the
+-- caller should fold these into its destructive fireball-removal pass
+-- (and skip anything handleFireballMirrorCollisions already reflected
+-- this frame, same as every other destructive check).
+local LEVER_HIT_RADIUS = 48
+function CollisionSystem:handleFireballLeverCollisions(fireballs, levers)
+  local hitFireballs = {}
+  if not levers then return hitFireballs end
+
+  for _, f in ipairs(fireballs) do
+    for _, lever in ipairs(levers) do
+      local dx, dy = f.pos.x - lever.pos.x, f.pos.y - lever.pos.y
+      local minDist = f.radius + LEVER_HIT_RADIUS
+      if dx * dx + dy * dy < minDist * minDist then
+        lever:engage()
+        hitFireballs[f] = true
+        break
+      end
+    end
+  end
+
+  return hitFireballs
+end
+
+-- Fireball vs Mirror: reflects the fireball instead of destroying it,
+-- bounced across the mirror's own current surface angle — exactly the
+-- way a real mirror would redirect it. Tested and reflected in the
+-- mirror's own local space (world point/velocity rotated by -angle
+-- around its pivot): the mirror's reflecting plane is the local X
+-- axis, so a hit just flips the local Y component of velocity and
+-- leaves local X untouched, then both get rotated back to world
+-- space. Returns a set of fireballs that got reflected this pass, so
+-- a caller can skip handing them to the destructive asteroid/planet/
+-- wall checks the same frame (their position only moved a few pixels
+-- off the mirror's own face, not far enough to trust a fresh
+-- destructive check against whatever's sitting right next to it).
+function CollisionSystem:handleFireballMirrorCollisions(fireballs, mirrors)
+  local reflected = {}
+  if not mirrors then return reflected end
+
+  for _, f in ipairs(fireballs) do
+    for _, m in ipairs(mirrors) do
+      local cosA, sinA = math.cos(m.angle), math.sin(m.angle)
+      local dx, dy = f.pos.x - m.pos.x, f.pos.y - m.pos.y
+      -- World -> mirror-local (rotate by -angle).
+      local localX = dx * cosA + dy * sinA
+      local localY = -dx * sinA + dy * cosA
+
+      if math.abs(localX) < m.halfLength + f.radius and math.abs(localY) < m.halfThickness + f.radius then
+        local vx, vy = f.vel.x, f.vel.y
+        local localVX = vx * cosA + vy * sinA
+        local localVY = -(-vx * sinA + vy * cosA) -- flip the component perpendicular to the mirror's own face
+
+        -- Local -> world (rotate by +angle) for both the reflected
+        -- velocity and a position nudged just clear of the mirror's
+        -- own thickness, on whichever side it was already on.
+        f.vel.x = localVX * cosA - localVY * sinA
+        f.vel.y = localVX * sinA + localVY * cosA
+
+        local pushLocalY = (localY >= 0 and 1 or -1) * (m.halfThickness + f.radius + 1)
+        f.pos.x = m.pos.x + localX * cosA - pushLocalY * sinA
+        f.pos.y = m.pos.y + localX * sinA + pushLocalY * cosA
+
+        f.life = f.life + FIREBALL_MIRROR_BOUNCE_EXTRA_LIFE
+        reflected[f] = true
+        break
+      end
+    end
+  end
+
+  return reflected
+end
+
 function CollisionSystem:handleFireballCollisions(fireballs, planetoids, asteroids)
   local hitFireballs = {}
   local toBreakAsteroids = {}

@@ -32,6 +32,10 @@ local Spikey = require("lua.world.Spikey")
 local SpikeyVertical = require("lua.world.SpikeyVertical")
 local SpikeyOrbit = require("lua.world.SpikeyOrbit")
 local Lever = require("lua.world.Lever")
+local Crank = require("lua.world.Crank")
+local Mirror = require("lua.world.Mirror")
+local Sign = require("lua.world.Sign")
+local PinballInterior = require("lua.interiors.PinballInterior")
 local Beam = require("lua.world.Beam")
 local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
@@ -154,6 +158,39 @@ function love.load()
   -- on top of gameplay geometry.
   state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome:trueSurfaceY())
   state.skyDomePlanet = dome
+
+  -- "Pinball" planet — a tall RoundedRectPlanetoid (see
+  -- lua/world/RoundedRectPlanetoid.lua; same typical baked body/
+  -- sun-shading look every rounded-rect landmark already uses, just a
+  -- different shape than a plain circular Planetoid) sitting directly
+  -- below the dome, with a semi-transparent pinball-table schematic
+  -- overlaid on its face (see lua/interiors/PinballInterior.lua, drawn
+  -- automatically for any planetoid with a .interior — see main.lua's
+  -- own draw loop below). Taller than it is wide, per explicit
+  -- request — a rectangle fits more actual pinball-table content than
+  -- a circle would. Actually entering/playing it isn't wired up at
+  -- all yet — this is purely the exterior landmark + overlay.
+  do
+    local PINBALL_PLANET_HALF_WIDTH = 220
+    local PINBALL_PLANET_HALF_HEIGHT = 375 -- the previous (circular) version's own radius, kept as this one's vertical reach
+    local PINBALL_PLANET_CORNER_RADIUS = 50
+    local PINBALL_PLANET_GAP = 300 -- clearance kept below the dome's own base before this planet starts
+    local pinballX = dome.pos.x
+    local pinballY = dome:domeAnchorY() + dome.baseRadiusY + PINBALL_PLANET_GAP + PINBALL_PLANET_HALF_HEIGHT
+
+    local pinballPlanet = RoundedRectPlanetoid.new(
+      pinballX, pinballY,
+      PINBALL_PLANET_HALF_WIDTH, PINBALL_PLANET_HALF_HEIGHT, PINBALL_PLANET_CORNER_RADIUS,
+      { 0.55, 0.57, 0.62, 1 })
+    pinballPlanet.isImmovable = true
+    pinballPlanet.isPermanent = true
+    pinballPlanet.vel.x, pinballPlanet.vel.y = 0, 0
+    pinballPlanet.rotationAngle = 0
+    pinballPlanet.rotationSpeed = 0
+    pinballPlanet.interior = PinballInterior.new(pinballPlanet)
+    table.insert(state.planetoids, pinballPlanet)
+    state.pinballPlanet = pinballPlanet
+  end
 
   -- Water planet landmark — an ordinary walkable/landable Planetoid
   -- (see WaterPlanet.lua) with a shader-wavy edge instead of a plain
@@ -554,6 +591,17 @@ function love.load()
       end
     end
 
+    -- "Mirror" objects (see lua/world/Mirror.lua): freestanding, same
+    -- point-placement convention as the Sphere/Spikey spawns above —
+    -- added to entitiesById too, so a Crank's own "Mirror" property
+    -- (resolved below, once this loop has run) can find it.
+    state.mirrors = {}
+    for _, spawn in ipairs(terrainLevel.mirrorSpawns or {}) do
+      local mirror = Mirror.new(spawn.x, spawn.y, spawn.angle)
+      table.insert(state.mirrors, mirror)
+      if spawn.id then entitiesById[spawn.id] = mirror end
+    end
+
     -- "Lever" objects (see lua/world/Lever.lua): placed on the ground
     -- via the exact same raycast-down approach as Ooombas above (loosely
     -- placed in Tiled, snapped onto whatever TerrainShape surface
@@ -575,7 +623,58 @@ function love.load()
         end
       end
       if bestHit then
-        table.insert(state.levers, Lever.new(bestHit.point.x, bestHit.point.y))
+        local lever = Lever.new(bestHit.point.x, bestHit.point.y)
+        lever.gateId = spawn.gateId
+        table.insert(state.levers, lever)
+      end
+    end
+
+    -- "Crank" objects (see lua/world/Crank.lua): same raycast-down
+    -- ground placement as the levers just above.
+    state.cranks = {}
+    for _, spawn in ipairs(terrainLevel.crankSpawns or {}) do
+      local bestShape, bestDy, bestHit = nil, nil, nil
+      for _, shape in ipairs(terrainLevel.shapes) do
+        if not shape.isWallClimb then
+          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
+          if hit then
+            local dy = hit.point.y - spawn.y
+            if dy >= 0 and (not bestDy or dy < bestDy) then
+              bestDy = dy
+              bestShape = shape
+              bestHit = hit
+            end
+          end
+        end
+      end
+      if bestHit then
+        local crank = Crank.new(bestHit.point.x, bestHit.point.y)
+        crank.mirrorId = spawn.mirrorId
+        crank.mirror = spawn.mirrorId and entitiesById[spawn.mirrorId]
+        table.insert(state.cranks, crank)
+      end
+    end
+
+    -- "Sign" objects (see lua/world/Sign.lua): same raycast-down
+    -- ground placement as the levers/cranks above.
+    state.signs = {}
+    for _, spawn in ipairs(terrainLevel.signSpawns or {}) do
+      local bestShape, bestDy, bestHit = nil, nil, nil
+      for _, shape in ipairs(terrainLevel.shapes) do
+        if not shape.isWallClimb then
+          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
+          if hit then
+            local dy = hit.point.y - spawn.y
+            if dy >= 0 and (not bestDy or dy < bestDy) then
+              bestDy = dy
+              bestShape = shape
+              bestHit = hit
+            end
+          end
+        end
+      end
+      if bestHit then
+        table.insert(state.signs, Sign.new(bestHit.point.x, bestHit.point.y, spawn.message))
       end
     end
 
@@ -587,18 +686,25 @@ function love.load()
     -- own update/draw loops below can animate and render it) — the
     -- exact same object serves both roles at once.
     state.gates = {}
+    local gatesByTiledId = {}
     for _, spawn in ipairs(terrainLevel.gateSpawns or {}) do
       local gate = Gate.new(spawn.x, spawn.topY, spawn.bottomY, spawn.halfWidth)
       table.insert(terrainLevel.walls, gate)
       table.insert(state.gates, gate)
+      if spawn.id then
+        gatesByTiledId[spawn.id] = gate
+      end
     end
 
-    -- Wires the one lever to the one gate for now — see both files' own
-    -- header comments on why this is a direct reference rather than a
-    -- generic many-to-many linking system (that can replace this later
-    -- without changing anything else about how either object works).
-    if state.levers[1] and state.gates[1] then
-      state.levers[1].gate = state.gates[1]
+    -- Wires each lever to the Gate its own "gate" custom property names
+    -- (see leverSpawns' own gateId, set from that property in
+    -- TiledTerrain.lua) — a lever with no gateId, or one naming a gate
+    -- that didn't resolve, is just left unwired (Lever:tryInteract
+    -- already no-ops with self.gate == nil).
+    for _, lever in ipairs(state.levers) do
+      if lever.gateId and gatesByTiledId[lever.gateId] then
+        lever.gate = gatesByTiledId[lever.gateId]
+      end
     end
   end
 
@@ -759,6 +865,24 @@ function love.update(dt)
     end
   end
 
+  if state.cranks then
+    for _, crank in ipairs(state.cranks) do
+      crank:update()
+    end
+  end
+
+  if state.signs then
+    for _, sign in ipairs(state.signs) do
+      sign:update()
+    end
+  end
+
+  if state.mirrors then
+    for _, mirror in ipairs(state.mirrors) do
+      mirror:update()
+    end
+  end
+
   if state.beams then
     for _, beam in ipairs(state.beams) do
       beam:update()
@@ -801,6 +925,15 @@ function love.update(dt)
   state.dialogueActive = (state.robotButler and state.robotButler.dialogueActive)
     or (state.fisherman and state.fisherman.dialogueActive)
     or false
+
+  if state.signs then
+    for _, sign in ipairs(state.signs) do
+      if sign.dialogueActive then
+        state.dialogueActive = true
+        break
+      end
+    end
+  end
 
   -- Empty keys while the opening cutscene is running — the player
   -- still stands on the deck normally (gravity/collision below are
@@ -934,27 +1067,75 @@ function love.update(dt)
       end
     end
 
-    if #state.fireballs > 0 and state.asteroids then
-      local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
-        state.fireballs, collidablePlanetoids, state.asteroids
-      )
-      if next(toBreakAsteroids) then
-        for i = #state.asteroids, 1, -1 do
-          local a = state.asteroids[i]
-          if toBreakAsteroids[a] then
-            table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
+    if #state.fireballs > 0 then
+      -- Mirrors get first look: a reflected fireball just had its
+      -- velocity/position adjusted, not destroyed, so it's excluded
+      -- below from every destructive check this same frame (its new
+      -- position is only a few pixels off the mirror's own face, not
+      -- far enough to trust a fresh destructive check against
+      -- whatever's sitting right next to it).
+      local reflected = state.mirrors and collisionSystem:handleFireballMirrorCollisions(state.fireballs, state.mirrors) or {}
+
+      if state.asteroids then
+        local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
+          state.fireballs, collidablePlanetoids, state.asteroids
+        )
+        if next(toBreakAsteroids) then
+          for i = #state.asteroids, 1, -1 do
+            local a = state.asteroids[i]
+            if toBreakAsteroids[a] then
+              table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
+              if state.audioManager then state.audioManager:playFireball() end
+              table.remove(state.asteroids, i)
+            end
+          end
+        end
+        for _, hit in ipairs(planetHits) do
+          if not reflected[hit.fireball] then
+            table.insert(state.explosions, Explosion.new(hit.fireball.pos.x, hit.fireball.pos.y))
             if state.audioManager then state.audioManager:playFireball() end
-            table.remove(state.asteroids, i)
+          end
+        end
+        for i = #state.fireballs, 1, -1 do
+          if hitFireballs[state.fireballs[i]] and not reflected[state.fireballs[i]] then
+            table.remove(state.fireballs, i)
           end
         end
       end
-      for _, hit in ipairs(planetHits) do
-        table.insert(state.explosions, Explosion.new(hit.fireball.pos.x, hit.fireball.pos.y))
-        if state.audioManager then state.audioManager:playFireball() end
+
+      -- WALL tiles (not Gate — see handleFireballWallCollisions' own
+      -- comment): a fireball explodes against one exactly like it does
+      -- against a planet or asteroid, instead of silently flying
+      -- straight through.
+      if state.tiledLevels and #state.fireballs > 0 then
+        local hitWallFireballs = {}
+        for _, level in ipairs(state.tiledLevels) do
+          local hits = collisionSystem:handleFireballWallCollisions(state.fireballs, level.walls)
+          for f in pairs(hits) do hitWallFireballs[f] = true end
+        end
+        for i = #state.fireballs, 1, -1 do
+          local f = state.fireballs[i]
+          if hitWallFireballs[f] and not reflected[f] then
+            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
+            if state.audioManager then state.audioManager:playFireball() end
+            table.remove(state.fireballs, i)
+          end
+        end
       end
-      for i = #state.fireballs, 1, -1 do
-        if hitFireballs[state.fireballs[i]] then
-          table.remove(state.fireballs, i)
+
+      -- Lever: a fireball hitting one engages it (see Lever:engage,
+      -- shared with the player's own direct pull) and detonates the
+      -- fireball, same "something solid stopped it" treatment as a
+      -- wall tile.
+      if state.levers and #state.fireballs > 0 then
+        local hitLeverFireballs = collisionSystem:handleFireballLeverCollisions(state.fireballs, state.levers)
+        for i = #state.fireballs, 1, -1 do
+          local f = state.fireballs[i]
+          if hitLeverFireballs[f] and not reflected[f] then
+            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
+            if state.audioManager then state.audioManager:playFireball() end
+            table.remove(state.fireballs, i)
+          end
         end
       end
     end
@@ -1158,6 +1339,13 @@ function love.draw()
     -- many water bodies end up existing.
     if p ~= state.skyDomePlanet and not p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
+      -- Duck-typed: only PinballPlanet has one right now (see
+      -- lua/interiors/PinballInterior.lua and this planet's own setup
+      -- comment), but any future planetoid with its own .interior
+      -- overlay rides this same draw pass for free.
+      if p.interior then
+        p.interior:draw()
+      end
     end
   end
 
@@ -1239,6 +1427,32 @@ function love.draw()
       if utils.isOnScreen(lever.pos.x, lever.pos.y, 80, 20) then
         lever:draw()
         lever:drawTooltip()
+      end
+    end
+  end
+
+  if state.cranks then
+    for _, crank in ipairs(state.cranks) do
+      if utils.isOnScreen(crank.pos.x, crank.pos.y, 80, 20) then
+        crank:draw()
+        crank:drawTooltip()
+      end
+    end
+  end
+
+  if state.signs then
+    for _, sign in ipairs(state.signs) do
+      if utils.isOnScreen(sign.pos.x, sign.pos.y, 80, 20) then
+        sign:draw()
+        sign:drawTooltip()
+      end
+    end
+  end
+
+  if state.mirrors then
+    for _, mirror in ipairs(state.mirrors) do
+      if utils.isOnScreen(mirror.pos.x, mirror.pos.y, 80, 20) then
+        mirror:draw()
       end
     end
   end
@@ -1547,6 +1761,12 @@ function love.draw()
 
   if state.fisherman then
     state.fisherman:drawDialogue()
+  end
+
+  if state.signs then
+    for _, sign in ipairs(state.signs) do
+      sign:drawDialogue()
+    end
   end
 
   if state.minimap then
