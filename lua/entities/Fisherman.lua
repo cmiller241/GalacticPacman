@@ -24,6 +24,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local DialogueBox = require("lua.ui.DialogueBox")
 
 local Fisherman = {}
 Fisherman.__index = Fisherman
@@ -238,10 +239,8 @@ function Fisherman:draw()
 end
 
 ------------------------------------------------------------------
--- Tooltip / dialogue — same look and behavior as RobotButler.lua's own
--- (shared textbox art, same layout math), kept as its own copy rather
--- than a shared module since RobotButler.lua's version wasn't factored
--- out into one either.
+-- Tooltip / dialogue — same look as every other NPC's own (see
+-- lua/ui/DialogueBox.lua, shared box art/layout/pagination).
 ------------------------------------------------------------------
 
 local TOOLTIP_TEXT = "Press ENTER / Circle to talk"
@@ -274,60 +273,14 @@ function Fisherman:drawTooltip()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
-local TEXTBOX_SOURCE_W, TEXTBOX_SOURCE_H = 1410, 227
-local TEXTBOX_WIDTH_MARGIN = 20
-local TEXTBOX_BOTTOM_MARGIN = 20
-local TEXTBOX_TEXT_PAD_X = 60
-local TEXTBOX_TEXT_PAD_Y = 33
-local TEXTBOX_SHADOW_OFFSET = 2
-
-local dialogueFont = nil
-local function ensureDialogueFont()
-  if not dialogueFont then
-    dialogueFont = love.graphics.newFont(30)
-  end
-  return dialogueFont
-end
-
 -- Screen-space dialogue box — call AFTER the camera transform is
 -- popped, same call-site convention as RobotButler.lua's own (see
--- main.lua's love.draw).
+-- main.lua's love.draw). No pagination here (self.dialogueText is a
+-- single short line, dismissed by a timer or an early press — see
+-- :tryInteract/:update), so there's never a "more" indicator.
 function Fisherman:drawDialogue()
   if not self.dialogueActive then return end
-  local img = state.textboxTexture
-  if not img then return end
-
-  local screenW, screenH = love.graphics.getWidth(), love.graphics.getHeight()
-
-  local rightEdge = screenW - TEXTBOX_WIDTH_MARGIN
-  if state.minimap then
-    state.minimap:refreshSize()
-    local mapLeftEdge = screenW - state.minimap.size - state.minimap.margin
-    rightEdge = math.min(rightEdge, mapLeftEdge - TEXTBOX_WIDTH_MARGIN)
-  end
-
-  local boxX = TEXTBOX_WIDTH_MARGIN
-  local boxW = rightEdge - boxX
-  local boxH = boxW * (TEXTBOX_SOURCE_H / TEXTBOX_SOURCE_W)
-  local boxY = screenH - TEXTBOX_BOTTOM_MARGIN - boxH
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(img, boxX, boxY, 0, boxW / TEXTBOX_SOURCE_W, boxH / TEXTBOX_SOURCE_H)
-
-  local prevFont = love.graphics.getFont()
-  love.graphics.setFont(ensureDialogueFont())
-
-  local textX = boxX + TEXTBOX_TEXT_PAD_X
-  local textY = boxY + TEXTBOX_TEXT_PAD_Y
-  local textLimit = boxW - TEXTBOX_TEXT_PAD_X * 2
-
-  love.graphics.setColor(0, 0, 0, 0.65)
-  love.graphics.printf(self.dialogueText, textX + TEXTBOX_SHADOW_OFFSET, textY + TEXTBOX_SHADOW_OFFSET, textLimit, "left")
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.printf(self.dialogueText, textX, textY, textLimit, "left")
-
-  love.graphics.setFont(prevFont)
+  DialogueBox.draw(self.dialogueText, false)
 end
 
 return Fisherman

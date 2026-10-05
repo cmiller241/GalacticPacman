@@ -355,8 +355,13 @@ function Player.new(x, y)
     local _, imgH = headImg:getDimensions()
     headH = imgH
   end
+  -- -10: trims the wall/ceiling collision capsule a little shorter than
+  -- the helmet's own actual visual top edge — a bare match let the
+  -- capsule clip low ceiling tiles that still looked visually clear
+  -- above his helmet.
   self.headReach = (self.groundOffset + math.abs(self.bodyPartsConfig.headY)) * self.bodyScale
     + headH * self.bodyScale * self.headPivotFraction
+    - 10
 
   -- Aim cache
   self.aimShoulderPos = nil

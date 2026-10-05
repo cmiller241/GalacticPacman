@@ -20,16 +20,10 @@ local DustPuff = require("lua.effects.DustPuff")
 local Script = require("lua.systems.Script")
 local CameraDirector = require("lua.systems.CameraDirector")
 local worldGen = require("lua.setup.worldGen")
+local DialogueBox = require("lua.ui.DialogueBox")
 
 local RobotButler = {}
 RobotButler.__index = RobotButler
-
--- Forward-declared — actually defined much further down, alongside the
--- TEXTBOX_* layout constants and ensureDialogueFont they both depend
--- on, but :startDialogue (up near RobotButler.new, well before that
--- point in the file) already needs to call them.
-local computeDialogueBoxRect
-local paginateDialogueText
 
 local FRAME_COUNT = 4
 
@@ -218,7 +212,7 @@ function RobotButler.new(homeX, groundY, options)
   -- rest of the time (including after it finishes — see :tryInteract).
   self.activeScript = nil
   -- Set by :startDialogue or :showScriptBeat, paginated to fit the
-  -- textbox (see paginateDialogueText) — a list of already-wrapped page
+  -- textbox (see DialogueBox.paginateForBox) — a list of already-wrapped page
   -- strings, and which one is currently showing. Advancing past the
   -- last page is what actually closes the dialogue (see
   -- :advanceDialoguePage) or advances to the next beat (see
@@ -238,8 +232,7 @@ end
 function RobotButler:startDialogue()
   self.dialogueActive = true
   self.dialoguePageIndex = 1
-  local boxX, boxY, boxW, boxH = computeDialogueBoxRect()
-  self.dialoguePages = paginateDialogueText(self.dialogueText, boxW, boxH)
+  self.dialoguePages = DialogueBox.paginateForBox(self.dialogueText)
 end
 
 -- Advances to the next page, or — once already on the last one — this
@@ -263,8 +256,7 @@ end
 function RobotButler:showScriptBeat(beat)
   self.dialogueActive = true
   self.dialoguePageIndex = 1
-  local boxX, boxY, boxW, boxH = computeDialogueBoxRect()
-  self.dialoguePages = paginateDialogueText(beat.text, boxW, boxH)
+  self.dialoguePages = DialogueBox.paginateForBox(beat.text)
   if beat.camera then
     CameraDirector.run(beat.camera, { loop = beat.cameraLoop })
   end
@@ -439,144 +431,17 @@ function RobotButler:drawTooltip()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
--- Source textbox.png is 1410x227 — used here just for its own aspect
--- ratio, not a hardcoded literal, so this keeps working if that image
--- is ever swapped for a different size.
-local TEXTBOX_SOURCE_W, TEXTBOX_SOURCE_H = 1410, 227
-local TEXTBOX_WIDTH_MARGIN = 20  -- screen px of clearance kept on either side of the window
-local TEXTBOX_BOTTOM_MARGIN = 20 -- screen px kept between the box's own bottom edge and the window's
-local TEXTBOX_TEXT_PAD_X = 60    -- inset from the box's own edges before text is allowed to start/wrap
-local TEXTBOX_TEXT_PAD_Y = 33    -- inset from the box's own TOP/BOTTOM edge (text is top-aligned; the same margin is kept clear at the bottom for pagination and the "more text" indicator)
-local TEXTBOX_SHADOW_OFFSET = 2  -- px the drop shadow sits down-and-right of the actual text
-
--- "More text" indicator: a small filled triangle in the box's own
--- bottom-right corner, shown only while self.dialoguePageIndex is NOT
--- the last page — same idea as the classic RPG "there's more, press a
--- button" corner marker.
-local DIALOGUE_MORE_SIZE = 16    -- triangle leg length, screen px
-local DIALOGUE_MORE_MARGIN = 18  -- inset from the box's own bottom-right corner
-
--- Built lazily, once, and reused — same "bake once" precedent as this
--- file's own frameQuads. The default LÖVE font reads too small against
--- a box this wide; love.graphics.setFont is reset back to whatever it
--- was right after printing (see :drawDialogue), so this never leaks
--- into the HUD text/minimap drawn elsewhere with the default font.
-local dialogueFont = nil
-local function ensureDialogueFont()
-  if not dialogueFont then
-    dialogueFont = love.graphics.newFont(30)
-  end
-  return dialogueFont
-end
-
--- The box's own screen-space rect — factored out of :drawDialogue so
--- :startDialogue (which needs the exact same numbers to paginate text
--- correctly BEFORE the box is ever actually drawn) can't drift out of
--- sync with whatever :drawDialogue itself later draws.
-function computeDialogueBoxRect()
-  local screenW, screenH = love.graphics.getWidth(), love.graphics.getHeight()
-
-  -- 20px clearance from the window on either side — at this project's
-  -- own default 1280-wide window that's already close to the "about 95%
-  -- of window width" ballpark; sized off the fixed margin rather than a
-  -- flat percentage so it stays a consistent, deliberate gap at any
-  -- window size instead of drifting wider on a bigger window.
-  --
-  -- Left-anchored at that same margin, but the RIGHT edge yields to the
-  -- minimap (lua/ui/MiniMap.lua) when one exists, stopping short of its
-  -- own left edge (plus the same margin again) instead of running the
-  -- full window width and disappearing behind it — see the screenshot
-  -- that prompted this: the box's own right portion was drawn UNDER the
-  -- minimap panel, which draws after it. refreshSize() is called here
-  -- (not just trusted from minimap's own last :draw()) so this is
-  -- correct even the very first frame dialogue shows, not one frame
-  -- stale after a resize.
-  local rightEdge = screenW - TEXTBOX_WIDTH_MARGIN
-  if state.minimap then
-    state.minimap:refreshSize()
-    local mapLeftEdge = screenW - state.minimap.size - state.minimap.margin
-    rightEdge = math.min(rightEdge, mapLeftEdge - TEXTBOX_WIDTH_MARGIN)
-  end
-
-  local boxX = TEXTBOX_WIDTH_MARGIN
-  local boxW = rightEdge - boxX
-  local boxH = boxW * (TEXTBOX_SOURCE_H / TEXTBOX_SOURCE_W)
-  local boxY = screenH - TEXTBOX_BOTTOM_MARGIN - boxH
-  return boxX, boxY, boxW, boxH
-end
-
--- Splits `text` into however many PAGES actually fit the box at this
--- size, each already wrapped to the box's own text width. Uses the
--- font's own :getWrap (the exact same wrapping printf itself performs)
--- to measure, rather than a hand-rolled character-count estimate, so
--- the page breaks are guaranteed to match what actually renders.
-function paginateDialogueText(text, boxW, boxH)
-  local font = ensureDialogueFont()
-  local textLimit = boxW - TEXTBOX_TEXT_PAD_X * 2
-  local _, wrappedLines = font:getWrap(text, textLimit)
-
-  local lineHeight = font:getHeight()
-  local availableHeight = boxH - TEXTBOX_TEXT_PAD_Y * 2
-  local linesPerPage = math.max(1, math.floor(availableHeight / lineHeight))
-
-  local pages = {}
-  for i = 1, #wrappedLines, linesPerPage do
-    local pageLines = {}
-    for j = i, math.min(i + linesPerPage - 1, #wrappedLines) do
-      table.insert(pageLines, wrappedLines[j])
-    end
-    table.insert(pages, table.concat(pageLines, "\n"))
-  end
-  if #pages == 0 then pages = { "" } end
-  return pages
-end
-
 -- Screen-space dialogue box — call AFTER the camera transform is
 -- popped (see main.lua's love.draw, alongside the minimap/HUD/VatsCursor
 -- reticle), so it stays fixed relative to the WINDOW rather than the
 -- world underneath it, matching how a dialogue box behaves in basically
--- every game that has one.
+-- every game that has one. Rendering itself (box art, text, the "more"
+-- corner indicator) is shared — see lua/ui/DialogueBox.lua.
 function RobotButler:drawDialogue()
   if not self.dialogueActive then return end
-  local img = state.textboxTexture
-  if not img then return end
-
-  local boxX, boxY, boxW, boxH = computeDialogueBoxRect()
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(img, boxX, boxY, 0, boxW / TEXTBOX_SOURCE_W, boxH / TEXTBOX_SOURCE_H)
-
-  -- Top-left aligned, white with a small dark drop shadow — plain black
-  -- text read poorly against the box's own dark interior; a shadow
-  -- keeps the white text readable regardless of exactly what's behind
-  -- it, rather than depending on the box art always being dark enough.
-  local prevFont = love.graphics.getFont()
-  love.graphics.setFont(ensureDialogueFont())
-
-  local textX = boxX + TEXTBOX_TEXT_PAD_X
-  local textY = boxY + TEXTBOX_TEXT_PAD_Y
-  local textLimit = boxW - TEXTBOX_TEXT_PAD_X * 2
   local pageText = (self.dialoguePages and self.dialoguePages[self.dialoguePageIndex]) or self.dialogueText
-
-  love.graphics.setColor(0, 0, 0, 0.65)
-  love.graphics.printf(pageText, textX + TEXTBOX_SHADOW_OFFSET, textY + TEXTBOX_SHADOW_OFFSET, textLimit, "left")
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.printf(pageText, textX, textY, textLimit, "left")
-
-  love.graphics.setFont(prevFont)
-
-  -- "More text" triangle — only while there's an actual next page to
-  -- advance to. A gentle bob, same idea as :drawTooltip's own, so it
-  -- reads as an active prompt rather than a static corner decal.
-  if self.dialoguePages and self.dialoguePageIndex < #self.dialoguePages then
-    local bob = math.sin(love.timer.getTime() * 4) * 3
-    local tx = boxX + boxW - DIALOGUE_MORE_MARGIN
-    local ty = boxY + boxH - DIALOGUE_MORE_MARGIN + bob
-    love.graphics.setColor(1, 1, 1, 0.9)
-    love.graphics.polygon("fill", tx, ty - DIALOGUE_MORE_SIZE, tx, ty, tx - DIALOGUE_MORE_SIZE, ty)
-    love.graphics.setColor(1, 1, 1, 1)
-  end
+  local hasMore = self.dialoguePages and self.dialoguePageIndex < #self.dialoguePages
+  DialogueBox.draw(pageText, hasMore)
 end
 
 return RobotButler
