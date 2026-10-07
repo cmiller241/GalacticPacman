@@ -136,6 +136,16 @@ function Player.new(x, y)
   self.baseRadius = self.radius
   self.isBall = false
   self.ballRollAngle = 0
+  -- Set by the pinball planet's own entry beam (see
+  -- lua/interiors/PinballInterior.lua:onEnter and main.lua's own
+  -- pinball-beam setup) to the PinballInterior instance he's currently
+  -- inside, nil otherwise. main.lua's own update loop checks this to
+  -- swap out normal gravity/collision for PinballInterior:updateBall
+  -- entirely, and InputHandlers.lua/GamePadInput.lua check it to route
+  -- the jump button to PinballInterior:triggerJumpAction instead of an
+  -- ordinary jump.
+  self.inPinball = nil
+  self.ballRollAngle = 0
   -- nil | "toBall" | "toHuman" — see Player:enterBallMode/exitBallMode/
   -- updateBallMorph. morphElapsed is in baseline (60fps) ticks, counted
   -- from 0 at the start of whichever transition is currently playing.
@@ -376,6 +386,12 @@ end
 -- Morph ball
 ------------------------------------------------------------------
 
+-- Re-enabled — Down/Triangle now only ENTER/EXIT ball mode on a clean
+-- press (not held-stick drift), so the earlier "too easy to trigger
+-- while just walking" issue (see git history) shouldn't recur. Flip
+-- back to false again if it does.
+local BALL_MODE_ENABLED = true
+
 -- Starts the curl-in ANIMATION — self.isBall itself (and therefore
 -- self.radius/ground speed) doesn't flip until updateBallMorph below
 -- finishes playing it. Ignored while any transition is already in
@@ -385,8 +401,23 @@ end
 -- Player:move/jump, and starting a morph mid-conversation would be the
 -- same kind of "moving" while supposedly standing still talking).
 function Player:enterBallMode()
+  if not BALL_MODE_ENABLED then return end
   if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting then return end
   self.morphState = "toBall"
+  self.morphElapsed = 0
+end
+
+-- Instantly becomes a ball — no curl-in animation, no guards (not even
+-- BALL_MODE_ENABLED/isTeleporting) — for the one case where he should
+-- already BE a ball the moment he arrives somewhere, rather than
+-- morphing in place: the pinball planet's own entry beam (see
+-- PinballInterior.lua:onEnter), called from inside the teleport
+-- sequence itself, while isTeleporting is still true and would
+-- otherwise block the ordinary animated enterBallMode above.
+function Player:forceBallMode()
+  self.isBall = true
+  self.radius = self.baseRadius * BALL_RADIUS_MULTIPLIER
+  self.morphState = nil
   self.morphElapsed = 0
 end
 
