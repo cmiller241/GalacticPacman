@@ -491,6 +491,22 @@ function CollisionSystem:handlePlayerSkyDomeContainment(player, dome)
     if player.vel.x > 0 then player.vel.x = 0 end
   end
 
+  -- Deck/grass surface — the flat TOP of the base, the same ground the
+  -- player ordinarily stands on. Normal landing physics already keeps
+  -- him resting here during ordinary walking (so this is a no-op then —
+  -- his own position already sits exactly at this same deckY - r), but
+  -- a pull-beam bypasses landing entirely (a scripted fling toward a
+  -- locked target, not stepped through normal collision), so without an
+  -- explicit floor here too, a downward pull could punch straight
+  -- through the grass. Deliberately only a flat clamp, not a shape
+  -- tracking the base's own curved underside further down — this is
+  -- scoped to just the deck surface itself.
+  local restY = deckY - r
+  if player.pos.y > restY then
+    player.pos.y = restY
+    if player.vel.y > 0 then player.vel.y = 0 end
+  end
+
   local cx, cy = dome.pos.x, dome:domeAnchorY()
   local rx, ry = dome.domeRadiusX, dome.domeRadiusY
   if player.pos.y < cy then

@@ -212,16 +212,22 @@ local function pollGamepad(dt)
     gamepadHeldZoomOut = false
   end
 
-  -- --- X (Cross): jump / wall jump / swim stroke / ground pound ---
+  -- --- X (Cross): jump / wall jump / swim stroke / ground pound —
+  -- or, while inside the pinball planet (state.player.inPinball), the
+  -- plunger/flippers instead (see PinballInterior:triggerJumpAction) ---
   -- Player:jump() itself branches on grounded-launch vs. wall-jump kick
   -- vs. swim stroke (see Player.lua) — routed here together the same way
   -- InputHandlers.lua routes the keyboard Space key, since all three are
   -- "this button performs a jump," as opposed to the ground-pound
   -- fallback for mid-air with nothing to jump off of (or swim in).
   local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
-  if xPressed and not lastXPressed and state.player and state.player.mode ~= "maze" and not state.introLocked then
-    if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then state.player:jump()
-    else state.player:tryGroundPound() end
+  if xPressed and not lastXPressed and state.player then
+    if state.player.inPinball then
+      state.player.inPinball:triggerJumpAction(state.player)
+    elseif state.player.mode ~= "maze" and not state.introLocked then
+      if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then state.player:jump()
+      else state.player:tryGroundPound() end
+    end
   end
   lastXPressed = xPressed
 
@@ -229,7 +235,13 @@ local function pollGamepad(dt)
   -- Analog trigger, thresholded — see this file's own header comment.
   state.gamepadFireHeld = (gp:getGamepadAxis("triggerright") or 0) > TRIGGER_PRESS_THRESHOLD
 
-  -- --- Triangle: toggle V.A.T.S. ---
+  -- --- Triangle: toggle V.A.T.S. while in space, otherwise toggle ball
+  -- mode (Player:enterBallMode/exitBallMode — same pair the keyboard's
+  -- own ArrowDown/ArrowUp and the left stick's own vertical axis above
+  -- already use, per explicit request for a single-button PS5
+  -- equivalent). The two uses don't actually conflict: VATS only ever
+  -- applies in "space" mode to begin with, so this is just "do
+  -- whichever of the two makes sense for where he currently is."
   local trianglePressed = gp:isGamepadDown(BUTTON_TRIANGLE)
   if state.player and state.player.mode == "space" then
     if trianglePressed and not lastTrianglePressed then
@@ -237,6 +249,10 @@ local function pollGamepad(dt)
     end
   elseif state.vatsActive then
     state.vatsActive = false
+  end
+  if trianglePressed and not lastTrianglePressed and state.player
+     and state.player.mode ~= "space" and state.player.mode ~= "maze" and not state.introLocked then
+    if state.player.isBall then state.player:exitBallMode() else state.player:enterBallMode() end
   end
   lastTrianglePressed = trianglePressed
 

@@ -154,7 +154,11 @@ local function attachInputHandlers()
     state.keys[key] = true
 
     if key == ' ' then
-      if state.player and state.player.mode ~= "maze" and not state.introLocked then
+      if state.player and state.player.inPinball then
+        -- Plunger/flippers instead of an ordinary jump while inside
+        -- the pinball planet — see PinballInterior:triggerJumpAction.
+        state.player.inPinball:triggerJumpAction(state.player)
+      elseif state.player and state.player.mode ~= "maze" and not state.introLocked then
         if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then
           -- Player:jump() itself branches on which of the three applies
           -- (grounded launch, wall-jump kick, or swim stroke) — routed

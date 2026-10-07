@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pinball Level Editor</title>
+<style>
+  :root {
+    --bg: #1b1e24;
+    --panel: #23272f;
+    --panel2: #2b3038;
+    --border: #3a4049;
+    --text: #e6e8eb;
+    --text-dim: #9aa2ad;
+    --accent: #4fa3ff;
+    --accent2: #ff7a5c;
+    --ok: #59d38c;
+    --outer: #ffd24f;
+    --obstacle: #ff5c7a;
+    --flipper: #59d38c;
+    --plunger: #4fa3ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  }
+  .app { display: flex; height: 100%; }
+  .canvas-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .canvas-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .canvas-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+  .canvas-toolbar input[type=range] { width: 100px; }
+  .canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+  #stage { position: absolute; top: 0; left: 0; cursor: default; }
+  .hint {
+    position: absolute; left: 10px; bottom: 10px; color: var(--text-dim);
+    background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 6px; max-width: 480px;
+    pointer-events: none;
+  }
+  .mode-bar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--panel2); border-bottom: 1px solid var(--border);
+  }
+  .mode-bar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+  .sidebar {
+    width: 360px; flex-shrink: 0; background: var(--panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  .section { border-bottom: 1px solid var(--border); padding: 10px 12px; }
+  .section h2 {
+    margin: 0 0 8px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-dim); font-weight: 600;
+  }
+  .list-row {
+    display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 5px;
+    cursor: pointer; user-select: none;
+  }
+  .list-row:hover { background: var(--panel2); }
+  .list-row.selected { background: #2f4a70; }
+  .list-row .swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .list-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-row .kind { color: var(--text-dim); font-size: 10px; }
+  .list-row button {
+    background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 13px;
+    padding: 2px 5px; border-radius: 4px;
+  }
+  .list-row button:hover { background: var(--border); color: var(--text); }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .row label { width: 90px; flex-shrink: 0; color: var(--text-dim); }
+  .row input[type=number] {
+    width: 80px; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 3px 6px;
+  }
+  .btn {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.active { background: var(--accent); border-color: var(--accent); color: #0a1420; font-weight: 600; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0a1420; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  #fileInput { display: none; }
+  #log {
+    background: #14161a; border: 1px solid var(--border); border-radius: 5px; padding: 8px;
+    font: 11px/1.5 "Consolas", "SF Mono", monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 340px; overflow-y: auto; margin: 0;
+  }
+  input[type=text] {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 7px;
+  }
+  .empty-msg { color: var(--text-dim); font-style: italic; padding: 4px 6px; }
+  .legend { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+  .legend code { color: var(--text); }
+  .swatch-key { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+  .swatch-key span { display: inline-flex; align-items: center; gap: 4px; }
+  .swatch-key i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="canvas-panel">
+    <div class="canvas-toolbar">
+      <label>View zoom
+        <input type="range" id="zoomSlider" min="0.2" max="4" step="0.05" value="1">
+        <span id="zoomVal">1.00x</span>
+      </label>
+      <label>Image opacity
+        <input type="range" id="imgOpacitySlider" min="0" max="1" step="0.05" value="1">
+      </label>
+      <label><input type="checkbox" id="gridToggle"> grid</label>
+      <button class="btn" id="resetViewBtn">Reset view</button>
+      <button class="btn" id="loadImageBtn">Load different image…</button>
+      <input type="file" id="fileInput" accept="image/png,image/*">
+    </div>
+    <div class="mode-bar">
+      <button class="btn active" id="modeSelect">Select / Edit</button>
+      <button class="btn" id="modeDrawOuter">+ Draw Outer Boundary</button>
+      <button class="btn" id="modeDrawObstacle">+ Draw Obstacle Wall</button>
+      <div class="sep"></div>
+      <button class="btn" id="modePlaceBumper">+ Place Bumper</button>
+      <button class="btn" id="modePlaceFlipper">+ Place Flipper</button>
+      <button class="btn" id="modePlacePlunger">+ Place Plunger</button>
+      <div class="sep"></div>
+      <button class="btn" id="finishShapeBtn" style="display:none">Finish shape (Enter)</button>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="stage"></canvas>
+      <div class="hint" id="hint">
+        Drawing a shape: click to add points, Enter or double-click to finish, Backspace undoes the last point, Escape cancels.<br>
+        Select mode: click a shape/element to select it; drag its dots to edit; click an edge to insert a new point; Delete removes the selected point (or the whole shape/element if none is picked). Scroll to zoom, middle/right-drag or space+drag to pan.
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+
+    <div class="section">
+      <h2>Wall shapes</h2>
+      <div id="shapeList"></div>
+      <div class="legend">Outer boundary = the playfield's own edge (white in the reference image). Obstacle wall = a solid black shape inside it. Export turns each into a point list in the exact format <code>PinballInterior.lua</code> already uses.</div>
+    </div>
+
+    <div class="section">
+      <h2>Elements</h2>
+      <div id="elementList"></div>
+      <div class="swatch-key">
+        <span><i style="background:var(--outer)"></i>outer</span>
+        <span><i style="background:var(--obstacle)"></i>obstacle / bumper</span>
+        <span><i style="background:var(--flipper)"></i>flipper</span>
+        <span><i style="background:var(--plunger)"></i>plunger</span>
+      </div>
+    </div>
+
+    <div class="section" id="propsSection">
+      <h2>Selected</h2>
+      <div id="propsBody"><div class="empty-msg">Nothing selected.</div></div>
+    </div>
+
+    <div class="section">
+      <h2>Export / log</h2>
+      <div class="btn-row">
+        <button class="btn primary" id="logBtn">Log level data</button>
+        <button class="btn" id="copyBtn">Copy to clipboard</button>
+      </div>
+      <div class="legend">Coordinates are normalized to the image's own center/half-size — the same <code>[-1, 1]</code> local space <code>PinballInterior.lua</code> already uses — so this pastes in directly no matter how big the reference image actually is.</div>
+      <pre id="log">(nothing logged yet)</pre>
+    </div>
+
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------
+// Data model. World space here is PIXEL space centered on the
+// reference image — (0,0) = image center — matching the normalized
+// [-1,1]-per-half-dimension convention lua/interiors/PinballInterior.lua
+// already uses for its own OUTER_BOUNDARY/obstacle point lists.
+// Exporting is just dividing by half the image's own width/height, so
+// this works regardless of whatever size img/pinball.png actually is.
+//
+// shapes: closed polygons, drawn by clicking vertices in order.
+//   { id, kind: "outer" | "obstacle", name, points: [{x,y}, ...] }
+// elements: single placed objects (not polygons).
+//   bumper:  { id, kind: "bumper",  name, x, y, radius }
+//   flipper: { id, kind: "flipper", name, x, y, angleDeg, length, mirrored }
+//   plunger: { id, kind: "plunger", name, x, y, angleDeg, length }
+// ---------------------------------------------------------------------
+
+const DEFAULT_IMAGE_SRC = "img/pinball.png";
+
+// The last layout actually exported and wired into PinballInterior.lua
+// (not a placeholder) — loaded automatically once the reference image
+// is ready (see loadDefaultShapes), the same way
+// paperdoll-fisherman.html's own DEFAULT_LAYERS opens already showing
+// the real current rig instead of an empty one. Stored normalized
+// (same [-1,1]-per-half-dimension convention everything else in this
+// tool exports), converted to this tool's own pixel-space data model
+// against the actual loaded image's own width/height — so this still
+// works correctly even if img/pinball.png is ever swapped for a
+// differently-sized version.
+const DEFAULT_EXPORT = {
+  outer: [
+    [0.899, 0.784], [0.898, 0.679], [0.896, 0.51], [0.896, 0.316],
+    [0.897, 0.101], [0.898, -0.156], [0.895, -0.342], [0.896, -0.55],
+    [0.895, -0.648], [0.892, -0.664], [0.886, -0.678], [0.878, -0.692],
+    [0.869, -0.708], [0.862, -0.722], [0.85, -0.736], [0.839, -0.749],
+    [0.827, -0.761], [0.815, -0.771], [0.8, -0.785], [0.785, -0.796],
+    [0.771, -0.806], [0.754, -0.814], [0.74, -0.822], [0.719, -0.831],
+    [0.697, -0.841], [0.67, -0.852], [0.645, -0.859], [0.617, -0.867],
+    [0.587, -0.876], [0.555, -0.884], [0.527, -0.891], [0.5, -0.893],
+    [0.479, -0.896], [0.448, -0.898], [-0.464, -0.899], [-0.513, -0.895],
+    [-0.543, -0.894], [-0.571, -0.889], [-0.608, -0.885], [-0.649, -0.875],
+    [-0.688, -0.867], [-0.723, -0.853], [-0.759, -0.84], [-0.78, -0.828],
+    [-0.798, -0.817], [-0.815, -0.805], [-0.836, -0.791], [-0.852, -0.777],
+    [-0.864, -0.768], [-0.877, -0.754], [-0.895, -0.733], [-0.907, -0.711],
+    [-0.918, -0.694], [-0.926, -0.675], [-0.929, -0.646], [-0.928, -0.599],
+    [-0.922, -0.576], [-0.91, -0.545], [-0.896, -0.522], [-0.88, -0.496],
+    [-0.861, -0.467], [-0.84, -0.44], [-0.825, -0.416], [-0.803, -0.384],
+    [-0.778, -0.354], [-0.748, -0.312], [-0.748, 0.147], [-0.947, 0.249],
+    [-0.948, 0.563], [-0.184, 0.944], [-0.183, 1.013], [-0.04, 1.016],
+    [-0.04, 0.945], [0.703, 0.574], [0.702, 0.238], [0.527, 0.145],
+    [0.625, 0.094], [0.623, -0.574], [0.616, -0.592], [0.611, -0.605],
+    [0.605, -0.614], [0.595, -0.625], [0.588, -0.633], [0.578, -0.642],
+    [0.566, -0.65], [0.552, -0.658], [0.538, -0.664], [0.522, -0.67],
+    [0.504, -0.675], [0.485, -0.678], [0.466, -0.68], [0.432, -0.681],
+    [0.401, -0.679], [0.38, -0.676], [0.364, -0.672], [0.344, -0.664],
+    [0.331, -0.657], [0.307, -0.643], [0.291, -0.63], [0.277, -0.616],
+    [0.181, -0.617], [0.181, -0.708], [0.379, -0.808], [0.426, -0.807],
+    [0.455, -0.804], [0.474, -0.802], [0.49, -0.799], [0.508, -0.795],
+    [0.523, -0.79], [0.537, -0.787], [0.551, -0.782], [0.568, -0.776],
+    [0.584, -0.769], [0.6, -0.761], [0.619, -0.751], [0.638, -0.74],
+    [0.658, -0.725], [0.669, -0.716], [0.685, -0.704], [0.698, -0.692],
+    [0.711, -0.679], [0.722, -0.665], [0.733, -0.65], [0.739, -0.641],
+    [0.744, -0.631], [0.749, -0.618], [0.754, -0.605], [0.756, -0.593],
+    [0.756, 0.784],
+  ],
+  obstacles: [
+    {
+      name: "obstacle 1",
+      points: [
+        [-0.567, -0.52], [-0.377, -0.617], [-0.377, -0.709], [-0.559, -0.799],
+        [-0.608, -0.788], [-0.647, -0.774], [-0.676, -0.759], [-0.7, -0.743],
+        [-0.724, -0.721], [-0.743, -0.698], [-0.76, -0.674], [-0.769, -0.648],
+        [-0.774, -0.618], [-0.774, -0.592], [-0.766, -0.566], [-0.752, -0.537],
+        [-0.732, -0.507], [-0.711, -0.48], [-0.687, -0.456], [-0.654, -0.427],
+        [-0.598, -0.426], [-0.567, -0.456],
+      ],
+    },
+    {
+      name: "obstacle 2",
+      points: [
+        [0.51, 0.29], [0.539, 0.289], [0.539, 0.459],
+        [0.329, 0.564], [0.313, 0.55], [0.509, 0.452],
+      ],
+    },
+    {
+      name: "obstacle 3",
+      points: [
+        [-0.573, 0.564], [-0.56, 0.551], [-0.753, 0.45],
+        [-0.754, 0.291], [-0.783, 0.29], [-0.784, 0.459],
+      ],
+    },
+  ],
+  bumpers: [
+    { x: -0.403, y: -0.244, radius: 0.1 },
+    { x: -0.091, y: -0.41, radius: 0.1 },
+    { x: 0.282, y: -0.239, radius: 0.1 },
+  ],
+  flippers: [
+    { x: -0.534, y: 0.555, angle: 5.2, length: 0.277, mirrored: false },
+    { x: 0.327, y: 0.553, angle: 173.3, length: 0.311, mirrored: false },
+  ],
+  plungers: [
+    { x: 0.83, y: 0.78, angle: -89.7, length: 0.245 },
+  ],
+};
+
+const COLORS = {
+  outer: "#ffd24f",
+  obstacle: "#ff5c7a",
+  bumper: "#ff5c7a",
+  flipper: "#59d38c",
+  plunger: "#4fa3ff",
+};
+
+let shapes = [];
+let elements = [];
+let nextId = 1;
+
+let selected = null;      // { type: "shape"|"element", id, vertexIndex: number|null }
+let drawingShape = null;  // { kind, points: [{x,y}, ...] } while mode is draw-*
+
+const state = {
+  mode: "select",
+  viewZoom: 1,
+  viewOffsetX: 0,
+  viewOffsetY: 0,
+  showGrid: false,
+  imgOpacity: 1,
+  bgImage: null,
+  bgW: 0,
+  bgH: 0,
+};
+
+const MODE_BUTTONS = [
+  ["modeSelect", "select"],
+  ["modeDrawOuter", "draw-outer"],
+  ["modeDrawObstacle", "draw-obstacle"],
+  ["modePlaceBumper", "place-bumper"],
+  ["modePlaceFlipper", "place-flipper"],
+  ["modePlacePlunger", "place-plunger"],
+];
+
+const HIT_RADIUS = 9;
+const EDGE_HIT_RADIUS = 9;
+
+// ---------------------------------------------------------------------
+// Canvas / view transform — world (0,0) is the image's own center.
+// ---------------------------------------------------------------------
+
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  canvas.width = wrap.width;
+  canvas.height = wrap.height;
+  render();
+}
+window.addEventListener("resize", resizeCanvas);
+
+function toView(wx, wy) {
+  return {
+    x: canvas.width / 2 + state.viewOffsetX + wx * state.viewZoom,
+    y: canvas.height / 2 + state.viewOffsetY + wy * state.viewZoom,
+  };
+}
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - canvas.width / 2 - state.viewOffsetX) / state.viewZoom,
+    y: (sy - canvas.height / 2 - state.viewOffsetY) / state.viewZoom,
+  };
+}
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function setBackgroundImage(img) {
+  state.bgImage = img;
+  state.bgW = img.naturalWidth;
+  state.bgH = img.naturalHeight;
+}
+
+async function loadDefaultImage() {
+  const img = await loadImage(DEFAULT_IMAGE_SRC);
+  if (img) {
+    setBackgroundImage(img);
+    logMessage(`Loaded ${DEFAULT_IMAGE_SRC} (${img.naturalWidth}x${img.naturalHeight}).`);
+    loadDefaultShapes();
+  } else {
+    logMessage(`Could not load ${DEFAULT_IMAGE_SRC} — is this file sitting at the project root, next to the img/ folder? Use "Load different image…" to pick it manually.`);
+  }
+  render();
+}
+
+// Converts DEFAULT_EXPORT's normalized points into this tool's own
+// pixel-space shapes/elements and loads them in, so opening the tool
+// starts from the real layout already wired into PinballInterior.lua
+// instead of a blank canvas — see DEFAULT_EXPORT's own comment. Only
+// runs once, against a genuinely empty canvas (won't clobber anything
+// if it's ever called again for some reason).
+function loadDefaultShapes() {
+  if (shapes.length || elements.length) return;
+  const halfW = (state.bgW || 600) / 2;
+  const halfH = (state.bgH || 1000) / 2;
+  const toPx = ([nx, ny]) => ({ x: round1(nx * halfW), y: round1(ny * halfH) });
+
+  shapes.push({ id: nextId++, kind: "outer", name: "outer", points: DEFAULT_EXPORT.outer.map(toPx) });
+  for (const obs of DEFAULT_EXPORT.obstacles) {
+    shapes.push({ id: nextId++, kind: "obstacle", name: obs.name, points: obs.points.map(toPx) });
+  }
+
+  for (const b of DEFAULT_EXPORT.bumpers) {
+    elements.push(makeElementFrom("bumper", { x: round1(b.x * halfW), y: round1(b.y * halfH), radius: round1(b.radius * halfW) }));
+  }
+  for (const f of DEFAULT_EXPORT.flippers) {
+    elements.push(makeElementFrom("flipper", {
+      x: round1(f.x * halfW), y: round1(f.y * halfH),
+      angleDeg: f.angle, length: round1(f.length * halfW), mirrored: !!f.mirrored,
+    }));
+  }
+  for (const pl of DEFAULT_EXPORT.plungers) {
+    elements.push(makeElementFrom("plunger", {
+      x: round1(pl.x * halfW), y: round1(pl.y * halfH),
+      angleDeg: pl.angle, length: round1(pl.length * halfW),
+    }));
+  }
+
+  rebuildLists();
+  renderProps();
+  render();
+  logMessage("Loaded the layout currently wired into PinballInterior.lua as a starting point — adjust and re-export whenever you're ready.");
+}
+
+// ---------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------
+
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#101216";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (state.bgImage) {
+    const topLeft = toView(-state.bgW / 2, -state.bgH / 2);
+    ctx.save();
+    ctx.globalAlpha = state.imgOpacity;
+    ctx.drawImage(state.bgImage, topLeft.x, topLeft.y, state.bgW * state.viewZoom, state.bgH * state.viewZoom);
+    ctx.restore();
+  }
+
+  if (state.showGrid) drawGrid();
+
+  for (const shape of shapes) drawShape(shape, isShapeSelected(shape), false);
+  if (drawingShape) drawShape(drawingShape, true, true);
+
+  for (const el of elements) drawElement(el, isElementSelected(el));
+}
+
+function isShapeSelected(shape) { return !!(selected && selected.type === "shape" && selected.id === shape.id); }
+function isElementSelected(el) { return !!(selected && selected.type === "element" && selected.id === el.id); }
+
+function drawGrid() {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  const step = 50;
+  const range = Math.max(state.bgW, state.bgH, 1000);
+  for (let gx = -range; gx <= range; gx += step) {
+    const a = toView(gx, -range), b = toView(gx, range);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  for (let gy = -range; gy <= range; gy += step) {
+    const a = toView(-range, gy), b = toView(range, gy);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawShape(shape, isSelected, isDrawing) {
+  if (!shape.points.length) return;
+  const color = shape.kind === "outer" ? COLORS.outer : COLORS.obstacle;
+
+  ctx.save();
+  ctx.beginPath();
+  const first = toView(shape.points[0].x, shape.points[0].y);
+  ctx.moveTo(first.x, first.y);
+  for (let i = 1; i < shape.points.length; i++) {
+    const p = toView(shape.points[i].x, shape.points[i].y);
+    ctx.lineTo(p.x, p.y);
+  }
+  if (!isDrawing) ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = isSelected ? 3 : 2;
+  ctx.globalAlpha = isDrawing ? 0.85 : 1;
+  ctx.stroke();
+  if (!isDrawing) {
+    ctx.fillStyle = color;
+    ctx.globalAlpha = isSelected ? 0.18 : 0.08;
+    ctx.fill();
+  }
+  ctx.restore();
+
+  if (isSelected || isDrawing) {
+    for (let i = 0; i < shape.points.length; i++) {
+      const p = toView(shape.points[i].x, shape.points[i].y);
+      const vSel = isSelected && selected && selected.type === "shape" && selected.vertexIndex === i;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, vSel ? 7 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = vSel ? "#ffffff" : color;
+      ctx.strokeStyle = "#0a1420";
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
+function elementTip(el) {
+  const rad = el.angleDeg * Math.PI / 180;
+  return { x: el.x + Math.cos(rad) * el.length, y: el.y + Math.sin(rad) * el.length };
+}
+
+function drawElement(el, isSelected) {
+  const p = toView(el.x, el.y);
+  ctx.save();
+
+  if (el.kind === "bumper") {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(2, el.radius * state.viewZoom), 0, Math.PI * 2);
+    ctx.fillStyle = COLORS.bumper;
+    ctx.globalAlpha = 0.2;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = COLORS.bumper;
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.stroke();
+  } else {
+    const color = el.kind === "flipper" ? COLORS.flipper : COLORS.plunger;
+    const tipWorld = elementTip(el);
+    const tip = toView(tipWorld.x, tipWorld.y);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isSelected ? 6 : 4;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, isSelected ? 7 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff7a5c";
+    ctx.fill();
+  }
+
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, isSelected ? 7 : 5, 0, Math.PI * 2);
+  ctx.fillStyle = isSelected ? "#ffffff" : "#4fa3ff";
+  ctx.strokeStyle = "#0a1420";
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function selectedShape() {
+  if (!selected || selected.type !== "shape") return null;
+  return shapes.find((s) => s.id === selected.id) || null;
+}
+function selectedElement() {
+  if (!selected || selected.type !== "element") return null;
+  return elements.find((e) => e.id === selected.id) || null;
+}
+
+// ---------------------------------------------------------------------
+// Hit testing (all thresholds in SCREEN pixels, so they stay usable
+// regardless of current zoom).
+// ---------------------------------------------------------------------
+
+function distPts(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+function segPointDistScreen(aWorld, bWorld, sx, sy) {
+  const a = toView(aWorld.x, aWorld.y), b = toView(bWorld.x, bWorld.y);
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const len2 = abx * abx + aby * aby;
+  let t = len2 > 1e-9 ? ((sx - a.x) * abx + (sy - a.y) * aby) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const ex = a.x + abx * t, ey = a.y + aby * t;
+  return distPts(ex, ey, sx, sy);
+}
+
+function hitTestShapeVertex(shape, sx, sy) {
+  for (let i = 0; i < shape.points.length; i++) {
+    const p = toView(shape.points[i].x, shape.points[i].y);
+    if (distPts(p.x, p.y, sx, sy) < HIT_RADIUS) return i;
+  }
+  return -1;
+}
+
+// Returns { afterIndex, point } for the closest point on the shape's
+// own boundary to (sx, sy), in WORLD coordinates, if within
+// EDGE_HIT_RADIUS screen pixels — used both to pick an edge to select
+// the shape and to insert a new vertex onto it.
+function nearestEdgeInsertion(shape, sx, sy) {
+  const n = shape.points.length;
+  if (n < 2) return null;
+  const world = screenToWorld(sx, sy);
+  let best = null, bestScreenDist = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = shape.points[i], b = shape.points[(i + 1) % n];
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const len2 = abx * abx + aby * aby;
+    let t = len2 > 1e-9 ? ((world.x - a.x) * abx + (world.y - a.y) * aby) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const ex = a.x + abx * t, ey = a.y + aby * t;
+    const screenPt = toView(ex, ey);
+    const d = distPts(screenPt.x, screenPt.y, sx, sy);
+    if (d < bestScreenDist) { bestScreenDist = d; best = { afterIndex: i, point: { x: ex, y: ey } }; }
+  }
+  return bestScreenDist < EDGE_HIT_RADIUS ? best : null;
+}
+
+function pointInPolygonWorld(shape, wx, wy) {
+  let inside = false;
+  const pts = shape.points;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+    if (((yi > wy) !== (yj > wy)) && (wx < ((xj - xi) * (wy - yi)) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function hitTestElementHandle(el, sx, sy) {
+  if (el.kind !== "bumper") {
+    const tip = toView(elementTip(el).x, elementTip(el).y);
+    if (distPts(tip.x, tip.y, sx, sy) < HIT_RADIUS) return "rotate";
+  }
+  const p = toView(el.x, el.y);
+  if (distPts(p.x, p.y, sx, sy) < HIT_RADIUS) return "move";
+  return null;
+}
+
+function hitTestElementBody(el, sx, sy) {
+  const p = toView(el.x, el.y);
+  if (el.kind === "bumper") {
+    return distPts(p.x, p.y, sx, sy) < el.radius * state.viewZoom + HIT_RADIUS;
+  }
+  return segPointDistScreen({ x: el.x, y: el.y }, elementTip(el), sx, sy) < EDGE_HIT_RADIUS + 4;
+}
+
+// ---------------------------------------------------------------------
+// Pointer interaction
+// ---------------------------------------------------------------------
+
+let drag = null;
+let spaceHeld = false;
+
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("mousedown", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  if (e.button === 1 || e.button === 2 || spaceHeld) {
+    drag = { type: "pan", startSx: sx, startSy: sy, startOX: state.viewOffsetX, startOY: state.viewOffsetY };
+    e.preventDefault();
+    return;
+  }
+
+  if (state.mode === "draw-outer" || state.mode === "draw-obstacle") {
+    const world = screenToWorld(sx, sy);
+    if (!drawingShape) drawingShape = { kind: state.mode === "draw-outer" ? "outer" : "obstacle", points: [] };
+    drawingShape.points.push({ x: round1(world.x), y: round1(world.y) });
+    document.getElementById("finishShapeBtn").style.display = "";
+    render();
+    return;
+  }
+
+  if (state.mode.indexOf("place-") === 0) {
+    const world = screenToWorld(sx, sy);
+    const kind = state.mode.slice("place-".length);
+    const el = makeElement(kind, world.x, world.y);
+    elements.push(el);
+    selected = { type: "element", id: el.id };
+    rebuildLists(); renderProps(); render();
+    return;
+  }
+
+  // --- select mode ---
+  const shape = selectedShape();
+  if (shape) {
+    const vi = hitTestShapeVertex(shape, sx, sy);
+    if (vi >= 0) {
+      selected = { type: "shape", id: shape.id, vertexIndex: vi };
+      drag = { type: "vertex", shape, index: vi };
+      renderProps(); render();
+      return;
+    }
+    const insertion = nearestEdgeInsertion(shape, sx, sy);
+    if (insertion) {
+      const idx = insertion.afterIndex + 1;
+      shape.points.splice(idx, 0, { x: round1(insertion.point.x), y: round1(insertion.point.y) });
+      selected = { type: "shape", id: shape.id, vertexIndex: idx };
+      drag = { type: "vertex", shape, index: idx };
+      rebuildLists(); renderProps(); render();
+      return;
+    }
+  }
+
+  const el = selectedElement();
+  if (el) {
+    const handle = hitTestElementHandle(el, sx, sy);
+    if (handle === "move") { drag = { type: "move-element", el }; return; }
+    if (handle === "rotate") { drag = { type: "rotate-element", el }; return; }
+  }
+
+  // Nothing matched on the currently-selected thing — try selecting
+  // whatever's under the cursor. Elements checked first since they're
+  // small and easy to miss underneath a big shape's own fill.
+  for (let i = elements.length - 1; i >= 0; i--) {
+    if (hitTestElementBody(elements[i], sx, sy)) {
+      selected = { type: "element", id: elements[i].id };
+      rebuildLists(); renderProps(); render();
+      return;
+    }
+  }
+  const world = screenToWorld(sx, sy);
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    if (pointInPolygonWorld(shapes[i], world.x, world.y)) {
+      selected = { type: "shape", id: shapes[i].id, vertexIndex: null };
+      rebuildLists(); renderProps(); render();
+      return;
+    }
+  }
+  selected = null;
+  rebuildLists(); renderProps(); render();
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!drag) return;
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+
+  if (drag.type === "pan") {
+    state.viewOffsetX = drag.startOX + (sx - drag.startSx);
+    state.viewOffsetY = drag.startOY + (sy - drag.startSy);
+    render();
+    return;
+  }
+
+  const world = screenToWorld(sx, sy);
+
+  if (drag.type === "vertex") {
+    drag.shape.points[drag.index] = { x: round1(world.x), y: round1(world.y) };
+    renderProps(); render();
+    return;
+  }
+  if (drag.type === "move-element") {
+    drag.el.x = round1(world.x);
+    drag.el.y = round1(world.y);
+    renderProps(); render();
+    return;
+  }
+  if (drag.type === "rotate-element") {
+    const dx = world.x - drag.el.x, dy = world.y - drag.el.y;
+    drag.el.angleDeg = round1((Math.atan2(dy, dx) * 180) / Math.PI);
+    drag.el.length = round1(Math.max(10, Math.hypot(dx, dy)));
+    renderProps(); render();
+    return;
+  }
+});
+window.addEventListener("mouseup", () => { drag = null; });
+
+canvas.addEventListener("dblclick", () => {
+  if ((state.mode === "draw-outer" || state.mode === "draw-obstacle") && drawingShape) {
+    // The second click of the double-click already pushed a point via
+    // mousedown just before this fires — drop it so finishing doesn't
+    // leave a stray duplicate vertex behind.
+    if (drawingShape.points.length > 1) drawingShape.points.pop();
+    finishDrawingShape();
+  }
+});
+
+canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const before = screenToWorld(sx, sy);
+    state.viewZoom = clamp(state.viewZoom * (e.deltaY < 0 ? 1.1 : 0.9), 0.1, 8);
+    const after = screenToWorld(sx, sy);
+    state.viewOffsetX += (after.x - before.x) * state.viewZoom;
+    state.viewOffsetY += (after.y - before.y) * state.viewZoom;
+    document.getElementById("zoomSlider").value = state.viewZoom;
+    document.getElementById("zoomVal").textContent = state.viewZoom.toFixed(2) + "x";
+    render();
+  },
+  { passive: false }
+);
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { spaceHeld = true; canvas.style.cursor = "grab"; }
+  if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+  // Backspace has a default "navigate back" behavior outside of text
+  // inputs in some browsers — always suppress it here since every
+  // Backspace use in this tool (undo last point, delete vertex) is
+  // handled below.
+  if (e.key === "Backspace") e.preventDefault();
+
+  if (state.mode === "draw-outer" || state.mode === "draw-obstacle") {
+    if (e.key === "Enter") { e.preventDefault(); finishDrawingShape(); return; }
+    if (e.key === "Escape") { e.preventDefault(); cancelDrawingShape(); return; }
+    if (e.key === "Backspace") {
+      e.preventDefault();
+      if (drawingShape && drawingShape.points.length) { drawingShape.points.pop(); render(); }
+      return;
+    }
+  }
+
+  if (e.key === "Delete" || e.key === "Backspace") {
+    if (selected && selected.type === "shape" && selected.vertexIndex != null) {
+      e.preventDefault();
+      const shape = selectedShape();
+      if (shape && shape.points.length > 3) {
+        shape.points.splice(selected.vertexIndex, 1);
+        selected.vertexIndex = null;
+        rebuildLists(); renderProps(); render();
+      } else if (shape) {
+        logMessage("A shape needs at least 3 points — delete the whole shape instead if you want it gone.");
+      }
+      return;
+    }
+    if (selected && selected.type === "shape") { e.preventDefault(); deleteShape(selected.id); return; }
+    if (selected && selected.type === "element") { e.preventDefault(); deleteElement(selected.id); return; }
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") { spaceHeld = false; canvas.style.cursor = "default"; }
+});
+
+function round1(n) { return Math.round(n * 10) / 10; }
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+// ---------------------------------------------------------------------
+// Shape / element lifecycle
+// ---------------------------------------------------------------------
+
+function makeShapeDefaultName(kind) {
+  if (kind === "outer") {
+    const count = shapes.filter((s) => s.kind === "outer").length;
+    return count === 0 ? "outer" : `outer ${count + 1}`;
+  }
+  const count = shapes.filter((s) => s.kind === "obstacle").length;
+  return `obstacle ${count + 1}`;
+}
+
+function finishDrawingShape() {
+  if (!drawingShape || drawingShape.points.length < 3) {
+    logMessage("A shape needs at least 3 points.");
+    cancelDrawingShape();
+    return;
+  }
+  const shape = { id: nextId++, kind: drawingShape.kind, name: makeShapeDefaultName(drawingShape.kind), points: drawingShape.points };
+  shapes.push(shape);
+  drawingShape = null;
+  selected = { type: "shape", id: shape.id, vertexIndex: null };
+  setMode("select");
+  rebuildLists(); renderProps(); render();
+}
+function cancelDrawingShape() {
+  drawingShape = null;
+  setMode("select");
+  render();
+}
+function deleteShape(id) {
+  shapes = shapes.filter((s) => s.id !== id);
+  if (selected && selected.type === "shape" && selected.id === id) selected = null;
+  rebuildLists(); renderProps(); render();
+}
+function deleteElement(id) {
+  elements = elements.filter((e) => e.id !== id);
+  if (selected && selected.type === "element" && selected.id === id) selected = null;
+  rebuildLists(); renderProps(); render();
+}
+
+function makeElement(kind, x, y) {
+  const count = elements.filter((e) => e.kind === kind).length + 1;
+  const base = { id: nextId++, kind, name: `${kind} ${count}`, x: round1(x), y: round1(y) };
+  if (kind === "bumper") return Object.assign(base, { radius: 30 });
+  if (kind === "flipper") return Object.assign(base, { angleDeg: 0, length: 110, mirrored: false });
+  return Object.assign(base, { angleDeg: -90, length: 90 }); // plunger
+}
+
+// Same shape as makeElement's own return value, but taking arbitrary
+// already-computed fields directly — used by loadDefaultShapes, which
+// already has real x/y/radius/angleDeg/length numbers (converted from
+// DEFAULT_EXPORT's normalized ones) rather than a single click point.
+function makeElementFrom(kind, fields) {
+  const count = elements.filter((e) => e.kind === kind).length + 1;
+  return Object.assign({ id: nextId++, kind, name: `${kind} ${count}` }, fields);
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  if (mode !== "draw-outer" && mode !== "draw-obstacle") {
+    drawingShape = null;
+    document.getElementById("finishShapeBtn").style.display = "none";
+  }
+  for (const pair of MODE_BUTTONS) {
+    document.getElementById(pair[0]).classList.toggle("active", pair[1] === mode);
+  }
+  canvas.style.cursor = mode === "select" ? "default" : "crosshair";
+  render();
+}
+for (const pair of MODE_BUTTONS) {
+  document.getElementById(pair[0]).addEventListener("click", () => setMode(pair[1]));
+}
+document.getElementById("finishShapeBtn").addEventListener("click", finishDrawingShape);
+
+// ---------------------------------------------------------------------
+// Sidebar: lists
+// ---------------------------------------------------------------------
+
+function rebuildLists() { rebuildShapeList(); rebuildElementList(); }
+
+function rebuildShapeList() {
+  const list = document.getElementById("shapeList");
+  list.innerHTML = "";
+  if (!shapes.length) {
+    list.innerHTML = '<div class="empty-msg">No wall shapes yet — use "Draw Outer Boundary" or "Draw Obstacle Wall" above.</div>';
+    return;
+  }
+  for (const shape of shapes) {
+    const row = document.createElement("div");
+    row.className = "list-row" + (isShapeSelected(shape) ? " selected" : "");
+    const color = shape.kind === "outer" ? COLORS.outer : COLORS.obstacle;
+    row.innerHTML =
+      `<span class="swatch" style="background:${color}"></span>` +
+      `<span class="name">${shape.name}</span>` +
+      `<span class="kind">${shape.kind} · ${shape.points.length}pt</span>` +
+      `<button data-act="remove" title="remove shape">✕</button>`;
+    row.querySelector('[data-act=remove]').addEventListener("click", (e) => { e.stopPropagation(); deleteShape(shape.id); });
+    row.addEventListener("click", () => {
+      selected = { type: "shape", id: shape.id, vertexIndex: null };
+      rebuildLists(); renderProps(); render();
+    });
+    list.appendChild(row);
+  }
+}
+
+function rebuildElementList() {
+  const list = document.getElementById("elementList");
+  list.innerHTML = "";
+  if (!elements.length) {
+    list.innerHTML = '<div class="empty-msg">No bumpers/flippers/plungers placed yet.</div>';
+    return;
+  }
+  for (const el of elements) {
+    const row = document.createElement("div");
+    row.className = "list-row" + (isElementSelected(el) ? " selected" : "");
+    row.innerHTML =
+      `<span class="swatch" style="background:${COLORS[el.kind]}"></span>` +
+      `<span class="name">${el.name}</span>` +
+      `<span class="kind">${el.kind}</span>` +
+      `<button data-act="remove" title="remove">✕</button>`;
+    row.querySelector('[data-act=remove]').addEventListener("click", (e) => { e.stopPropagation(); deleteElement(el.id); });
+    row.addEventListener("click", () => {
+      selected = { type: "element", id: el.id };
+      rebuildLists(); renderProps(); render();
+    });
+    list.appendChild(row);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Sidebar: properties panel
+// ---------------------------------------------------------------------
+
+function field(label, id, value, step) {
+  return `<div class="row"><label>${label}</label><input type="number" id="${id}" step="${step || 1}" value="${value}"></div>`;
+}
+
+function renderProps() {
+  const body = document.getElementById("propsBody");
+  const shape = selectedShape();
+  const el = selectedElement();
+
+  if (shape) {
+    body.innerHTML =
+      `<div class="row"><label>Name</label><input type="text" id="p_name" value="${shape.name}"></div>` +
+      `<div class="legend">${shape.points.length} point(s). Drag a dot to move it, click an edge to insert a new point there, Delete removes the selected point (or the whole shape if none is picked).</div>`;
+    document.getElementById("p_name").addEventListener("input", (e) => { shape.name = e.target.value; rebuildLists(); });
+    return;
+  }
+
+  if (el) {
+    let html =
+      `<div class="row"><label>Name</label><input type="text" id="p_name" value="${el.name}"></div>` +
+      field("X", "p_x", el.x) + field("Y", "p_y", el.y);
+    if (el.kind === "bumper") {
+      html += field("Radius", "p_radius", el.radius);
+    } else {
+      html += field("Angle (deg)", "p_angle", el.angleDeg) + field("Length", "p_length", el.length);
+      if (el.kind === "flipper") {
+        html += `<div class="row"><label>Mirrored</label><input type="checkbox" id="p_mirrored" ${el.mirrored ? "checked" : ""}></div>`;
+      }
+    }
+    body.innerHTML = html;
+
+    document.getElementById("p_name").addEventListener("input", (e) => { el.name = e.target.value; rebuildLists(); });
+    const bindNum = (id, prop) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.addEventListener("input", () => { el[prop] = parseFloat(node.value) || 0; render(); });
+    };
+    bindNum("p_x", "x"); bindNum("p_y", "y"); bindNum("p_radius", "radius");
+    bindNum("p_angle", "angleDeg"); bindNum("p_length", "length");
+    const mirrorNode = document.getElementById("p_mirrored");
+    if (mirrorNode) mirrorNode.addEventListener("change", () => { el.mirrored = mirrorNode.checked; render(); });
+    return;
+  }
+
+  body.innerHTML = '<div class="empty-msg">Nothing selected.</div>';
+}
+
+// ---------------------------------------------------------------------
+// Export / log
+// ---------------------------------------------------------------------
+
+function luaIdent(name, prefix) {
+  const clean = (name || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return prefix + (clean || "UNNAMED");
+}
+
+function normVal(px, halfSpan) { return halfSpan ? Math.round((px / halfSpan) * 1000) / 1000 : px; }
+function normPoint(p) { return { x: normVal(p.x, state.bgW / 2), y: normVal(p.y, state.bgH / 2) }; }
+
+function buildReport() {
+  const lines = [];
+  lines.push("-- Exported from pinball-editor.html");
+  lines.push(`-- Reference image: ${state.bgW}x${state.bgH}px — points below are normalized to`);
+  lines.push("-- [-1, 1] relative to the image's own center/half-size, matching");
+  lines.push("-- lua/interiors/PinballInterior.lua's own local-space convention directly.");
+  lines.push("");
+
+  const outers = shapes.filter((s) => s.kind === "outer");
+  const obstacles = shapes.filter((s) => s.kind === "obstacle");
+
+  for (const shape of outers) {
+    lines.push(`local ${luaIdent(shape.name, "OUTER_")} = {`);
+    for (const p of shape.points) { const n = normPoint(p); lines.push(`  { ${n.x}, ${n.y} },`); }
+    lines.push("}", "");
+  }
+  for (const shape of obstacles) {
+    lines.push(`local ${luaIdent(shape.name, "OBSTACLE_")} = {`);
+    for (const p of shape.points) { const n = normPoint(p); lines.push(`  { ${n.x}, ${n.y} },`); }
+    lines.push("}", "");
+  }
+
+  const bumpers = elements.filter((e) => e.kind === "bumper");
+  const flippers = elements.filter((e) => e.kind === "flipper");
+  const plungers = elements.filter((e) => e.kind === "plunger");
+
+  if (bumpers.length) {
+    lines.push("-- Bumpers (radius normalized against the image's own half-WIDTH)");
+    lines.push("local BUMPERS = {");
+    for (const b of bumpers) {
+      const n = normPoint({ x: b.x, y: b.y });
+      const r = normVal(b.radius, state.bgW / 2);
+      lines.push(`  { x = ${n.x}, y = ${n.y}, radius = ${r} }, -- ${b.name}`);
+    }
+    lines.push("}", "");
+  }
+  if (flippers.length) {
+    lines.push("-- Flippers (length normalized against the image's own half-WIDTH)");
+    lines.push("local FLIPPERS = {");
+    for (const f of flippers) {
+      const n = normPoint({ x: f.x, y: f.y });
+      const len = normVal(f.length, state.bgW / 2);
+      lines.push(`  { x = ${n.x}, y = ${n.y}, angle = ${f.angleDeg}, length = ${len}, mirrored = ${f.mirrored} }, -- ${f.name}`);
+    }
+    lines.push("}", "");
+  }
+  if (plungers.length) {
+    lines.push("-- Plungers (length normalized against the image's own half-WIDTH)");
+    lines.push("local PLUNGERS = {");
+    for (const pl of plungers) {
+      const n = normPoint({ x: pl.x, y: pl.y });
+      const len = normVal(pl.length, state.bgW / 2);
+      lines.push(`  { x = ${n.x}, y = ${n.y}, angle = ${pl.angleDeg}, length = ${len} }, -- ${pl.name}`);
+    }
+    lines.push("}", "");
+  }
+
+  if (!shapes.length && !elements.length) lines.push("-- Nothing drawn yet.");
+
+  return lines.join("\n");
+}
+
+function logMessage(msg) {
+  document.getElementById("log").textContent = msg;
+  console.log(msg);
+}
+
+document.getElementById("logBtn").addEventListener("click", () => logMessage(buildReport()));
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const text = buildReport();
+  try {
+    await navigator.clipboard.writeText(text);
+    logMessage(text + "\n\n(copied to clipboard)");
+  } catch (e) {
+    logMessage(text + "\n\n(could not access clipboard — select the text above and copy manually)");
+  }
+});
+
+// ---------------------------------------------------------------------
+// Toolbar bindings
+// ---------------------------------------------------------------------
+
+document.getElementById("zoomSlider").addEventListener("input", (e) => {
+  state.viewZoom = parseFloat(e.target.value);
+  document.getElementById("zoomVal").textContent = state.viewZoom.toFixed(2) + "x";
+  render();
+});
+document.getElementById("imgOpacitySlider").addEventListener("input", (e) => {
+  state.imgOpacity = parseFloat(e.target.value);
+  render();
+});
+document.getElementById("gridToggle").addEventListener("change", (e) => { state.showGrid = e.target.checked; render(); });
+document.getElementById("resetViewBtn").addEventListener("click", () => {
+  state.viewZoom = 1; state.viewOffsetX = 0; state.viewOffsetY = 0;
+  document.getElementById("zoomSlider").value = 1;
+  document.getElementById("zoomVal").textContent = "1.00x";
+  render();
+});
+document.getElementById("loadImageBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+document.getElementById("fileInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const img = await loadImage(url);
+  if (img) {
+    setBackgroundImage(img);
+    logMessage(`Loaded ${file.name} (${img.naturalWidth}x${img.naturalHeight}).`);
+    render();
+  }
+  e.target.value = "";
+});
+
+// ---------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------
+
+resizeCanvas();
+setMode("select");
+rebuildLists();
+renderProps();
+loadDefaultImage();
+</script>
+</body>
+</html>

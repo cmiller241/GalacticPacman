@@ -163,17 +163,27 @@ function love.load()
   -- lua/world/RoundedRectPlanetoid.lua; same typical baked body/
   -- sun-shading look every rounded-rect landmark already uses, just a
   -- different shape than a plain circular Planetoid) sitting directly
-  -- below the dome, with a semi-transparent pinball-table schematic
-  -- overlaid on its face (see lua/interiors/PinballInterior.lua, drawn
-  -- automatically for any planetoid with a .interior — see main.lua's
-  -- own draw loop below). Taller than it is wide, per explicit
-  -- request — a rectangle fits more actual pinball-table content than
-  -- a circle would. Actually entering/playing it isn't wired up at
-  -- all yet — this is purely the exterior landmark + overlay.
-  do
-    local PINBALL_PLANET_HALF_WIDTH = 220
-    local PINBALL_PLANET_HALF_HEIGHT = 375 -- the previous (circular) version's own radius, kept as this one's vertical reach
-    local PINBALL_PLANET_CORNER_RADIUS = 50
+  -- below the dome, with an actual pinball-table level overlaid on its
+  -- face — an outer boundary, an obstacle wall, bumpers, flippers, and
+  -- plungers, all traced directly over the real reference image
+  -- (img/pinball.png) using pinball-editor.html, with real
+  -- circle-vs-polygon/bumper collision math behind the boundary/wall/
+  -- bumpers (see lua/interiors/PinballInterior.lua, drawn automatically
+  -- for any planetoid with a .interior — see main.lua's own draw loop
+  -- below). Half-width:half-height is ~0.6, matching that reference
+  -- image's own proportions. Actually entering/playing it isn't wired
+  -- up at all yet (no ball entity, no flipper-swing/plunger-pull
+  -- gameplay) — this is the exterior landmark + overlay + ready-to-use
+  -- collision, nothing more.
+  local SHOW_PINBALL_PLANET = true
+  if SHOW_PINBALL_PLANET then
+    -- Doubled from the original 225/375/50, per explicit request after
+    -- seeing it in place — the overlay's own shapes are plain vector
+    -- polygons (see PinballInterior.lua), so this doesn't add any new
+    -- detail, but it does make everything on the table more legible.
+    local PINBALL_PLANET_HALF_WIDTH = 450 -- 0.6 * half-height, matching the reference image's own aspect ratio
+    local PINBALL_PLANET_HALF_HEIGHT = 750
+    local PINBALL_PLANET_CORNER_RADIUS = 100
     local PINBALL_PLANET_GAP = 300 -- clearance kept below the dome's own base before this planet starts
     local pinballX = dome.pos.x
     local pinballY = dome:domeAnchorY() + dome.baseRadiusY + PINBALL_PLANET_GAP + PINBALL_PLANET_HALF_HEIGHT
@@ -1647,6 +1657,7 @@ function love.draw()
     local domeTopY = dome:domeAnchorY() - dome.domeRadiusY
     love.graphics.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x - dome.halfWidth, domeTopY)
     love.graphics.line(dome.pos.x + dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, domeTopY)
+    love.graphics.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, deckY)
 
     local cx, cy = dome.pos.x, dome:domeAnchorY()
     local rx, ry = dome.domeRadiusX, dome.domeRadiusY
