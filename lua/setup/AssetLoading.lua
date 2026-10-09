@@ -87,6 +87,41 @@ local function loadAssets(onComplete)
   state.spaceShelterDoorTexture = love.graphics.newImage("img/spaceshelter_door.png")
   state.spaceShelterDoorTexture:setFilter("linear", "linear")
 
+  -- Signpost (see lua/world/Sign.lua) — 40x48 pixel art, drawn at the
+  -- same 2x the terrain tiles use, so the "nearest" default is kept.
+  state.signTexture = love.graphics.newImage("img/sign.png")
+
+  -- Inline button icons — pixel art, 12px tall, drawn at 2x, "nearest"
+  -- default kept (all but CIRCLE — see just below the loop). Keyed by the UPPERCASE name a dialogue string uses
+  -- between double asterisks (e.g. "Hold **R2** to fire" — see
+  -- lua/ui/DialogueBox.lua); each is img/prompt_<lowercase name>.png.
+  -- Adding a button is just adding its name here and its PNG in img/.
+  state.buttonIcons = {}
+  for _, name in ipairs({
+    "CIRCLE", "SQUARE", "TRIANGLE", "CROSS",
+    "L1", "L2", "R1", "R2",
+    "UP", "DOWN", "LEFT", "RIGHT",
+    "ENTER",
+  }) do
+    state.buttonIcons[name] = love.graphics.newImage("img/prompt_" .. name:lower() .. ".png")
+  end
+  state.buttonIcons.X = state.buttonIcons.CROSS -- **X** and **CROSS** are the same button
+
+  -- The Circle button is the one exception to "pixel art": a 12px ring
+  -- inside a 12px disc was unreadable, so it's a smooth 96x96 image
+  -- instead, scaled DOWN to the same drawn height as the rest (see
+  -- ICON_HEIGHT in InteractPrompt.lua/DialogueBox.lua) — which needs
+  -- "linear" filtering and mipmaps to stay smooth at that size.
+  state.buttonIcons.CIRCLE = love.graphics.newImage("img/prompt_circle.png", { mipmaps = true })
+  state.buttonIcons.CIRCLE:setFilter("linear", "linear")
+
+  -- The interact button for the "Press [button] to ..." prompts (see
+  -- lua/ui/InteractPrompt.lua), per input device.
+  state.promptIcons = {
+    gamepad = state.buttonIcons.CIRCLE,
+    keyboard = state.buttonIcons.ENTER,
+  }
+
   -- Robot butler NPC (patrols beside the shelter) — 4000x1200, four
   -- 1000x1200 walking frames in a single row (see RobotButler.lua's own
   -- FRAME_COUNT). High-res source art scaled DOWN substantially, not a

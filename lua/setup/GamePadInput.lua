@@ -111,12 +111,14 @@ local gamepadHeldRight = false
 local gamepadHeldZoomIn = false
 local gamepadHeldZoomOut = false
 
--- Edge-triggered, same pattern as the buttons above — otherwise holding
--- the stick down/up would call enterBallMode/exitBallMode every single
--- frame (harmless, since both already no-op once already in that
--- state, but there's no reason to call them that often either).
-local gamepadHeldBallDown = false
-local gamepadHeldBallUp = false
+-- Square double-tap (morph ball toggle — see "Square" in pollGamepad):
+-- lastSquareTapTime is when the previous fresh press happened
+-- (love.timer.getTime() seconds), nil once that press has already been
+-- used as the second half of a double-tap, so a third quick press
+-- starts a new pair instead of toggling straight back.
+local SQUARE_DOUBLE_TAP_SECONDS = 0.3
+local lastSquarePressed = false
+local lastSquareTapTime = nil
 
 local function maybeAutoEnterVats()
   if state.vatsAutoEnterOnLock and not state.vatsActive and state.player and state.player.mode == "space" then
@@ -169,30 +171,10 @@ local function pollGamepad(dt)
     if gamepadHeldRight then state.keys['ArrowRight'] = false; gamepadHeldRight = false end
   end
 
-  -- --- Left stick vertical: morph ball toggle --- (down = curl into
-  -- the ball, up = stand back up — see Player:enterBallMode/
-  -- exitBallMode). D-pad up/down is already zoom (see just below), so
-  -- this rides the stick's own Y axis instead rather than fighting over
-  -- the same physical input. LÖVE's gamepad Y axis follows screen-space
-  -- convention here (negative = up, positive = down), matching every
-  -- other "down" direction already used throughout this codebase.
-  local leftY = gp:getGamepadAxis("lefty") or 0
-  if leftY > STICK_DEADZONE then
-    if not gamepadHeldBallDown and state.player and state.player.mode ~= "maze" and not state.introLocked then
-      state.player:enterBallMode()
-    end
-    gamepadHeldBallDown = true
-  else
-    gamepadHeldBallDown = false
-  end
-  if leftY < -STICK_DEADZONE then
-    if not gamepadHeldBallUp and state.player and state.player.mode ~= "maze" then
-      state.player:exitBallMode()
-    end
-    gamepadHeldBallUp = true
-  else
-    gamepadHeldBallUp = false
-  end
+  -- The left stick's vertical axis deliberately does NOTHING. It used
+  -- to toggle the morph ball (down = curl up, up = stand), but it's far
+  -- too easy to nudge a stick down while just walking — the ball is a
+  -- double-tap of Square now instead (see "Square" further down).
 
   -- --- D-pad up/down: zoom in/out ---
   local dpadUpPressed = gp:isGamepadDown(BUTTON_DPAD_UP)
@@ -237,7 +219,7 @@ local function pollGamepad(dt)
 
   -- --- Triangle: toggle V.A.T.S. while in space, otherwise toggle ball
   -- mode (Player:enterBallMode/exitBallMode — same pair the keyboard's
-  -- own ArrowDown/ArrowUp and the left stick's own vertical axis above
+  -- own ArrowDown/ArrowUp and Square's own double-tap below
   -- already use, per explicit request for a single-button PS5
   -- equivalent). The two uses don't actually conflict: VATS only ever
   -- applies in "space" mode to begin with, so this is just "do
@@ -258,7 +240,32 @@ local function pollGamepad(dt)
 
   -- --- Square: run --- (SHIFT does the same thing on keyboard, so
   -- either works even with a gamepad connected — see isShiftHeld above)
-  state.gamepadRunHeld = gp:isGamepadDown(BUTTON_SQUARE) or isShiftHeld()
+  --
+  -- Two quick presses of Square (within SQUARE_DOUBLE_TAP_SECONDS of
+  -- each other) toggle the morph ball instead: curl up if standing,
+  -- stand back up if already a ball (Player:enterBallMode/exitBallMode,
+  -- same pair the keyboard's own ArrowDown/ArrowUp use). Holding still
+  -- runs throughout — including on the second press itself. Not inside
+  -- the pinball planet, where he has to stay a ball.
+  local squarePressed = gp:isGamepadDown(BUTTON_SQUARE)
+  state.gamepadRunHeld = squarePressed or isShiftHeld()
+  if squarePressed and not lastSquarePressed then
+    local now = love.timer.getTime()
+    if lastSquareTapTime and now - lastSquareTapTime <= SQUARE_DOUBLE_TAP_SECONDS then
+      lastSquareTapTime = nil
+      local player = state.player
+      if player and player.mode ~= "maze" and not player.inPinball then
+        if player.isBall then
+          player:exitBallMode()
+        elseif not state.introLocked then
+          player:enterBallMode()
+        end
+      end
+    else
+      lastSquareTapTime = now
+    end
+  end
+  lastSquarePressed = squarePressed
 
   -- --- R1: hard lock, next --- / --- L1: hard lock, previous ---
   local r1Pressed = gp:isGamepadDown(BUTTON_R1)
