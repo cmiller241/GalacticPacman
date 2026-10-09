@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="3" nextobjectid="83">
+<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="3" nextobjectid="89">
  <editorsettings>
   <export target="Level1.lua" format="lua"/>
  </editorsettings>
@@ -395,7 +395,7 @@
   <object id="2" class="Ooomba" x="3162" y="1565">
    <point/>
   </object>
-  <object id="3" class="Ooomba" x="2760" y="1886">
+  <object id="3" class="Ooomba" x="2957" y="1847">
    <point/>
   </object>
   <object id="4" class="Ooomba" x="2930" y="1216">
@@ -654,19 +654,19 @@
   </object>
   <object id="77" class="Sign" x="2592" y="1655">
    <properties>
-    <property name="message" value="Did you know you can use your blaster arm to shoot fireballs? Rotate your arm using the right joystick and fire by pressing R2."/>
+    <property name="message" value="You can adjust the zoom by pressing **up** or **down** on the directional pad of the controller. "/>
    </properties>
    <point/>
   </object>
   <object id="78" class="Sign" x="1888" y="1657">
    <properties>
-    <property name="message" value="Did you know you can press L1 or R1 to go to target spheres and planetoids around you? If you press L2 while targeting a sphere or planetoid, you can pull yourself to it. "/>
+    <property name="message" value="Did you know you can press **L1** or **R1** to go to target spheres and planetoids around you? If you press **L2** while targeting a sphere or planetoid, you can pull yourself to it. "/>
    </properties>
    <point/>
   </object>
   <object id="79" class="Sign" x="2926" y="1659">
    <properties>
-    <property name="message" value="Did you know you can run by holding the square button? It's a great way to get someplace fast!"/>
+    <property name="message" value="Did you know you can run by holding the **SQUARE** button? It's a great way to get someplace fast! Just don't quickly press **SQUARE** twice, or the player will bunch up into a ball; it's not too big of a deal, since you can press **SQUARE** twice again to morph back.  "/>
    </properties>
    <point/>
   </object>
@@ -678,7 +678,7 @@
   </object>
   <object id="81" class="Sign" x="2733" y="1882">
    <properties>
-    <property name="message" value="You can zoom in and out by pressing the UP and DOWN arrow. This may be beneficial for seeing what's around you. "/>
+    <property name="message" value="These monsters ahead are Ooombas. You can jump on their heads, or you can use your arm cannon to shoot them. Simply use the right joystick to aim, and press **R2** button to shoot. Just make sure they don't hit you, or you'll respawn at the start of the level!"/>
    </properties>
    <point/>
   </object>
@@ -687,6 +687,20 @@
     <property name="message" value="Nothing more to see up here... yet. "/>
    </properties>
    <point/>
+  </object>
+  <object id="83" class="Zoom-Window" x="1979" y="1244" width="484" height="439">
+   <properties>
+    <property name="zoom" value="0.6"/>
+   </properties>
+  </object>
+  <object id="85" class="Ooomba" x="3110" y="1843">
+   <point/>
+  </object>
+  <object id="86" class="DeathZone" x="1051" y="1204" width="777" height="475">
+   <properties>
+    <property name="respawnX" value="1844"/>
+    <property name="respawnY" value="1650"/>
+   </properties>
   </object>
  </objectgroup>
 </map>

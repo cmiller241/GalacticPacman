@@ -1,6 +1,6 @@
 -- lua/world/Sign.lua
 --
--- A ground-mounted signpost: a short post topped with a wooden plank.
+-- A ground-mounted signpost, drawn from img/sign.png.
 -- Placed on the ground the same way Lever/Crank are (see main.lua's
 -- own spawn loop — the Tiled object's point is raycast straight down
 -- onto whatever TerrainShape surface sits below it, landing self.pos
@@ -24,19 +24,18 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local DialogueBox = require("lua.ui.DialogueBox")
+local InteractPrompt = require("lua.ui.InteractPrompt")
 
 local Sign = {}
 Sign.__index = Sign
 
-local POST_WIDTH = 8
-local POST_HEIGHT = 50
-local PLANK_WIDTH = 74
-local PLANK_HEIGHT = 46
-
-local COLOR_POST = { 0.42, 0.3, 0.2 }
-local COLOR_PLANK = { 0.55, 0.4, 0.26 }
-local COLOR_PLANK_RIM = { 0.3, 0.2, 0.12 }
-local COLOR_PLANK_LINE = { 0.3, 0.2, 0.12, 0.6 }
+-- img/sign.png (state.signTexture, see assetLoading.lua) is 40x48 pixel
+-- art, drawn at the same 2x the terrain tiles use — 80x96 world units,
+-- bottom-center anchored on self.pos.
+local SPRITE_SCALE = 2
+local SPRITE_WIDTH = 40
+local SPRITE_HEIGHT = 48
+local SIGN_HEIGHT = SPRITE_HEIGHT * SPRITE_SCALE
 
 -- Splits the raw "message" Tiled custom property on "|" into however
 -- many separate messages it names, trimming stray whitespace around
@@ -63,7 +62,7 @@ function Sign.new(x, y, rawMessage)
   local self = setmetatable({}, Sign)
 
   self.pos = Vector2.new(x, y)
-  self.plankCenterY = y - POST_HEIGHT - PLANK_HEIGHT / 2
+  self.topY = y - SIGN_HEIGHT
 
   self.messages = splitMessages(rawMessage)
   self.messageIndex = 1
@@ -137,32 +136,13 @@ function Sign:update()
 end
 
 function Sign:draw()
-  local x, groundY = self.pos.x, self.pos.y
-  local plankY = self.plankCenterY
-
-  love.graphics.setColor(COLOR_POST)
-  love.graphics.rectangle("fill", x - POST_WIDTH / 2, plankY + PLANK_HEIGHT / 2, POST_WIDTH, groundY - (plankY + PLANK_HEIGHT / 2))
-
-  love.graphics.setColor(COLOR_PLANK)
-  love.graphics.rectangle("fill", x - PLANK_WIDTH / 2, plankY - PLANK_HEIGHT / 2, PLANK_WIDTH, PLANK_HEIGHT, 4, 4)
-  love.graphics.setColor(COLOR_PLANK_RIM)
-  love.graphics.setLineWidth(2)
-  love.graphics.rectangle("line", x - PLANK_WIDTH / 2, plankY - PLANK_HEIGHT / 2, PLANK_WIDTH, PLANK_HEIGHT, 4, 4)
-
-  -- A few short lines suggesting writing, purely decorative.
-  love.graphics.setColor(COLOR_PLANK_LINE)
-  love.graphics.setLineWidth(3)
-  for i = -1, 1 do
-    local lineY = plankY + i * (PLANK_HEIGHT / 4)
-    love.graphics.line(x - PLANK_WIDTH / 2 + 10, lineY, x + PLANK_WIDTH / 2 - 10, lineY)
-  end
-
-  love.graphics.setLineWidth(1)
   love.graphics.setColor(1, 1, 1, 1)
+  -- Origin at the sprite's own bottom-center, so it lands exactly on
+  -- self.pos. Floored so the 2x pixels stay on whole world units.
+  love.graphics.draw(state.signTexture, math.floor(self.pos.x), math.floor(self.pos.y), 0,
+    SPRITE_SCALE, SPRITE_SCALE, SPRITE_WIDTH / 2, SPRITE_HEIGHT)
 end
 
-local TOOLTIP_TEXT = "Press ENTER / Circle to read"
-local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
 local TOOLTIP_GAP_ABOVE = 26
 
 -- World-space "you can interact with this" hint — same convention
@@ -176,22 +156,7 @@ function Sign:drawTooltip()
   if not self.playerNearby or self.dialogueActive then return end
   if state.player and state.player.isBall then return end
 
-  local font = love.graphics.getFont()
-  local textW = font:getWidth(TOOLTIP_TEXT)
-  local textH = font:getHeight()
-  local pillW = textW + TOOLTIP_PAD_X * 2
-  local pillH = textH + TOOLTIP_PAD_Y * 2
-
-  local bob = math.sin(love.timer.getTime() * 3) * 4
-  local pillX = self.pos.x - pillW / 2
-  local pillY = self.plankCenterY - PLANK_HEIGHT / 2 - TOOLTIP_GAP_ABOVE - pillH + bob
-
-  love.graphics.setColor(0, 0, 0, 0.6)
-  love.graphics.rectangle("fill", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.setColor(1, 1, 1, 0.9)
-  love.graphics.rectangle("line", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.print(TOOLTIP_TEXT, pillX + TOOLTIP_PAD_X, pillY + TOOLTIP_PAD_Y)
-  love.graphics.setColor(1, 1, 1, 1)
+  InteractPrompt.draw(self.pos.x, self.topY - TOOLTIP_GAP_ABOVE)
 end
 
 -- Screen-space dialogue box — call AFTER the camera transform is

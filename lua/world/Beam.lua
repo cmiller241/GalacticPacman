@@ -29,6 +29,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local InteractPrompt = require("lua.ui.InteractPrompt")
 
 local Beam = {}
 Beam.__index = Beam
@@ -181,8 +182,6 @@ function Beam:draw()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
-local TOOLTIP_TEXT = "Press ENTER / Circle to teleport"
-local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
 local TOOLTIP_GAP_ABOVE = 26
 
 -- World-space "you can interact with this" hint — same convention
@@ -195,12 +194,6 @@ function Beam:drawTooltip()
   if not self.destination then return end
   if state.player and (state.player.isBall or state.player.isTeleporting) then return end
 
-  local font = love.graphics.getFont()
-  local textW = font:getWidth(TOOLTIP_TEXT)
-  local textH = font:getHeight()
-  local pillW = textW + TOOLTIP_PAD_X * 2
-  local pillH = textH + TOOLTIP_PAD_Y * 2
-
   -- Anchored above whichever of the planted base / portal tip sits
   -- higher on screen, not a fixed "above the base by LENGTH" offset —
   -- both of main.lua's current beams point straight up, but this stays
@@ -208,16 +201,7 @@ function Beam:drawTooltip()
   local portal = self:getPortalPosition()
   local topX = (portal.y < self.pos.y) and portal.x or self.pos.x
   local topY = math.min(self.pos.y, portal.y)
-  local bob = math.sin(love.timer.getTime() * 3) * 4
-  local pillX = topX - pillW / 2
-  local pillY = topY - TOOLTIP_GAP_ABOVE - pillH + bob
-
-  love.graphics.setColor(0, 0, 0, 0.6)
-  love.graphics.rectangle("fill", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.setColor(1, 1, 1, 0.9)
-  love.graphics.rectangle("line", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.print(TOOLTIP_TEXT, pillX + TOOLTIP_PAD_X, pillY + TOOLTIP_PAD_Y)
-  love.graphics.setColor(1, 1, 1, 1)
+  InteractPrompt.draw(topX, topY - TOOLTIP_GAP_ABOVE)
 end
 
 return Beam

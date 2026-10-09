@@ -24,9 +24,16 @@ local CameraDirector = {}
 local DEFAULT_RELEASE_DURATION = 1.5
 local RELEASE_ZOOM = 1
 
+-- A scripted camera's OWN zoom limits — deliberately not state.zoomMin/
+-- zoomMax, which are how far the PLAYER is allowed to zoom by hand (see
+-- main.lua's ZOOM_MIN/ZOOM_MAX). A script needs to pull back much
+-- further than that (the whole dome, the sun, the belt) and always
+-- hands back at RELEASE_ZOOM anyway, so the player's own limit
+-- shouldn't cap it.
+local SCRIPT_ZOOM_MIN, SCRIPT_ZOOM_MAX = 0.1, 2.5
+
 local function clampZoom(z)
-  local lo, hi = state.zoomMin or 0.1, state.zoomMax or 2.5
-  return math.max(lo, math.min(hi, z))
+  return math.max(SCRIPT_ZOOM_MIN, math.min(SCRIPT_ZOOM_MAX, z))
 end
 
 local function lerp(a, b, t) return a + (b - a) * t end

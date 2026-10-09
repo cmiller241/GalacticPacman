@@ -19,8 +19,10 @@
 -- and TerrainShape:getArcSpeedMultiplier already slows walking on slopes
 -- — both reused here unchanged rather than reimplemented.
 --
--- Deliberately has NO player collision/damage here — purely a
--- patrolling decoration for now, not a hazard.
+-- A hazard: touching one kills the player, unless he lands on it from
+-- above, which squashes it flat instead (see :startSquash/:updateSquash
+-- and CollisionSystem:handlePlayerOoombaCollisions). A fireball kills it
+-- outright (see main.lua's own fireball pass).
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -39,6 +41,17 @@ local FRAME_SEQUENCE = { 0, 1, 0, 2 }
 -- otherwise) — doesn't touch self.pos itself, so the platform-edge
 -- turn-around math in :update() stays anchored to the true surface.
 local DRAW_Y_OFFSET = 3
+
+-- Circle used for player/fireball contact — a bit under halfWidth, so
+-- hits need real overlap with the body, not the sprite's empty corners.
+local HIT_RADIUS = 36
+
+-- Stomp tuning (see :updateSquash). All in world units / baseline
+-- (60fps) ticks.
+local SQUASH_FALL_SPEED = 4.5   -- the player's own fall is capped to this while he's pressing one flat, so the squash is slow enough to actually see
+local SQUASH_SOLO_SPEED = 9     -- how fast it finishes collapsing by itself if he's no longer pressing down on it
+local SQUASH_DONE_HEIGHT = 6    -- squashed "to nothing" once it's this thin
+local SQUASH_MAX_BULGE = 0.4    -- extra width (fraction) it spreads out to as it flattens
 
 -- Baked once, shared by every Ooomba instance — same "bake once, draw
 -- many" precedent as JumpPlatform.lua's own getTileQuad.
@@ -71,6 +84,18 @@ function Ooomba.new(homeShape, startArcPos, options)
   self.drawWidth = options.drawWidth or (self.drawHeight * 800 / 950)
   self.halfWidth = self.drawWidth / 2
   self.halfHeight = self.drawHeight / 2
+  -- Not named plain `radius`: utils.boundingRadius (target-lock outline,
+  -- on-screen checks) prefers that field over halfWidth/halfHeight, and
+  -- this is a contact circle, not the sprite's bounds.
+  self.hitRadius = HIT_RADIUS
+
+  -- See :startSquash/:updateSquash. squashHeight is how tall the sprite
+  -- is currently drawn — drawHeight normally, shrinking toward 0 while
+  -- being stomped. squashPressed is whether the player was still
+  -- pressing it down on the most recent :updateSquash.
+  self.isSquashing = false
+  self.squashHeight = self.drawHeight
+  self.squashPressed = false
 
   self.speed = options.speed or 1.4       -- arc-length units per frame — deliberately a bit slower than the player's own walk speed
   self.direction = options.direction or -1 -- -1 = toward arc position 0, 1 = toward the far end; the art faces left by default, so -1 needs no flip
@@ -93,7 +118,44 @@ function Ooomba.new(homeShape, startArcPos, options)
   return self
 end
 
+function Ooomba:startSquash()
+  self.isSquashing = true
+end
+
+-- Called every frame while isSquashing (see
+-- CollisionSystem:handlePlayerOoombaCollisions). The sprite's own top
+-- edge is pinned to the player's feet for as long as he's still above
+-- it, so it flattens exactly in step with him sinking down onto it —
+-- and his fall is slowed to SQUASH_FALL_SPEED so that takes long enough
+-- to see. If he's no longer pressing down (landed on something, moved
+-- off sideways, died), it finishes collapsing on its own. Returns true
+-- once it's flat.
+function Ooomba:updateSquash(player)
+  local timeScale = state.timeScale or 1
+  local bottomY = self.pos.y + self.halfHeight
+  local feetY = player.pos.y + player.radius
+
+  local above = not player.isDying
+    and math.abs(player.pos.x - self.pos.x) <= self.halfWidth + player.radius
+  local descending = above and not player.onSurface and player.vel.y > 0
+
+  if above then
+    self.squashHeight = math.max(0, math.min(self.squashHeight, bottomY - feetY))
+  end
+  if descending then
+    if player.vel.y > SQUASH_FALL_SPEED then player.vel.y = SQUASH_FALL_SPEED end
+  else
+    self.squashHeight = math.max(0, self.squashHeight - SQUASH_SOLO_SPEED * timeScale)
+  end
+  self.squashPressed = above
+
+  return self.squashHeight <= SQUASH_DONE_HEIGHT
+end
+
 function Ooomba:update()
+  -- Stops dead the moment it's stepped on.
+  if self.isSquashing then return end
+
   local timeScale = state.timeScale or 1
   local shape = self.homeShape
   local perimeter = shape:getPerimeter()
@@ -157,8 +219,16 @@ function Ooomba:draw()
   if self.direction > 0 then scaleX = -scaleX end
   local scaleY = self.drawHeight / sheetFrameH
 
+  -- Anchored at the sprite's own bottom-center (its feet) rather than
+  -- its center, so a squash flattens it DOWN onto the ground instead of
+  -- shrinking toward its middle. At full height this lands on exactly
+  -- the same pixels a center-anchored draw would.
+  local squash = self.squashHeight / self.drawHeight
+  scaleX = scaleX * (1 + SQUASH_MAX_BULGE * (1 - squash))
+  scaleY = scaleY * squash
+
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(img, quad, self.pos.x, self.pos.y + DRAW_Y_OFFSET, 0, scaleX, scaleY, sheetFrameW / 2, sheetFrameH / 2)
+  love.graphics.draw(img, quad, self.pos.x, self.pos.y + self.halfHeight + DRAW_Y_OFFSET, 0, scaleX, scaleY, sheetFrameW / 2, sheetFrameH)
 end
 
 return Ooomba
