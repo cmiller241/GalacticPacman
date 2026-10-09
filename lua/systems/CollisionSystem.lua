@@ -693,6 +693,61 @@ function CollisionSystem:handlePlayerGoombaCollisions(player, goombas)
   return stomped
 end
 
+-- Player vs Ooomba (lua/entities/Ooomba.lua). Touching one kills him —
+-- unless he comes down on it from above (airborne, falling, feet no
+-- lower than its middle), which starts squashing it instead. One that's
+-- already being squashed is harmless and just keeps flattening (see
+-- Ooomba:updateSquash, which also slows his fall while he's on it).
+-- Returns the list of Ooombas that finished going flat THIS frame — the
+-- caller removes them and plays the effects.
+function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
+  local flattened = {}
+  if not ooombas then return flattened end
+
+  for _, o in ipairs(ooombas) do
+    if not o.isSquashing and not player.isDying then
+      local dx, dy = player.pos.x - o.pos.x, player.pos.y - o.pos.y
+      local r = player.radius + o.hitRadius
+      if dx * dx + dy * dy <= r * r then
+        local feetY = player.pos.y + player.radius
+        if not player.onSurface and player.vel.y > 0 and feetY <= o.pos.y then
+          o:startSquash()
+        else
+          player:startDeath()
+        end
+      end
+    end
+    if o.isSquashing and o:updateSquash(player) then
+      table.insert(flattened, o)
+    end
+  end
+
+  return flattened
+end
+
+-- Fireball vs Ooomba: same shape as handleFireballGoombaCollisions just
+-- below, against the Ooomba's own hitRadius. Returns the set of
+-- fireballs that hit and the set of Ooombas killed.
+function CollisionSystem:handleFireballOoombaCollisions(fireballs, ooombas)
+  local hitFireballs = {}
+  local killedOoombas = {}
+
+  for _, f in ipairs(fireballs) do
+    for _, o in ipairs(ooombas) do
+      if not killedOoombas[o] then
+        local dist = f.pos:subtract(o.pos):length()
+        if dist < f.radius + o.hitRadius then
+          hitFireballs[f] = true
+          killedOoombas[o] = true
+          break
+        end
+      end
+    end
+  end
+
+  return hitFireballs, killedOoombas
+end
+
 function CollisionSystem:handleFireballGoombaCollisions(fireballs, goombas)
   local hitFireballs = {}
   local killedGoombas = {}

@@ -78,16 +78,98 @@ function DialogueBox.computeBoxRect()
   return boxX, boxY, boxW, boxH
 end
 
+-- Inline button icons: a button name between double asterisks —
+-- "Hold **R2** to fire" — is drawn as that button's own icon instead of
+-- as text. Names are whatever state.buttonIcons is keyed by (see
+-- assetLoading.lua), matched case-insensitively. A name that isn't a
+-- known button is left exactly as typed, asterisks included, so a typo
+-- shows up as one instead of silently vanishing.
+local ICON_HEIGHT = 24 -- screen px tall every icon is drawn, whatever its source size — about the font's own capital height. 2x for the 12px pixel-art ones; a high-res one (the Circle button) is scaled down to match.
+local ICON_PAD = 3   -- screen px kept clear on either side of an icon
+
+local function iconFor(name)
+  local icons = state.buttonIcons
+  return icons and icons[name:upper()] or nil
+end
+
+-- Breaks one whitespace-free word into drawable pieces — { text = ... }
+-- or { icon = ... }, each with its own width — returning the list and
+-- the word's total width. Punctuation attached to a marker
+-- ("**R2**,") just becomes a text piece next to the icon.
+local function parseWord(word, font)
+  local pieces, width = {}, 0
+  local function addText(s)
+    if s == "" then return end
+    local w = font:getWidth(s)
+    table.insert(pieces, { text = s, width = w })
+    width = width + w
+  end
+
+  local pos = 1
+  while true do
+    local startAt, endAt, name = word:find("%*%*(%w+)%*%*", pos)
+    local icon = name and iconFor(name)
+    if not startAt then break end
+    if icon then
+      addText(word:sub(pos, startAt - 1))
+      local w = icon:getWidth() * (ICON_HEIGHT / icon:getHeight()) + ICON_PAD * 2
+      table.insert(pieces, { icon = icon, width = w })
+      width = width + w
+    else
+      addText(word:sub(pos, endAt))
+    end
+    pos = endAt + 1
+  end
+  addText(word:sub(pos))
+
+  return pieces, width
+end
+
+-- Word-wraps `text` to `limit` pixels, icon widths included. Returns a
+-- list of lines, each { raw = <that line's own source text, markers
+-- intact>, words = { { pieces = ..., width = ... }, ... } }. Explicit
+-- "\n"s are kept as line breaks. This is the ONE wrapping routine both
+-- paginate and draw use, so page breaks always match what's rendered.
+local function layoutLines(text, limit)
+  local font = DialogueBox.getFont()
+  local spaceW = font:getWidth(" ")
+  local lines = {}
+
+  for paragraph in ((text or "") .. "\n"):gmatch("(.-)\n") do
+    local line = { raw = "", words = {} }
+    local lineW = 0
+    for word in paragraph:gmatch("%S+") do
+      local pieces, wordW = parseWord(word, font)
+      if #line.words > 0 and lineW + spaceW + wordW > limit then
+        table.insert(lines, line)
+        line = { raw = "", words = {} }
+        lineW = 0
+      end
+      if #line.words > 0 then
+        line.raw = line.raw .. " "
+        lineW = lineW + spaceW
+      end
+      line.raw = line.raw .. word
+      lineW = lineW + wordW
+      table.insert(line.words, { pieces = pieces, width = wordW })
+    end
+    table.insert(lines, line)
+  end
+
+  return lines, spaceW
+end
+
 -- Splits `text` into however many PAGES actually fit a box of the
--- given size, each already wrapped to the box's own text width. Uses
--- the font's own :getWrap (the exact same wrapping printf itself
--- performs) to measure, rather than a hand-rolled character-count
--- estimate, so the page breaks are guaranteed to match what actually
--- renders.
+-- given size, each already wrapped to the box's own text width (see
+-- layoutLines — the same routine DialogueBox.draw lays text out with,
+-- so the page breaks are guaranteed to match what actually renders).
 function DialogueBox.paginate(text, boxW, boxH)
   local font = DialogueBox.getFont()
   local textLimit = boxW - TEXTBOX_TEXT_PAD_X * 2
-  local _, wrappedLines = font:getWrap(text or "", textLimit)
+  local wrappedLines = {}
+  for _, line in ipairs(layoutLines(text, textLimit)) do
+    table.insert(wrappedLines, line.raw)
+  end
 
   local lineHeight = font:getHeight()
   local availableHeight = boxH - TEXTBOX_TEXT_PAD_Y * 2
@@ -136,11 +218,33 @@ function DialogueBox.draw(pageText, hasMore)
   local textY = boxY + TEXTBOX_TEXT_PAD_Y
   local textLimit = boxW - TEXTBOX_TEXT_PAD_X * 2
 
-  love.graphics.setColor(0, 0, 0, 0.65)
-  love.graphics.printf(pageText or "", textX + TEXTBOX_SHADOW_OFFSET, textY + TEXTBOX_SHADOW_OFFSET, textLimit, "left")
-
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.printf(pageText or "", textX, textY, textLimit, "left")
+  -- Laid out word by word rather than one printf, so a **BUTTON**
+  -- marker can be drawn as its icon in the middle of a line (see
+  -- layoutLines/parseWord).
+  local font = DialogueBox.getFont()
+  local lineHeight = font:getHeight()
+  local lines, spaceW = layoutLines(pageText, textLimit)
+  for lineIndex, line in ipairs(lines) do
+    local x = textX
+    local y = textY + (lineIndex - 1) * lineHeight
+    for _, word in ipairs(line.words) do
+      for _, piece in ipairs(word.pieces) do
+        if piece.icon then
+          love.graphics.setColor(1, 1, 1, 1)
+          love.graphics.draw(piece.icon,
+            math.floor(x + ICON_PAD), math.floor(y + (lineHeight - ICON_HEIGHT) / 2),
+            0, ICON_HEIGHT / piece.icon:getHeight(), ICON_HEIGHT / piece.icon:getHeight())
+        else
+          love.graphics.setColor(0, 0, 0, 0.65)
+          love.graphics.print(piece.text, x + TEXTBOX_SHADOW_OFFSET, y + TEXTBOX_SHADOW_OFFSET)
+          love.graphics.setColor(1, 1, 1, 1)
+          love.graphics.print(piece.text, x, y)
+        end
+        x = x + piece.width
+      end
+      x = x + spaceW
+    end
+  end
 
   love.graphics.setFont(prevFont)
 

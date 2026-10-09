@@ -9,6 +9,7 @@ local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
 local Ooomba = require("lua.entities.Ooomba")
 local Explosion = require("lua.entities.Explosion")
+local StompBurst = require("lua.effects.StompBurst")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
 local CameraDirector = require("lua.systems.CameraDirector")
@@ -50,9 +51,17 @@ local Fish = require("lua.entities.Fish")
 
 local collisionSystem
 
-local ZOOM_MIN = 0.1
+local ZOOM_MIN = 0.6
 local ZOOM_MAX = 2.5
 local ZOOM_STEP_PER_FRAME = 0.02
+-- Zoom-Window easing (see the zoom-window pass in love.update): fraction
+-- of the remaining distance to the target zoom covered each frame, and
+-- how close counts as "arrived".
+local ZOOM_WINDOW_EASE_PER_FRAME = 0.03
+local ZOOM_WINDOW_SNAP = 0.002
+-- Upward speed (world units per baseline frame) the player hops off a
+-- freshly flattened Ooomba with — a small rebound, well under a jump.
+local OOOMBA_STOMP_BOUNCE = 7
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
@@ -419,6 +428,36 @@ function love.load()
     state.beams = { homeBeam, beltBeam }
   end
 
+  -- === Pinball planet entry beam ===
+  -- Planted on top of the pinball planet (see the SHOW_PINBALL_PLANET
+  -- block above) — stepping through it drops the player onto the
+  -- plunger, already curled into a ball (see
+  -- lua/interiors/PinballInterior.lua:onEnter). Unlike the home<->belt
+  -- pair above, this is deliberately ONE-WAY: its own "destination" is
+  -- a plain synthetic table (not another Beam) — Player:updateTeleport
+  -- only ever reads destination.pos/destination.angle (see its own
+  -- comment), so anything with those two fields works as a valid
+  -- target, and destination.onArrive (a small extension this needed —
+  -- see Player:updateTeleport's own "out" phase) is what actually
+  -- curls him into a ball and hands control to PinballInterior the
+  -- instant he lands. Getting back OUT happens by draining off the
+  -- bottom of the table (PinballInterior:exitBall), not a return beam.
+  if state.pinballPlanet then
+    local pinball = state.pinballPlanet
+    local PINBALL_BEAM_OFFSET_X = -pinball.halfWidth * 0.4 -- off-center so it doesn't sit exactly at the rounded top's own midpoint
+    local pinballBeamX = pinball.pos.x + PINBALL_BEAM_OFFSET_X
+    local pinballBeamY = pinball.pos.y - pinball.halfHeight
+    local pinballBeam = Beam.new(pinballBeamX, pinballBeamY, -math.pi / 2, { 0.95, 0.45, 0.15 }) -- orange, distinct from the home<->belt pair's own violet
+    pinballBeam.destination = {
+      pos = pinball.interior:getPortalPosition(),
+      angle = -math.pi / 2,
+      onArrive = function(player)
+        pinball.interior:onEnter(player)
+      end,
+    }
+    table.insert(state.beams, pinballBeam)
+  end
+
   -- === TILED HILL TERRAIN above the sky dome's ground ===
   -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
   -- is now authored in Tiled (tiled/Level1.lua) and loaded as real
@@ -688,6 +727,37 @@ function love.load()
       end
     end
 
+    -- "Zoom-Window" objects: world-space rectangles, already fully
+    -- resolved by TiledTerrain.lua — see the zoom-window pass in
+    -- love.update for what they actually do.
+    state.zoomWindows = terrainLevel.zoomWindows or {}
+
+    -- "DeathZone" objects: dying inside one respawns the player at its
+    -- own respawn point rather than the shelter door (see
+    -- Player:startDeath/respawn). The point is loosely placed like the
+    -- signs/levers above: if there's ground within reach just below it
+    -- (searching from one tile above, in case it was clicked right at
+    -- ground level), he's stood on that ground instead of being left
+    -- overlapping it; otherwise the point is used exactly as given and
+    -- he simply drops from there.
+    local RESPAWN_SEARCH_UP, RESPAWN_SEARCH_DOWN = 64, 200
+    state.deathZones = terrainLevel.deathZones or {}
+    for _, zone in ipairs(state.deathZones) do
+      local bestY = nil
+      for _, shape in ipairs(terrainLevel.shapes) do
+        if not shape.isWallClimb then
+          local hit = shape:findLandingCrossing(
+            zone.respawnX, zone.respawnY - RESPAWN_SEARCH_UP, zone.respawnX, zone.respawnY + RESPAWN_SEARCH_DOWN)
+          if hit and (not bestY or hit.point.y < bestY) then
+            bestY = hit.point.y
+          end
+        end
+      end
+      if bestY then
+        zone.respawnY = bestY - constants.PLAYER_RADIUS - 1
+      end
+    end
+
     -- "Gate" objects (see lua/world/Gate.lua): topY/bottomY/halfWidth
     -- are already fully resolved by TiledTerrain.lua's own tile-grid
     -- scan (see its gateSpawns). Inserted into BOTH terrainLevel.walls
@@ -732,6 +802,9 @@ function love.load()
   state.player.lastInfluencePlanet = dome
   state.player.angle = -math.pi / 2
   state.introLocked = true
+
+  -- Where Player:respawn puts him back after dying — this same doorway.
+  state.respawnPoint = { x = doorwayX, y = topY - constants.PLAYER_RADIUS, planet = dome }
 
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
@@ -949,9 +1022,21 @@ function love.update(dt)
   -- still stands on the deck normally (gravity/collision below are
   -- untouched), just with no WALKING input read, so they don't wander
   -- off mid-sequence before the door's finished its own choreography.
-  state.player:move(state.introLocked and {} or state.keys)
+  -- Also empty while inside the pinball planet — he's a ball under
+  -- PinballInterior's own gravity/collision there (see just below),
+  -- not something walking-input steers directly, same as a real
+  -- pinball only ever responding to flippers/plunger/gravity.
+  state.player:move((state.introLocked or state.player.inPinball) and {} or state.keys)
 
-  if state.player.pullTarget then
+  -- PinballInterior:updateBall entirely REPLACES normal gravity and
+  -- planet collision while he's inside it (see Player.lua's own
+  -- inPinball comment) — state.player:update() still runs normally
+  -- either way, since it's what actually advances teleport/ball-morph/
+  -- invincibility, none of which should pause just because he's now
+  -- inside the table.
+  if state.player.inPinball then
+    state.player.inPinball:updateBall(state.player, state.timeScale)
+  elseif state.player.pullTarget then
     state.player:applyPullForce()
   else
     state.gravitySystem:applyTo(state.player)
@@ -959,7 +1044,9 @@ function love.update(dt)
 
   state.player:update()
 
-  collisionSystem:handlePlayerPlanetCollisions(state.player)
+  if not state.player.inPinball then
+    collisionSystem:handlePlayerPlanetCollisions(state.player)
+  end
 
   -- Gamepad R2 fire: a continuous-hold flag (see GamePadInput.lua),
   -- not an edge-triggered press — called every frame while held, same
@@ -990,6 +1077,33 @@ function love.update(dt)
   end
 
   collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
+
+  -- Ooombas: lethal to touch, unless landed on from above — see
+  -- CollisionSystem:handlePlayerOoombaCollisions. Anything it returns
+  -- has just finished being squashed flat: gone, with a burst under the
+  -- player's feet (or where it stood, if he's no longer on top of it)
+  -- and a small hop for him off the top of it.
+  if state.ooombas and #state.ooombas > 0 then
+    local flattened = collisionSystem:handlePlayerOoombaCollisions(state.player, state.ooombas)
+    for _, o in ipairs(flattened) do
+      local player = state.player
+      local groundY = o.pos.y + o.halfHeight
+      if o.squashPressed then
+        StompBurst.spawn(player.pos.x, math.min(player.pos.y + player.radius, groundY))
+        if not player.onSurface then
+          player.vel.y = -OOOMBA_STOMP_BOUNCE
+          player.isGroundPounding = false
+        end
+      else
+        StompBurst.spawn(o.pos.x, groundY)
+      end
+      if state.audioManager then state.audioManager:playGoombaStomp() end
+      for i = #state.ooombas, 1, -1 do
+        if state.ooombas[i] == o then table.remove(state.ooombas, i) end
+      end
+    end
+  end
+
   collisionSystem:handlePlayerSkyDomeContainment(state.player, state.skyDomePlanet)
 
   -- Belt planetoids alone can number in the hundreds
@@ -1051,7 +1165,10 @@ function love.update(dt)
   end
 
   if state.asteroids and #state.asteroids > 0 then
-    collisionSystem:handlePlayerAsteroidCollisions(state.player, state.asteroids)
+    -- No handlePlayerAsteroidCollisions call: all it does is
+    -- player:startDeath() on contact, and asteroids aren't meant to be
+    -- lethal — that was only ever harmless because startDeath used to
+    -- be an empty stub.
     collisionSystem:handleElasticCollisions(state.asteroids)
 
     local toBreak = collisionSystem:handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids)
@@ -1148,6 +1265,26 @@ function love.update(dt)
           end
         end
       end
+
+      -- Ooomba: a fireball kills one outright — it's gone in an
+      -- explosion (Explosion.lua's own ring/flash/particle burst), and
+      -- the fireball is spent.
+      if state.ooombas and #state.ooombas > 0 and #state.fireballs > 0 then
+        local hitOoombaFireballs, killedOoombas = collisionSystem:handleFireballOoombaCollisions(state.fireballs, state.ooombas)
+        for i = #state.ooombas, 1, -1 do
+          local o = state.ooombas[i]
+          if killedOoombas[o] then
+            table.insert(state.explosions, Explosion.new(o.pos.x, o.pos.y))
+            if state.audioManager then state.audioManager:playFireball() end
+            table.remove(state.ooombas, i)
+          end
+        end
+        for i = #state.fireballs, 1, -1 do
+          if hitOoombaFireballs[state.fireballs[i]] then
+            table.remove(state.fireballs, i)
+          end
+        end
+      end
     end
   end
 
@@ -1212,6 +1349,58 @@ function love.update(dt)
     end
     if state.keys['-'] or state.keys['_'] then
       state.zoom = math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME)
+      state.zoomTarget = nil
+    end
+  end
+
+  -- Zoom-Window pass: walking into one of state.zoomWindows eases the
+  -- camera to that window's own zoom; walking back out eases it back to
+  -- whatever zoom the player had on the way in. Only the enter/exit
+  -- EDGES set state.zoomTarget, so any manual zoom input (which clears
+  -- it — see just above, and InputHandlers.lua's own wheel handler)
+  -- simply wins until the player next crosses a window boundary.
+  local insideWindow = nil
+  local px, py = state.player.pos.x, state.player.pos.y
+  for _, w in ipairs(state.zoomWindows or {}) do
+    if px >= w.x and px <= w.x + w.width and py >= w.y and py <= w.y + w.height then
+      insideWindow = w
+      break
+    end
+  end
+  if insideWindow ~= state.activeZoomWindow then
+    local previous = state.activeZoomWindow
+    if insideWindow then
+      -- Stepping straight from one window into another keeps the
+      -- ORIGINAL pre-window zoom as the one to return to.
+      if not previous then
+        state.zoomWindowReturn = state.zoomTarget or state.zoom
+      end
+      state.zoomTarget = insideWindow.zoom
+    elseif state.zoomWindowReturn then
+      -- Skipped if the player re-zoomed by hand while inside — their
+      -- own choice shouldn't be undone just for walking out.
+      if state.zoomTarget == previous.zoom or math.abs(state.zoom - previous.zoom) < ZOOM_WINDOW_SNAP then
+        state.zoomTarget = state.zoomWindowReturn
+      end
+      state.zoomWindowReturn = nil
+    end
+    state.activeZoomWindow = insideWindow
+  end
+
+  -- Safety net: CameraDirector may zoom out past the player's own
+  -- ZOOM_MIN during a script (see its SCRIPT_ZOOM_MIN) and normally
+  -- hands back at a regular zoom — but if it ever lets go while still
+  -- further out than the player is allowed, ease back in to the limit
+  -- rather than leaving him stuck there.
+  if not CameraDirector.isActive() and not state.zoomTarget and state.zoom < ZOOM_MIN then
+    state.zoomTarget = ZOOM_MIN
+  end
+
+  if state.zoomTarget and not CameraDirector.isActive() then
+    local target = math.min(ZOOM_MAX, math.max(ZOOM_MIN, state.zoomTarget))
+    state.zoom = state.zoom + (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME
+    if math.abs(target - state.zoom) < ZOOM_WINDOW_SNAP then
+      state.zoom = target
       state.zoomTarget = nil
     end
   end

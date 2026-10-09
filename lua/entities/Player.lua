@@ -95,7 +95,13 @@ local TELEPORT_IN_TICKS = 30
 -- was — 120 ticks = 2s at 60fps, matching its own 2000ms.
 local INVINCIBLE_TICKS = 120
 local INVINCIBLE_FLICKER_INTERVAL = 0.1 -- seconds per blink phase — matches the JS original's own 100ms
-local BUBBLE_HEAD_GAP         = 1.4  -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
+
+-- Death (Player:startDeath/updateDeath/respawn): how long he stays
+-- gone — hidden and frozen where he died, his death burst playing out —
+-- before reappearing at state.respawnPoint. Baseline (60fps) ticks.
+local DEATH_TICKS = 50
+
+local BUBBLE_HEAD_GAP         = 1.4 -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
 local BUBBLE_FADE_DISTANCE    = 20   -- world units of travel, just before reaching the water's own radius, that a bubble fades out over
 local BUBBLE_RISE_SPEED_MIN   = 0.5  -- world units per baseline frame, radially outward
 local BUBBLE_RISE_SPEED_MAX   = 1.1
@@ -167,6 +173,11 @@ function Player.new(x, y)
   -- — ticks remaining, counted down in Player:update(); 0/negative means
   -- not currently invincible.
   self.invincibleTimer = 0
+
+  -- See Player:startDeath/updateDeath/respawn. isDying is the one guard
+  -- every other system checks, same role isTeleporting plays above.
+  self.isDying = false
+  self.deathTimer = 0
 
   self.onSurface = false
   self.currentPlanet = nil
@@ -402,7 +413,7 @@ local BALL_MODE_ENABLED = true
 -- same kind of "moving" while supposedly standing still talking).
 function Player:enterBallMode()
   if not BALL_MODE_ENABLED then return end
-  if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting then return end
+  if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   self.morphState = "toBall"
   self.morphElapsed = 0
 end
@@ -426,7 +437,7 @@ end
 -- a ball, already mid-transition either direction, or talking to an NPC
 -- (same reasoning as enterBallMode's own dialogueActive check above).
 function Player:exitBallMode()
-  if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting then return end
+  if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -466,7 +477,7 @@ end
 -- before even calling this, but the guard belongs here too since
 -- nothing stops some OTHER future caller from reaching this directly.
 function Player:startTeleport(origin, destination)
-  if self.isTeleporting or self.morphState or state.dialogueActive then return end
+  if self.isTeleporting or self.isDying or self.morphState or state.dialogueActive then return end
   if not destination then return end
   self.isTeleporting = true
   self.teleportState = "out"
@@ -527,6 +538,16 @@ function Player:updateTeleport(ts)
     self.invincibleTimer = INVINCIBLE_TICKS
     self.teleportState = "in"
     self.teleportTimer = TELEPORT_IN_TICKS
+    -- Optional extension point for a destination that needs to do more
+    -- than just "stand him here" the instant he arrives — e.g. the
+    -- pinball planet's own entry beam (see main.lua's own setup),
+    -- whose destination.onArrive curls him into a ball and hands
+    -- control to PinballInterior:onEnter. Every ordinary Beam<->Beam
+    -- destination simply has no onArrive field, so this is a no-op for
+    -- them.
+    if destination and destination.onArrive then
+      destination.onArrive(self)
+    end
   else
     self.isTeleporting = false
     self.teleportState = nil
@@ -536,8 +557,6 @@ function Player:updateTeleport(ts)
 end
 
 -- See INVINCIBLE_TICKS's own comment. Checked by Player:startDeath
--- (currently a no-op stub either way — see that function's own comment
--- — but correct/future-proof for whenever real death handling lands)
 -- and by Player:draw for the flicker itself.
 function Player:isInvincible()
   return self.invincibleTimer > 0
@@ -657,7 +676,7 @@ function Player:jump()
   -- calls this, rather than needing the same check patched into each
   -- one separately. isTeleporting (Beam.lua) gets the same treatment —
   -- same reasoning, frozen-in-place for a moment rather than mid-action.
-  if self.morphState or state.dialogueActive or self.isTeleporting then return end
+  if self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
 
   -- Requires actually MOVING at run speed, not just holding the run
   -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
@@ -756,7 +775,7 @@ function Player:jump()
 end
 
 function Player:tryGroundPound()
-  if self.isGroundPounding then return end
+  if self.isGroundPounding or self.isDying then return end
   local planet = nil
   if state.gravitySystem then
     planet = state.gravitySystem:findDominantPlanet(self.pos)
@@ -849,7 +868,7 @@ function Player:move(keys)
   -- (gravity-airborne handling, wall-climb bookkeeping, arc-position
   -- resync, etc.) keeps running exactly as normal rather than being
   -- skipped wholesale. isTeleporting (Beam.lua) gets the same treatment.
-  if self.morphState or state.dialogueActive or self.isTeleporting then keys = {} end
+  if self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then keys = {} end
 
   if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
     local planet = self.currentPlanet
@@ -1110,12 +1129,15 @@ function Player:move(keys)
       -- Same accel-toward-a-cap-without-fighting-existing-momentum
       -- shape the screen-space version below uses, just applied to the
       -- tangential speed instead of vel.x directly.
+      -- Scaled by state.timeScale like every other per-frame rate (see
+      -- the airborne branch below for why that matters).
+      local swimAccel = self.airControlAccel * state.timeScale
       if keys["ArrowLeft"] and lockedDir ~= -1 then
-        tangentSpeed = math.min(tangentSpeed, math.max(tangentSpeed - self.airControlAccel, -self.airControlMaxSpeed))
+        tangentSpeed = math.min(tangentSpeed, math.max(tangentSpeed - swimAccel, -self.airControlMaxSpeed))
         self.facingDirection = -1
       end
       if keys["ArrowRight"] and lockedDir ~= 1 then
-        tangentSpeed = math.max(tangentSpeed, math.min(tangentSpeed + self.airControlAccel, self.airControlMaxSpeed))
+        tangentSpeed = math.max(tangentSpeed, math.min(tangentSpeed + swimAccel, self.airControlMaxSpeed))
         self.facingDirection = 1
       end
 
@@ -1132,12 +1154,27 @@ function Player:move(keys)
       -- killing the jump's own distance. The outer math.min/math.max
       -- keeps the accelerated value only when it doesn't walk speed back
       -- DOWN toward the cap from above.
+      --
+      -- The cap itself follows the run button, same as ground speed
+      -- does: walking speed without it, running speed with it. It used
+      -- to be running speed (airControlMaxSpeed) unconditionally, so
+      -- just holding a direction through a WALKING jump accelerated him
+      -- to nearly double his own walking speed in mid-air. Because of
+      -- the never-reduces rule above, letting go of run partway through
+      -- a running jump keeps the speed he already has rather than
+      -- braking him.
+      --
+      -- The acceleration is scaled by state.timeScale like every other
+      -- per-frame rate — unscaled, it was applied once per rendered
+      -- frame, so air control got stronger the higher the frame rate.
+      local airMaxSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1)
+      local airAccel = self.airControlAccel * state.timeScale
       if keys["ArrowLeft"] and lockedDir ~= -1 then
-        self.vel.x = math.min(self.vel.x, math.max(self.vel.x - self.airControlAccel, -self.airControlMaxSpeed))
+        self.vel.x = math.min(self.vel.x, math.max(self.vel.x - airAccel, -airMaxSpeed))
         self.facingDirection = -1
       end
       if keys["ArrowRight"] and lockedDir ~= 1 then
-        self.vel.x = math.max(self.vel.x, math.min(self.vel.x + self.airControlAccel, self.airControlMaxSpeed))
+        self.vel.x = math.max(self.vel.x, math.min(self.vel.x + airAccel, airMaxSpeed))
         self.facingDirection = 1
       end
     end
@@ -1208,6 +1245,13 @@ function Player:update()
   -- ordinary platformer tile collision uses instead of a plain distance
   -- check. See TerrainShape:findLandingCrossing.
   self.prevPos = self.pos:clone()
+
+  -- Frozen in place for the whole death pause — nothing below (morph,
+  -- teleport, movement integration) should advance until he respawns.
+  if self.isDying then
+    self:updateDeath(state.timeScale)
+    return
+  end
 
   self:updateBallMorph(state.timeScale)
   self:updateTeleport(state.timeScale)
@@ -1972,6 +2016,9 @@ function Player:getNearbyBeam()
 end
 
 function Player:draw()
+  -- Gone for the death pause — only his death burst is on screen.
+  if self.isDying then return end
+
   local scale, pulseGlow = self:getTeleportPulse()
 
   -- Outer glow hugging his own real silhouette (SilhouetteGlow.lua —
@@ -2091,7 +2138,7 @@ end
 ------------------------------------------------------------------
 
 function Player:trySelectPullTarget(explicitTarget)
-  if self.mode ~= "space" or self.isBall or self.isTeleporting then return end
+  if self.mode ~= "space" or self.isBall or self.isTeleporting or self.isDying then return end
 
   local best = nil
   if explicitTarget then
@@ -2163,7 +2210,7 @@ function Player:applyPullForce()
   -- he's frozen in place either way, so a pull target left over from
   -- right before interacting with a beam shouldn't resume once he
   -- arrives somewhere else entirely.
-  if self.isTeleporting then self.pullTarget = nil; return end
+  if self.isTeleporting or self.isDying then self.pullTarget = nil; return end
 
   local stillActive = false
   for _, p in ipairs(state.planetoids) do
@@ -2200,7 +2247,7 @@ end
 
 function Player:shootFireball()
   if self.mode ~= "space" and self.mode ~= "platform" then return end
-  if self.isBall or self.isTeleporting then return end
+  if self.isBall or self.isTeleporting or self.isDying then return end
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0
@@ -2305,19 +2352,95 @@ function Player:clearLockTarget()
   self.lockedTarget = nil
 end
 
--- Deliberate no-op stub -- death animations aren't ported yet (see the
--- file-header comment). Several CollisionSystem call sites (lava,
--- FireBar, Spikey, etc.) call player:startDeath() unconditionally on a
--- lethal hit; without this method existing at all, that was a nil-call
--- crash straight to a blue screen. This just absorbs the call so a
--- lethal hit is silently survived until real death handling is ported.
--- The isInvincible() check is real/functional already, though (see
--- Player:startTeleport/updateTeleport and INVINCIBLE_TICKS's own
--- comment) — matches the old JS game's own startDeath, which checked it
--- first for exactly the same reason, so this stays correct rather than
--- needing a second change once death itself actually lands.
+-- Lethal contact (Spikey, FireBar, Ooomba — see CollisionSystem.lua's
+-- own call sites, which call this unconditionally every frame contact
+-- continues; the isDying check is what makes that a single death).
+-- Ignored while invincible (just respawned, or just arrived via a beam —
+-- see INVINCIBLE_TICKS) or mid-teleport. He vanishes in a burst right
+-- where he was hit, stays gone for DEATH_TICKS (see Player:updateDeath),
+-- then reappears at state.respawnPoint (see Player:respawn).
 function Player:startDeath()
-  if self:isInvincible() then return end
+  if self.isDying or self.isTeleporting or self:isInvincible() then return end
+
+  self.isDying = true
+  self.deathTimer = DEATH_TICKS
+  -- Decided now, from where he actually died — not at respawn time.
+  -- nil (no DeathZone here) falls back to state.respawnPoint.
+  self.deathZoneRespawn = nil
+  for _, zone in ipairs(state.deathZones or {}) do
+    if self.pos.x >= zone.x and self.pos.x <= zone.x + zone.width
+       and self.pos.y >= zone.y and self.pos.y <= zone.y + zone.height then
+      self.deathZoneRespawn = { x = zone.respawnX, y = zone.respawnY }
+      break
+    end
+  end
+  self.vel.x, self.vel.y = 0, 0
+  self.pullTarget = nil
+  self.lockedTarget = nil
+
+  local Explosion = require("lua.entities.Explosion")
+  state.explosions = state.explosions or {}
+  table.insert(state.explosions, Explosion.new(self.pos.x, self.pos.y))
+  if state.audioManager then state.audioManager:playDeath() end
+end
+
+function Player:updateDeath(ts)
+  self.deathTimer = self.deathTimer - ts
+  if self.deathTimer <= 0 then
+    self:respawn()
+  end
+end
+
+-- Puts him back at state.respawnPoint (the Space Shelter's own doorway —
+-- set once in main.lua, right where the game's own opening spawn is) —
+-- or, if he died inside a Tiled "DeathZone", at that zone's own respawn
+-- point (see startDeath) —
+-- standing, on foot, with everything transient about wherever he died
+-- cleared, and the same brief invincibility a beam arrival gets.
+function Player:respawn()
+  local point = self.deathZoneRespawn or state.respawnPoint
+  self.deathZoneRespawn = nil
+  if point then
+    self.pos.x, self.pos.y = point.x, point.y
+    if point.planet then
+      self.onSurface = true
+      self.currentPlanet = point.planet
+      self.lastInfluencePlanet = point.planet
+      self.angle = -math.pi / 2
+    else
+      -- A DeathZone's own respawn point names no surface — he's left
+      -- airborne there and lands through the ordinary collision pass,
+      -- same as a beam arrival (see updateTeleport).
+      self.onSurface = false
+      self.currentPlanet = nil
+    end
+  end
+  -- Same reasoning as updateTeleport's own prevPos re-anchor: without
+  -- it, this frame's swept collision checks would see a single-frame
+  -- "travel" all the way from where he died to here.
+  self.prevPos = self.pos:clone()
+  self.vel.x, self.vel.y = 0, 0
+
+  self.isBall = false
+  self.radius = self.baseRadius
+  self.morphState = nil
+  self.morphElapsed = 0
+  self.isGroundPounding = false
+  self.isWallSliding = false
+  self.touchingWall = nil
+  self.wallContactNormal = nil
+  self.wallClimbDir = nil
+  self.wallClimbDirPlanet = nil
+  self.wallJumpLockTimer = 0
+  self.wallJumpLockBlockedDir = nil
+  -- Cleared directly (not left for Player:update to notice) so dying
+  -- underwater doesn't play a "left the water" splash at the shelter.
+  self.submergedIn = nil
+  self.bubbles = {}
+
+  self.isDying = false
+  self.deathTimer = 0
+  self.invincibleTimer = INVINCIBLE_TICKS
 end
 
 return Player

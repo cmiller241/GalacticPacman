@@ -10,7 +10,7 @@ return {
   tilewidth = 32,
   tileheight = 32,
   nextlayerid = 3,
-  nextobjectid = 83,
+  nextobjectid = 89,
   properties = {},
   tilesets = {
     {
@@ -530,8 +530,8 @@ return {
           name = "",
           class = "Ooomba",
           shape = "point",
-          x = 2760,
-          y = 1886,
+          x = 2957,
+          y = 1847,
           width = 0,
           height = 0,
           rotation = 0,
@@ -1425,7 +1425,7 @@ return {
           rotation = 0,
           visible = true,
           properties = {
-            ["message"] = "Did you know you can use your blaster arm to shoot fireballs? Rotate your arm using the right joystick and fire by pressing R2."
+            ["message"] = "You can adjust the zoom by pressing **up** or **down** on the directional pad of the controller. "
           }
         },
         {
@@ -1440,7 +1440,7 @@ return {
           rotation = 0,
           visible = true,
           properties = {
-            ["message"] = "Did you know you can press L1 or R1 to go to target spheres and planetoids around you? If you press L2 while targeting a sphere or planetoid, you can pull yourself to it. "
+            ["message"] = "Did you know you can press **L1** or **R1** to go to target spheres and planetoids around you? If you press **L2** while targeting a sphere or planetoid, you can pull yourself to it. "
           }
         },
         {
@@ -1455,7 +1455,7 @@ return {
           rotation = 0,
           visible = true,
           properties = {
-            ["message"] = "Did you know you can run by holding the square button? It's a great way to get someplace fast!"
+            ["message"] = "Did you know you can run by holding the **SQUARE** button? It's a great way to get someplace fast! Just don't quickly press **SQUARE** twice, or the player will bunch up into a ball; it's not too big of a deal, since you can press **SQUARE** twice again to morph back.  "
           }
         },
         {
@@ -1485,7 +1485,7 @@ return {
           rotation = 0,
           visible = true,
           properties = {
-            ["message"] = "You can zoom in and out by pressing the UP and DOWN arrow. This may be beneficial for seeing what's around you. "
+            ["message"] = "These monsters ahead are Ooombas. You can jump on their heads, or you can use your arm cannon to shoot them. Simply use the right joystick to aim, and press **R2** button to shoot. Just make sure they don't hit you, or you'll respawn at the start of the level!"
           }
         },
         {
@@ -1501,6 +1501,50 @@ return {
           visible = true,
           properties = {
             ["message"] = "Nothing more to see up here... yet. "
+          }
+        },
+        {
+          id = 83,
+          name = "",
+          class = "Zoom-Window",
+          shape = "rectangle",
+          x = 1979,
+          y = 1244,
+          width = 484,
+          height = 439,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["zoom"] = "0.6"
+          }
+        },
+        {
+          id = 85,
+          name = "",
+          class = "Ooomba",
+          shape = "point",
+          x = 3110,
+          y = 1843,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 86,
+          name = "",
+          class = "DeathZone",
+          shape = "rectangle",
+          x = 1051,
+          y = 1204,
+          width = 777,
+          height = 475,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["respawnX"] = "1844",
+            ["respawnY"] = "1650"
           }
         }
       }

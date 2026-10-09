@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asteroid Bob</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Full-viewport parallax starfield (see js/starfield.js) — sits
+       behind everything else, fixed so it doesn't scroll away. -->
+  <canvas id="starfield"></canvas>
+
+  <!-- Title bar across the very top of the page — a Windows-blue
+       gradient strip, separate from the planet/Bob hero below it. -->
+  <div class="topbar">
+    <h1 class="topbar-title">ASTEROID&nbsp;BOB</h1>
+  </div>
+
+  <header class="hero">
+    <!-- Both the planets AND Bob are drawn on this ONE canvas, in the
+         same coordinate space (see js/planets.js/js/bob.js/js/main.js)
+         — simplest way to let him walk seamlessly across several
+         planets without any cross-canvas alignment math. The actual
+         clickable/hoverable nav links are real DOM <a> elements laid
+         on top (see js/planets.js:buildNavLinks), positioned to
+         exactly overlap each canvas-drawn planet, so this stays a
+         normal accessible nav underneath the visual flourish. -->
+    <div class="hero-stage">
+      <canvas id="heroCanvas"></canvas>
+    </div>
+  </header>
+
+  <!-- Placeholder content per page — swapped by data-page index to
+       match whichever planet was last CLICKED (not just hovered). Real
+       copy goes here later; this is just the shell. -->
+  <main id="content">
+    <section class="page" data-page="0">
+      <h2>Home</h2>
+      <div class="updates">
+        <article class="update">
+          <span class="update-date">Sat, October 10, 2026</span>
+          <p>
+            Come say hi! I'll have a booth at the
+            <strong>Alaska Gamedev Expo 2026</strong>, hosted by the
+            Alaska Developers Alliance at the Egan Center
+            (555 W 5th Ave, Anchorage, AK) from 1&ndash;5&nbsp;PM.
+            It's a free, open-floor event — stop by to see Asteroid
+            Bob's progress and play a build in person.
+          </p>
+        </article>
+      </div>
+    </section>
+    <section class="page" data-page="1">
+      <h2>About</h2>
+      <p>
+        Asteroid Bob is a small physics playground about a very small
+        astronaut on a lot of very small worlds. You wake up in a
+        shelter parked on the grassy deck of a glass-domed planetoid,
+        step outside, and the rest of the asteroid field is yours to
+        wander.
+      </p>
+      <p>
+        Every world here is small enough to walk all the way around —
+        gravity just curls with the ground beneath your boots. Jump the
+        gaps you can reach, wall-jump the ones you can't, and when a
+        planet's too far off to simply walk to, fire off a pull-beam
+        and let it reel you in across open space.
+      </p>
+      <p>
+        Curl into a ball to pick up speed rolling downhill, duck
+        underwater on the rare world that's gone liquid at the edges,
+        and keep an eye out for the one planetoid that isn't a planet
+        at all — step inside and you're the ball in a full-size pinball
+        table, flippers and all.
+      </p>
+      <p>
+        There's no quest log and no handholding — just a belt of odd
+        little worlds strung together by beam-teleporters, waiting to
+        be hopped between. I'm building it solo, a planetoid at a time.
+      </p>
+    </section>
+    <section class="page" data-page="2">
+      <h2>Media</h2>
+      <!-- Populated by js/gallery.js — a grid of thumbnails built from
+           website/screenshots/, each opening the full-size shot in a
+           lightbox overlay (see .lightbox in style.css). -->
+      <div id="mediaGallery"></div>
+
+      <h3 class="media-subhead">Videos</h3>
+      <div class="video-grid">
+        <div class="video-embed">
+          <iframe src="https://www.youtube-nocookie.com/embed/Qed6qY5nKCk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+        <div class="video-embed">
+          <iframe src="https://www.youtube-nocookie.com/embed/0rcjYK3JeIE" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+        <div class="video-embed">
+          <iframe src="https://www.youtube-nocookie.com/embed/RaAhAkApAhA" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+        <div class="video-embed">
+          <iframe src="https://www.youtube-nocookie.com/embed/la8H_S-S_lk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+        </div>
+      </div>
+    </section>
+    <section class="page" data-page="3">
+      <h2>Contact</h2>
+      <div class="contact">
+        <img class="contact-photo" src="img/corey.jpg" alt="Corey Miller">
+        <div class="contact-info">
+          <p>
+            Hi, I'm <strong>Corey Miller</strong> — a software
+            developer for the Alaska Department of Transportation and
+            Public Facilities. Outside of work I like drawing Christian
+            comic strips (read them at
+            <a href="https://www.afilg.com" target="_blank" rel="noopener noreferrer">afilg.com</a>)
+            and designing video games — Asteroid Bob is one of them.
+            I'm also part of
+            <a href="https://www.akdevalliance.com/ak-game-developers" target="_blank" rel="noopener noreferrer">Alaska Game Developers</a>
+            and the
+            <a href="https://alaskanprospectorssociety.org" target="_blank" rel="noopener noreferrer">Alaskan Prospectors Society</a>.
+          </p>
+          <ul class="contact-links">
+            <li>
+              <a href="mailto:cmiller241@gmail.com">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                  <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                cmiller241@gmail.com
+              </a>
+            </li>
+            <li>
+              <a href="https://www.afilg.com" target="_blank" rel="noopener noreferrer">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="2" y1="12" x2="22" y2="12"></line>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+                afilg.com (my comic site)
+              </a>
+            </li>
+            <li>
+              <a href="https://www.instagram.com/afilgcomic/" target="_blank" rel="noopener noreferrer">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+                </svg>
+                @afilgcomic on Instagram
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Full-viewport overlay fireball bolts fly on (see js/fireball.js)
+       — separate from #heroCanvas so a bolt can keep flying out past
+       the hero box, over the topbar/content panel, until it actually
+       leaves the browser window, instead of vanishing at the hero
+       canvas's own small edge. Stacked above everything else on the
+       page (see its z-index in style.css). -->
+  <canvas id="fireballLayer"></canvas>
+
+<script src="js/starfield.js"></script>
+<script src="js/planets.js"></script>
+<script src="js/pullbeam.js"></script>
+<script src="js/dust.js"></script>
+<script src="js/fireball.js"></script>
+<script src="js/bob.js"></script>
+<script src="js/gallery.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

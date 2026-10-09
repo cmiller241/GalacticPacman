@@ -25,6 +25,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local DialogueBox = require("lua.ui.DialogueBox")
+local InteractPrompt = require("lua.ui.InteractPrompt")
 
 local Fisherman = {}
 Fisherman.__index = Fisherman
@@ -243,8 +244,6 @@ end
 -- lua/ui/DialogueBox.lua, shared box art/layout/pagination).
 ------------------------------------------------------------------
 
-local TOOLTIP_TEXT = "Press ENTER / Circle to talk"
-local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
 local TOOLTIP_GAP_ABOVE_HEAD = 66 -- 26 + 40, per explicit request to move it up
 
 -- Not shown while curled into a ball (Player.lua's own isBall) — a
@@ -255,22 +254,7 @@ function Fisherman:drawTooltip()
   if not self.playerNearby or self.dialogueActive then return end
   if state.player and state.player.isBall then return end
 
-  local font = love.graphics.getFont()
-  local textW = font:getWidth(TOOLTIP_TEXT)
-  local textH = font:getHeight()
-  local pillW = textW + TOOLTIP_PAD_X * 2
-  local pillH = textH + TOOLTIP_PAD_Y * 2
-
-  local bob = math.sin(love.timer.getTime() * 3) * 4
-  local pillX = self.pos.x - pillW / 2
-  local pillY = self.pos.y - self.halfHeight - TOOLTIP_GAP_ABOVE_HEAD - pillH + bob
-
-  love.graphics.setColor(0, 0, 0, 0.6)
-  love.graphics.rectangle("fill", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.setColor(1, 1, 1, 0.9)
-  love.graphics.rectangle("line", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.print(TOOLTIP_TEXT, pillX + TOOLTIP_PAD_X, pillY + TOOLTIP_PAD_Y)
-  love.graphics.setColor(1, 1, 1, 1)
+  InteractPrompt.draw(self.pos.x, self.pos.y - self.halfHeight - TOOLTIP_GAP_ABOVE_HEAD)
 end
 
 -- Screen-space dialogue box — call AFTER the camera transform is

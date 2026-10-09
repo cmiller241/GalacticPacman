@@ -1987,6 +1987,16 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- own export, same as every other custom property here — tonumber'd
   -- below) describe the actual path.
   local sphereMoveSpawns = {}
+  -- "Zoom-Window" objects: a rectangle (not a point, unlike everything
+  -- else here) that eases the camera to its own "zoom" custom property
+  -- while the player is inside it — see main.lua's own zoom-window pass
+  -- in love.update. Already converted to world space here.
+  local zoomWindows = {}
+  -- "DeathZone" objects: a rectangle with respawnX/respawnY custom
+  -- properties (raw Tiled pixel space, like Sphere-Move's own path
+  -- points) — dying inside it respawns the player at that point instead
+  -- of the Space Shelter door. See Player:startDeath/respawn.
+  local deathZones = {}
 
   -- Scans column `col` outward from `startRow` in direction `dRow`
   -- (+1 = downward/floor search, -1 = upward/ceiling search) for the
@@ -2165,6 +2175,38 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             endY = anchorY + (tonumber(props.endY) or obj.y) * TILE_SCALE,
             speed = tonumber(props.speed),
           })
+        elseif obj.class == "Zoom-Window" then
+          local zoom = tonumber(obj.properties and obj.properties.zoom)
+          if zoom then
+            table.insert(zoomWindows, {
+              x = anchorX + obj.x * TILE_SCALE,
+              y = anchorY + obj.y * TILE_SCALE,
+              width = obj.width * TILE_SCALE,
+              height = obj.height * TILE_SCALE,
+              zoom = zoom,
+            })
+          else
+            print(string.format(
+              "TiledTerrain: Zoom-Window object id %s has no numeric \"zoom\" property — ignored.",
+              tostring(obj.id)))
+          end
+        elseif obj.class == "DeathZone" then
+          local props = obj.properties or {}
+          local respawnX, respawnY = tonumber(props.respawnX), tonumber(props.respawnY)
+          if respawnX and respawnY then
+            table.insert(deathZones, {
+              x = anchorX + obj.x * TILE_SCALE,
+              y = anchorY + obj.y * TILE_SCALE,
+              width = obj.width * TILE_SCALE,
+              height = obj.height * TILE_SCALE,
+              respawnX = anchorX + respawnX * TILE_SCALE,
+              respawnY = anchorY + respawnY * TILE_SCALE,
+            })
+          else
+            print(string.format(
+              "TiledTerrain: DeathZone object id %s needs numeric \"respawnX\" and \"respawnY\" properties — ignored.",
+              tostring(obj.id)))
+          end
         end
       end
     end
@@ -2224,6 +2266,8 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     spikeyVerticalSpawns = spikeyVerticalSpawns,
     spikeyOrbitSpawns = spikeyOrbitSpawns,
     sphereMoveSpawns = sphereMoveSpawns,
+    zoomWindows = zoomWindows,
+    deathZones = deathZones,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

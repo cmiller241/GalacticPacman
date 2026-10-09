@@ -21,6 +21,7 @@ local Script = require("lua.systems.Script")
 local CameraDirector = require("lua.systems.CameraDirector")
 local worldGen = require("lua.setup.worldGen")
 local DialogueBox = require("lua.ui.DialogueBox")
+local InteractPrompt = require("lua.ui.InteractPrompt")
 
 local RobotButler = {}
 RobotButler.__index = RobotButler
@@ -393,8 +394,6 @@ function RobotButler:draw()
   love.graphics.draw(img, quad, self.pos.x, self.pos.y, 0, scaleX, scaleY, sheetFrameW / 2, sheetFrameH / 2)
 end
 
-local TOOLTIP_TEXT = "Press ENTER / Circle to talk"
-local TOOLTIP_PAD_X, TOOLTIP_PAD_Y = 12, 8
 local TOOLTIP_GAP_ABOVE_HEAD = 26 -- world units between his head and the pill's own bottom edge
 
 -- World-space "you can interact with him" hint — call from inside the
@@ -409,26 +408,7 @@ function RobotButler:drawTooltip()
   if not self.playerNearby or self.dialogueActive then return end
   if state.player and state.player.isBall then return end
 
-  local font = love.graphics.getFont()
-  local textW = font:getWidth(TOOLTIP_TEXT)
-  local textH = font:getHeight()
-  local pillW = textW + TOOLTIP_PAD_X * 2
-  local pillH = textH + TOOLTIP_PAD_Y * 2
-
-  -- Gentle bob, same "alive, not static" pulsing idea LockOutline.lua's
-  -- own ring already uses elsewhere, just vertical motion instead of an
-  -- alpha pulse — reads as a little floating tooltip rather than a flat
-  -- painted-on label.
-  local bob = math.sin(love.timer.getTime() * 3) * 4
-  local pillX = self.pos.x - pillW / 2
-  local pillY = self.pos.y - self.halfHeight - TOOLTIP_GAP_ABOVE_HEAD - pillH + bob
-
-  love.graphics.setColor(0, 0, 0, 0.6)
-  love.graphics.rectangle("fill", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.setColor(1, 1, 1, 0.9)
-  love.graphics.rectangle("line", pillX, pillY, pillW, pillH, pillH / 2, pillH / 2)
-  love.graphics.print(TOOLTIP_TEXT, pillX + TOOLTIP_PAD_X, pillY + TOOLTIP_PAD_Y)
-  love.graphics.setColor(1, 1, 1, 1)
+  InteractPrompt.draw(self.pos.x, self.pos.y - self.halfHeight - TOOLTIP_GAP_ABOVE_HEAD)
 end
 
 -- Screen-space dialogue box — call AFTER the camera transform is

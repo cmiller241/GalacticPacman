@@ -1,0 +1,417 @@
+:root {
+  --bg: #0b1030;
+  --bg-top: #182457;
+  --bg-bottom: #05070f;
+  --panel: #0e1220;
+  --accent: #8fd3ff;
+  --text: #e7ecf5;
+  --text-dim: #8d97ab;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  /* A navy-leaning gradient rather than a flat near-black — brighter,
+     bluer near the top (behind the hero) and settling to near-black
+     further down. #starfield sits on top of this (transparent, see
+     js/starfield.js's clearRect) so the gradient shows through it. */
+  background: var(--bg-bottom);
+  background: radial-gradient(ellipse 140% 70% at 50% -10%, var(--bg-top) 0%, var(--bg) 45%, var(--bg-bottom) 100%);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Fixed full-viewport backdrop — everything else draws on top of it
+   at a higher z-index. See js/starfield.js. */
+#starfield {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+}
+
+/* Fireball bolts (js/fireball.js) — a SEPARATE full-viewport fixed
+   layer from #starfield, stacked ABOVE the topbar/hero/content
+   (z-index 1-2) rather than below, so a bolt flying past the hero
+   canvas's own small bounds is still visible sailing out over the
+   rest of the page until it leaves the browser window. Below the
+   media lightbox's own z-index (50) so that still wins if both are
+   ever visible together. */
+#fireballLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: block;
+  pointer-events: none;
+}
+
+/* Title bar — a Windows-blue strip across the full width of the page,
+   sitting above the starfield/hero (z-index 2 > starfield's 0 and
+   hero's 1). Gradient sweeps from a bright Windows-accent blue down to
+   a darker blue, same top-to-bottom "lit from above" logic as the
+   page's own body gradient, just a different hue. */
+.topbar {
+  position: relative;
+  z-index: 2;
+  background: linear-gradient(180deg, #2b98f0 0%, #0f6fc5 45%, #0a3d7a 100%);
+  /* Drop shadow cast below the bar, plus a thin inset highlight right
+     along its own bottom edge — a subtle glossy "reflected light"
+     line, like the bar's own gradient catching a sheen right before it
+     ends. */
+  box-shadow:
+    0 6px 14px -2px rgba(0, 0, 0, 0.65),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.18);
+  padding: 10px 20px;
+}
+
+.topbar-title {
+  text-align: center;
+  letter-spacing: 0.35em;
+  font-size: clamp(18px, 3.4vw, 30px);
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 10, 30, 0.5);
+  margin: 0;
+}
+
+.hero {
+  position: relative;
+  z-index: 1;
+  max-width: 1050px;
+  margin: 0 auto;
+  padding-top: 6px;
+}
+
+.hero-stage {
+  position: relative;
+  width: 100%;
+  max-width: 1050px;
+  margin: 0 auto;
+}
+
+#heroCanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 20px;
+}
+
+/* Real, accessible nav links — invisible hit areas positioned exactly
+   over each canvas-drawn planet (see js/planets.js:buildNavLinks). The
+   circle/glow/label themselves are what's actually VISIBLE; this is
+   purely the interactive layer.
+   border-radius alone only rounds the paint — the element's actual
+   hoverable/clickable box stays the full square, so the corners (which
+   sit in empty space between the circularly-cropped planets) still
+   register as "on" this planet. clip-path actually clips hit-testing
+   too, so hover/click only fire within the true circle. */
+.planet-hit {
+  position: absolute;
+  border-radius: 50%;
+  clip-path: circle(50% at 50% 50%);
+  display: block;
+  text-indent: -200%;
+  overflow: hidden;
+  white-space: nowrap;
+  outline: none;
+  cursor: pointer;
+}
+.planet-hit:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.planet-label {
+  position: absolute;
+  transform: translate(-50%, 0);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  pointer-events: none;
+  transition: color 0.2s ease, text-shadow 0.2s ease;
+}
+.planet-hit.active + .planet-label,
+.planet-hit:hover + .planet-label {
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(143, 211, 255, 0.6);
+}
+
+main#content {
+  position: relative;
+  z-index: 1;
+  max-width: 720px;
+  margin: 0 auto 140px;
+  padding: 13px 32px 26px;
+  border-radius: 20px;
+  /* Same Windows-blue sweep as .topbar, just with alpha on the
+     gradient stops themselves — only the panel fades into the
+     starfield behind it; h2/p below keep fully opaque colors, so the
+     TEXT doesn't pick up any of that transparency. */
+  background: linear-gradient(180deg, rgba(43, 152, 240, 0.32) 0%, rgba(15, 111, 197, 0.32) 45%, rgba(10, 61, 122, 0.32) 100%);
+  border: 1px solid rgba(143, 211, 255, 0.25);
+  box-shadow: 0 10px 30px rgba(3, 10, 30, 0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.page {
+  display: none;
+}
+.page.active {
+  display: block;
+  animation: fadeIn 0.4s ease;
+}
+.page h2 {
+  font-size: 22px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-top: 0; /* kill the browser's default h2 top margin — it was adding extra space on top of the panel's own padding */
+  margin-bottom: 10px;
+}
+.page p {
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 15px;
+}
+.page p a {
+  color: var(--accent);
+}
+.page p a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Home's update entries — a dated tag above a short note, left border
+   as a simple timeline-ish accent. Built for one entry today but reads
+   fine as a stacked list once more get added later. */
+.updates {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.update {
+  border-left: 3px solid var(--accent);
+  padding-left: 14px;
+}
+.update-date {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.update p {
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 15px;
+  margin: 0;
+}
+
+/* Media page — thumbnail grid (js/gallery.js builds this into
+   #mediaGallery) plus the lightbox it opens into (appended to <body>,
+   not nested in .page, so it can cover the whole viewport). */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+.thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 1px solid rgba(143, 211, 255, 0.25);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.thumb:hover,
+.thumb:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+.thumb:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.media-subhead {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 24px 0 10px;
+}
+
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.video-embed {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(143, 211, 255, 0.25);
+  background: rgba(0, 0, 0, 0.3);
+}
+.video-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Dimmed/grayed backdrop over the ENTIRE page (starfield, topbar,
+   hero, content panel — everything), with the full-size screenshot
+   centered on top. z-index comfortably above the topbar's own 2. */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 6, 14, 0.88);
+  animation: fadeIn 0.15s ease;
+}
+.lightbox[hidden] {
+  display: none;
+}
+body.lightbox-open {
+  overflow: hidden;
+}
+
+.lightbox-figure {
+  position: relative;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+}
+.lightbox-img {
+  display: block;
+  max-width: 92vw;
+  max-height: 88vh;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-close,
+.lightbox-nav {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(143, 211, 255, 0.35);
+  background: rgba(10, 16, 36, 0.75);
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lightbox-close:hover,
+.lightbox-nav:hover {
+  background: var(--accent);
+  color: #05070f;
+}
+.lightbox-close {
+  top: -16px;
+  right: -16px;
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+  line-height: 1;
+}
+.lightbox-nav {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  font-size: 26px;
+  line-height: 1;
+}
+.lightbox-prev { left: -14px; }
+.lightbox-next { right: -14px; }
+
+.lightbox-counter {
+  position: absolute;
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .lightbox-close { top: 8px; right: 8px; }
+  .lightbox-prev { left: 8px; }
+  .lightbox-next { right: 8px; }
+  .lightbox-counter { bottom: -26px; }
+}
+
+/* Contact page — photo beside a short bio + icon links, stacking on
+   narrow viewports. */
+.contact {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.contact-photo {
+  width: 150px;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid rgba(143, 211, 255, 0.3);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+}
+.contact-info {
+  flex: 1;
+  min-width: 220px;
+}
+.contact-links {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.contact-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.contact-links a:hover {
+  color: var(--accent);
+}
+.contact-links svg {
+  flex-shrink: 0;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

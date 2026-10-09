@@ -116,6 +116,9 @@ local function attachInputHandlers()
   state.mouseDown = false
 
   function love.mousepressed(x, y, button, istouch, presses)
+    -- Clicks, the wheel and key presses all count as "using keyboard/
+    -- mouse" for InteractPrompt.lua's own button icon.
+    state.lastKeyboardMouseInputTime = love.timer.getTime()
     if tryRestartOrAdvance() then return end  -- same early-return as the original
     if button == 1 then
       state.mouseDown = true
@@ -144,6 +147,7 @@ local function attachInputHandlers()
     state.zoom = math.max(state.zoomMin, math.min(state.zoomMax, state.zoom + delta))
     state.zoomTarget = nil
     state.lastWheelTime = love.timer.getTime()
+    state.lastKeyboardMouseInputTime = state.lastWheelTime
   end
 
   -- ----------------------------
@@ -152,6 +156,7 @@ local function attachInputHandlers()
   function love.keypressed(loveKey, scancode, isrepeat)
     local key = toJsStyleKey(loveKey)
     state.keys[key] = true
+    state.lastKeyboardMouseInputTime = love.timer.getTime()
 
     if key == ' ' then
       if state.player and state.player.inPinball then
