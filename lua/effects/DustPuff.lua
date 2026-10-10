@@ -107,4 +107,39 @@ function DustPuff.spawn(pos, intoSurfaceDir, sideDir, count, sideSpreadScale, dr
   end
 end
 
+-- Dust thrown straight OUTWARD from a single point, like the spokes of
+-- a wheel — for an impact (a ground pound), as opposed to
+-- DustPuff.spawn's soft drift up off a footstep. The particles are
+-- spread evenly round the half-circle on the open side of the surface
+-- (so none are sent down into the ground itself), each flying directly
+-- away from `pos`.
+--
+--   pos                 Vector2 — the point of impact.
+--   awayDir             Vector2, unit length — pointing AWAY from the
+--                       surface (straight up, on flat ground).
+--   count               how many particles.
+--   speedMin, speedMax  range each particle's outward speed is
+--                       randomized within, world units/60fps-tick.
+function DustPuff.spawnRadial(pos, awayDir, count, speedMin, speedMax)
+  local sideDir = awayDir:clone()
+  sideDir.x, sideDir.y = -awayDir.y, awayDir.x
+
+  for i = 1, count do
+    -- Evenly fanned from one side of the ground round to the other,
+    -- with a little jitter so it isn't a perfectly regular starburst.
+    local angle = ((i - 0.5) / count) * math.pi + (math.random() - 0.5) * 0.25
+    local speed = speedMin + math.random() * (speedMax - speedMin)
+    local vel = sideDir:clone():multiply(math.cos(angle) * speed)
+      :add(awayDir:clone():multiply(math.sin(angle) * speed))
+
+    local particle = Particle.new(pos, vel, 26 + math.random() * 16)
+    particle.color = { hslToRgb(35 + math.random() * 15, (30 + math.random() * 15) / 100, (55 + math.random() * 15) / 100) } -- same dusty tan/beige as spawn
+    particle.radius = 2.5 + math.random() * 2
+    particle.drag = 0.9
+    particle.growRate = 0.09
+    particle.blobs = randomBlobs()
+    table.insert(state.particles, particle)
+  end
+end
+
 return DustPuff

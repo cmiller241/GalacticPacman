@@ -61,6 +61,7 @@ local state = require("lua.state")
 local inputHandlers = require("lua.setup.inputHandlers")
 local tryRestartOrAdvance = inputHandlers.tryRestartOrAdvance
 local TitleScreen = require("lua.ui.TitleScreen")
+local PauseMenu = require("lua.ui.PauseMenu")
 
 -- Positional mapping — see this file's own header comment for why
 -- these specific names correspond to these specific PS buttons.
@@ -72,6 +73,9 @@ local BUTTON_R1 = "rightshoulder"
 local BUTTON_L1 = "leftshoulder"
 local BUTTON_DPAD_UP = "dpup"
 local BUTTON_DPAD_DOWN = "dpdown"
+-- "start" is the pad's right-hand menu button: Options on a PS5/PS4
+-- controller, Start on older ones, Menu on an Xbox pad.
+local BUTTON_START = "start"
 
 local ALL_FACE_AND_SHOULDER_BUTTONS = {
   BUTTON_X_CROSS, BUTTON_CIRCLE, BUTTON_SQUARE, BUTTON_TRIANGLE,
@@ -102,6 +106,11 @@ local lastL2Pressed = false
 local lastR1Pressed = false
 local lastL1Pressed = false
 local lastCirclePressed = false
+-- Pause menu (see lua/ui/PauseMenu.lua and its own block in pollGamepad).
+local lastStartPressed = false
+local lastMenuUp = false
+local lastMenuDown = false
+local MENU_STICK_THRESHOLD = 0.5 -- how far the left stick has to be pushed up/down to count as a menu move
 local lastTrianglePressed = false
 
 -- Tracked so the stick/d-pad can clear state.keys[...] on release
@@ -154,6 +163,47 @@ local function pollGamepad(dt)
       tryRestartOrAdvance()
     end
     lastXPressed = xPressed
+    return
+  end
+
+  -- Pause menu (see lua/ui/PauseMenu.lua). Start opens it (not on the
+  -- title screen — PauseMenu.open refuses there). While it's open the
+  -- pad drives the menu and nothing else: D-pad or left stick up/down
+  -- moves the selection, X confirms it, Circle or Start again resumes.
+  -- lastXPressed/lastCirclePressed are kept current throughout, so the
+  -- press that closes the menu isn't then read as a fresh jump or
+  -- interact on the first frame back.
+  local startPressed = gp:isGamepadDown(BUTTON_START)
+  local startEdge = startPressed and not lastStartPressed
+  lastStartPressed = startPressed
+  if PauseMenu.isOpen() then
+    local stickY = gp:getGamepadAxis("lefty") or 0
+    local menuUp = gp:isGamepadDown(BUTTON_DPAD_UP) or stickY < -MENU_STICK_THRESHOLD
+    local menuDown = gp:isGamepadDown(BUTTON_DPAD_DOWN) or stickY > MENU_STICK_THRESHOLD
+    if menuUp and not lastMenuUp then PauseMenu.move(-1) end
+    if menuDown and not lastMenuDown then PauseMenu.move(1) end
+    lastMenuUp, lastMenuDown = menuUp, menuDown
+
+    local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
+    local circlePressed = gp:isGamepadDown(BUTTON_CIRCLE)
+    if xPressed and not lastXPressed then
+      PauseMenu.confirm()
+    elseif (circlePressed and not lastCirclePressed) or startEdge then
+      PauseMenu.close()
+    end
+    lastXPressed, lastCirclePressed = xPressed, circlePressed
+
+    state.gamepadAimActive = false
+    state.gamepadFireHeld = false
+    state.gamepadRunHeld = false
+    if xPressed or circlePressed or startPressed or menuUp or menuDown then
+      state.lastGamepadInputTime = love.timer.getTime()
+    end
+    return
+  end
+  if startEdge and not state.titleScreen then
+    PauseMenu.open()
+    lastMenuUp, lastMenuDown = true, true -- a stick already held when it opens doesn't count as a move
     return
   end
 

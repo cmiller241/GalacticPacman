@@ -12,6 +12,7 @@ local Explosion = require("lua.entities.Explosion")
 local Particle = require("lua.entities.Particle")
 local StompBurst = require("lua.effects.StompBurst")
 local TitleScreen = require("lua.ui.TitleScreen")
+local PauseMenu = require("lua.ui.PauseMenu")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
 local CameraDirector = require("lua.systems.CameraDirector")
@@ -71,15 +72,64 @@ local VATS_EASE_SNAP_THRESHOLD = 0.005
 local HOME_CELL_COL = 13
 local HOME_CELL_ROW = 9
 
-function love.load()
-  love.window.setTitle("Asteroid Bob")
+-- love.load runs once when the program starts — and again, in full,
+-- every time the pause menu's EXIT TO TITLE is chosen (see
+-- lua/ui/PauseMenu.lua and the PauseMenu.onExitToTitle hookup below).
+-- Rebuilding the whole world from scratch is what guarantees a fresh
+-- game really is fresh: every Ooomba back, every lever and gate in its
+-- starting position, every coin uncollected, with no per-object "undo"
+-- anywhere to keep in step as the game grows. Only the genuinely
+-- one-time setup (window, images/sounds, input callbacks) is skipped on
+-- those later runs.
+local hasLoadedOnce = false
 
-  -- Starts large (filling the screen) without going into actual
-  -- fullscreen mode — conf.lua's window stays resizable with its normal
-  -- title bar/chrome (minimize, maximize, close, drag-to-resize) rather
-  -- than a borderless takeover; this just maximizes that ordinary
-  -- window on launch, exactly like clicking its own maximize button.
-  love.window.maximize()
+-- Empties everything a previous run of love.load left in `state`.
+-- Most of the world's lists are simply assigned fresh further down, but
+-- a few are only ever APPENDED to there (or created with `or {}`), and
+-- would otherwise come back with last game's contents still in them.
+local function resetWorldState()
+  state.planetoids, state.asteroids, state.coins = {}, {}, {}
+  state.fireBars, state.particles, state.enemies = {}, {}, {}
+
+  -- Set only inside conditional blocks below — cleared so nothing from
+  -- the last game survives if a block doesn't run.
+  state.fish, state.beams, state.lavas, state.tiledLevels = nil, nil, nil, nil
+  state.ooombas, state.spikeys, state.mirrors, state.levers = nil, nil, nil, nil
+  state.cranks, state.signs, state.gates = nil, nil, nil
+  state.zoomWindows, state.deathZones = nil, nil
+  state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
+
+  -- Whatever was in progress.
+  state.camera = nil
+  state.cameraDirector = nil
+  state.activeZoomWindow, state.zoomWindowReturn = nil, nil
+  state.dialogueActive = false
+  state.paused = false
+  state.gameOver, state.levelComplete = false, false
+  state.keys = {}
+  state.mouseDown = false
+
+  -- The old world's canvases (baked terrain and so on) are garbage now;
+  -- collected here, before building their replacements, rather than
+  -- left to pile up alongside them.
+  collectgarbage()
+  collectgarbage()
+end
+
+function love.load()
+  local firstLoad = not hasLoadedOnce
+  hasLoadedOnce = true
+
+  if firstLoad then
+    love.window.setTitle("Asteroid Bob")
+
+    -- Starts large (filling the screen) without going into actual
+    -- fullscreen mode — conf.lua's window stays resizable with its normal
+    -- title bar/chrome (minimize, maximize, close, drag-to-resize) rather
+    -- than a borderless takeover; this just maximizes that ordinary
+    -- window on launch, exactly like clicking its own maximize button.
+    love.window.maximize()
+  end
 
   -- Pixel-art default: LÖVE's own default is "linear" filtering, which
   -- blends neighboring texels — including across tile boundaries in a
@@ -95,6 +145,7 @@ function love.load()
   -- this default for that one texture only.
   love.graphics.setDefaultFilter("nearest", "nearest")
 
+  resetWorldState()
   worldGen.initWorldSize()
 
   state.zoom = 1
@@ -126,8 +177,12 @@ function love.load()
   state.cellCheckCounter = 0
   state.minimap = MiniMap.new()
 
-  assetLoading.loadAssets()
-  inputHandlers.attachInputHandlers()
+  if firstLoad then
+    assetLoading.loadAssets()
+    inputHandlers.attachInputHandlers()
+    -- EXIT TO TITLE: run this whole function again (see its own header).
+    PauseMenu.onExitToTitle = function() love.load() end
+  end
 
   collisionSystem = CollisionSystem.new()
   state.starfield = Starfield.new()
@@ -824,7 +879,20 @@ function love.load()
   -- Everything above sets the game up exactly as it starts — the title
   -- screen then borrows the player and stands him out in the belt until
   -- start is pressed (see lua/ui/TitleScreen.lua).
-  TitleScreen.enter()
+  -- Fading in from black when this is a return from the pause menu, so
+  -- the rebuild isn't a hard cut.
+  TitleScreen.enter(not firstLoad)
+
+  -- Pointed at the player from the very first frame. love.update keeps
+  -- this current from here on, but a draw can come before the first
+  -- update after a rebuild — and worldGen streams the world around the
+  -- camera (see worldGen.streamFocus), which must not be last game's.
+  state.visibleWidth = love.graphics.getWidth() / state.zoom
+  state.visibleHeight = love.graphics.getHeight() / state.zoom
+  state.camera = {
+    x = state.player.pos.x - state.visibleWidth / 2,
+    y = state.player.pos.y - state.visibleHeight / 2,
+  }
 end
 
 -- Plain debris burst — port of js/utils.js's createParticles: `count`
@@ -927,6 +995,13 @@ function love.update(dt)
   end
 
   gamepadInput.pollGamepad(dt)
+
+  -- Paused (see lua/ui/PauseMenu.lua): nothing below runs at all —
+  -- no movement, physics, timers or world streaming — until the menu
+  -- is closed. The pad is still polled above, since that's how the menu
+  -- itself is driven.
+  if PauseMenu.isOpen() then return end
+
   TitleScreen.update(dt)
   VatsCursor.update(dt)
 
@@ -2097,6 +2172,8 @@ function love.draw()
     state.fireBars and #state.fireBars or 0
   ), 20, 100)
   love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 120)
+
+  PauseMenu.draw()
 
   -- The black fade-in out of the title screen, over everything.
   TitleScreen.draw()
