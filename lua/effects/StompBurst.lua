@@ -55,15 +55,22 @@ end
 
 -- x, y: world position of the player's feet (ground level) at the
 -- moment the Ooomba went flat.
-function StompBurst.spawn(x, y)
+--
+-- up (optional): unit vector pointing away from the ground there —
+-- straight up the screen if omitted, which is right for terrain; an
+-- Ooomba on a round planetoid passes its own (see Ooomba.up).
+function StompBurst.spawn(x, y, up)
   local pos = Vector2.new(x, y)
+  up = up or Vector2.new(0, -1)
+  local side = Vector2.new(-up.y, up.x)
 
   -- Bright sparks fanned out over the upper half only — sideways and
   -- up, never down into the ground he's standing on.
   for _ = 1, SPARK_COUNT do
-    local angle = -math.random() * math.pi
+    local angle = math.random() * math.pi
     local speed = 2.5 + math.random() * 5
-    local particle = Particle.new(pos, Vector2.new(math.cos(angle) * speed, math.sin(angle) * speed * 0.7), 20 + math.random() * 14)
+    local along, away = math.cos(angle) * speed, math.sin(angle) * speed * 0.7
+    local particle = Particle.new(pos, Vector2.new(side.x * along + up.x * away, side.y * along + up.y * away), 20 + math.random() * 14)
     particle.color = { 1, 0.85 + math.random() * 0.15, 0.45 + math.random() * 0.35 }
     particle.radius = 2 + math.random() * 2
     particle.drag = 0.9
@@ -71,7 +78,7 @@ function StompBurst.spawn(x, y)
   end
 
   -- Plus a wide, low skirt of the usual footstep dust.
-  DustPuff.spawn(pos, Vector2.new(0, 1), Vector2.new(1, 0), DUST_COUNT, 9, 0.3, 1.8)
+  DustPuff.spawn(pos, Vector2.new(-up.x, -up.y), side, DUST_COUNT, 9, 0.3, 1.8)
 
   state.explosions = state.explosions or {}
   table.insert(state.explosions, setmetatable({ x = x, y = y, startTime = love.timer.getTime() }, Ring))

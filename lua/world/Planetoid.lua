@@ -13,12 +13,36 @@ Planetoid.__index = Planetoid
 -- Original glow (restored)
 Planetoid.SHADOW_BLUR = 200
 Planetoid.SHADOW_PADDING = 45
-Planetoid.SHADOW_COLOR = { 173/255, 216/255, 255/255, 0.2 }
+-- The soft halo round every planetoid: a pale blue. (Was the lighter,
+-- weaker { 173, 216, 255 } at 0.2, which read as a grey-white haze
+-- rather than as blue.)
+Planetoid.SHADOW_COLOR = { 120/255, 185/255, 255/255, 0.26 }
 
 Planetoid.SUN_OVERLAY_DIAMETER = 200
 Planetoid.SUN_MIN_ALPHA = 0.15
 Planetoid.SUN_MAX_ALPHA = 0.95
 Planetoid.SUN_MAX_DARKNESS = 0.18
+
+-- Overall brightness knobs (see getSunShadingShader and ensureBodyCanvas).
+-- SUN_LIT_BRIGHTNESS: how much of its own color the sun-facing side of
+-- a planetoid keeps (1 = all of it). SUN_OVERALL_DARKEN: strength of a
+-- flat darkening over the whole planetoid, lit side included (0 = none;
+-- this was 0.40). BODY_BRIGHTEN: how much the body's own texture is
+-- lifted when it's baked, as an extra fraction of itself added on top
+-- (0 = the texture as-is, which is a fairly dark image to begin with).
+-- The highlight on the sun-facing side — a soft bright spot,
+-- the thing that makes a shaded disc read as a sphere. All three are
+-- fractions: how bright it is at its center, how big it is relative to
+-- the planetoid's radius, and how far out from the center (toward the
+-- sun) it sits, also relative to the radius. HIGHLIGHT_ALPHA = 0 turns
+-- it off.
+Planetoid.HIGHLIGHT_ALPHA = 0.22
+Planetoid.HIGHLIGHT_SIZE = 0.55
+Planetoid.HIGHLIGHT_OFFSET = 0.48
+
+Planetoid.SUN_LIT_BRIGHTNESS = 1.0
+Planetoid.SUN_OVERALL_DARKEN = 0.08
+Planetoid.BODY_BRIGHTEN = 0.18
 
 local sunOverlayCanvas = nil
 
@@ -36,6 +60,65 @@ local function createRadialGradientMesh(segments)
 end
 
 local radialGradientMesh = nil
+
+-- Sun shading, applied by a shader AS the body canvas is drawn (see
+-- Planetoid:draw) rather than as separate shapes laid over it
+-- afterward. For each pixel of the canvas it works out where that pixel
+-- is on the planetoid (q: 0 at the center, length 1 at the body's own
+-- edge) and from that:
+--   - the lit-side/dark-side gradient, MULTIPLIED onto the body's color
+--     — centered half a radius toward the sun and running out over 1.6
+--     radii, at SUN_LIT_BRIGHTNESS;
+--   - the flat SUN_OVERALL_DARKEN, scaled by how close the sun is;
+--   - the soft HIGHLIGHT, added on the sun-facing side.
+-- Only the body is touched (length(q) <= 1) — the halo outside it is
+-- passed straight through.
+--
+-- This replaced a version that clipped those effects to the body with
+-- a stencil circle drawn on screen. That circle and the body's own
+-- baked edge were two different polygons rasterized at two different
+-- resolutions, and never lined up pixel for pixel: wherever the body
+-- poked out past the stencil a pixel or two stayed unshaded (bright
+-- specks along the dark side's rim), and wherever the stencil poked
+-- out past the body the shading landed on the halo instead (dark
+-- specks along the lit side's rim). Here the edge the shading stops at
+-- is computed from the very same canvas coordinates the body's edge
+-- sits at, so the two cannot disagree — and it's blended across the
+-- rim pixel (fwidth) in proportion to how much of that pixel is body.
+local sunShadingShader = nil
+local function getSunShadingShader()
+  if sunShadingShader then return sunShadingShader end
+  sunShadingShader = love.graphics.newShader([[
+    extern vec2 lightDir;        // unit vector on screen, toward the sun
+    extern float bodyFraction;   // the body's radius as a fraction of half the canvas (the rest is halo padding)
+    extern float sunStrength;    // 0..1, how close the sun is
+    extern float litBrightness;
+    extern float overallDarken;
+    extern float highlightAlpha;
+    extern float highlightSize;
+    extern float highlightOffset;
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 texel = Texel(tex, uv) * color;
+
+      vec2 q = (uv - vec2(0.5)) * 2.0 / bodyFraction;
+      float dist = length(q);
+      float edge = max(fwidth(dist), 1e-5);
+      float body = 1.0 - smoothstep(1.0 - edge, 1.0 + edge, dist);
+      if (body <= 0.0) return texel;
+
+      float lit = clamp(1.0 - length(q - lightDir * 0.5) / 1.6, 0.0, 1.0) * litBrightness;
+      float shade = lit * (1.0 - sunStrength * overallDarken);
+
+      float h = clamp(1.0 - length(q - lightDir * highlightOffset) / highlightSize, 0.0, 1.0);
+      h = h * h * highlightAlpha;
+
+      vec3 shaded = texel.rgb * shade + vec3(1.0, 0.98, 0.92) * h * texel.a;
+      return vec4(mix(texel.rgb, shaded, body), texel.a);
+    }
+  ]])
+  return sunShadingShader
+end
 
 local function getSunOverlayCanvas()
   if sunOverlayCanvas then return sunOverlayCanvas end
@@ -184,6 +267,17 @@ end
   love.graphics.setColor(self.color[1], self.color[2], self.color[3], self.color[4] or 1)
   love.graphics.draw(state.planetTexture, cx, cy, 0, texSize / texW, texSize / texH, texW / 2, texH / 2)
 
+  -- A second, additive pass of the same tinted texture lifts the whole
+  -- body by BODY_BRIGHTEN — same colors and detail, just brighter (a
+  -- plain tint can only ever darken a texture, never brighten it).
+  if Planetoid.BODY_BRIGHTEN > 0 then
+    local lift = Planetoid.BODY_BRIGHTEN
+    love.graphics.setBlendMode("add", "alphamultiply")
+    love.graphics.setColor(self.color[1], self.color[2], self.color[3], lift)
+    love.graphics.draw(state.planetTexture, cx, cy, 0, texSize / texW, texSize / texH, texW / 2, texH / 2)
+    love.graphics.setBlendMode("alpha")
+  end
+
   love.graphics.setStencilTest()
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.setCanvas()
@@ -216,6 +310,7 @@ function Planetoid:draw()
 
   if self.bodyCanvas then
     local padding = self.bodyCanvasPadding or 0
+    local shader = self:applySunShading(padding)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(
       self.bodyCanvas,
@@ -224,16 +319,19 @@ function Planetoid:draw()
       0,
       0.5, 0.5
     )
+    if shader then love.graphics.setShader() end
   else
     love.graphics.setColor(1, 0, 0, 1)
     love.graphics.circle("fill", self.pos.x, self.pos.y, self.radius)
     love.graphics.setColor(1, 1, 1, 1)
   end
-
-  self:drawSunShading()
 end
 
-function Planetoid:drawSunShading()
+-- Turns the sun-shading shader (see getSunShadingShader) on for the
+-- body canvas about to be drawn, set up for where the sun is from this
+-- planetoid. Returns the shader so the caller can turn it back off, or
+-- nil if this one is too far from the sun to be shaded at all.
+function Planetoid:applySunShading(padding)
   local sunX = state.sceneWidth / 2
   local sunY = state.sceneHeight / 2
   local toSunX = sunX - self.pos.x
@@ -241,37 +339,20 @@ function Planetoid:drawSunShading()
   local distToSun = math.sqrt(toSunX * toSunX + toSunY * toSunY)
 
   local maxDist = math.sqrt(state.sceneWidth * state.sceneWidth + state.sceneHeight * state.sceneHeight) / 2
-  local distT = math.min(distToSun / maxDist, 1)
+  local strength = 1 - math.min(distToSun / maxDist, 1)
+  if strength <= 0.01 or distToSun < 1 then return nil end
 
-  local overlay = getSunOverlayCanvas()
-  local d = self.radius * 2
-  local ow, oh = overlay:getDimensions()
-  local angleToSun = math.atan2(toSunY, toSunX)
-  local overlayRotation = angleToSun + math.pi / 2
-
-  local shadeRadius = self.radius
-
-  love.graphics.stencil(function()
-    love.graphics.circle("fill", self.pos.x, self.pos.y, shadeRadius)
-  end, "replace", 1)
-  love.graphics.setStencilTest("greater", 0)
-
-  local strength = 1 - distT
-
-  if strength > 0.01 then
-    local shadowAlpha = 0.2 + strength * 0.75
-    love.graphics.setBlendMode("multiply", "premultiplied")
-    love.graphics.setColor(shadowAlpha, shadowAlpha, shadowAlpha, shadowAlpha)
-    love.graphics.draw(overlay, self.pos.x, self.pos.y, overlayRotation, d / ow, d / oh, ow / 2, oh / 2)
-
-    love.graphics.setBlendMode("alpha")
-    love.graphics.setColor(0, 0, 0, strength * 0.40)
-    love.graphics.circle("fill", self.pos.x, self.pos.y, shadeRadius)
-  end
-
-  love.graphics.setBlendMode("alpha")
-  love.graphics.setStencilTest()
-  love.graphics.setColor(1, 1, 1, 1)
+  local shader = getSunShadingShader()
+  shader:send("lightDir", { toSunX / distToSun, toSunY / distToSun })
+  shader:send("bodyFraction", self.radius / (self.radius + padding))
+  shader:send("sunStrength", strength)
+  shader:send("litBrightness", Planetoid.SUN_LIT_BRIGHTNESS)
+  shader:send("overallDarken", Planetoid.SUN_OVERALL_DARKEN)
+  shader:send("highlightAlpha", Planetoid.HIGHLIGHT_ALPHA)
+  shader:send("highlightSize", Planetoid.HIGHLIGHT_SIZE)
+  shader:send("highlightOffset", Planetoid.HIGHLIGHT_OFFSET)
+  love.graphics.setShader(shader)
+  return shader
 end
 
 -- Soft widening trapezoidal shadow (single mesh, fades to nothing)
