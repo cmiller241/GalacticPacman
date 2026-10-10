@@ -520,6 +520,9 @@ function Player:enterBallMode()
   if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   self.morphState = "toBall"
   self.morphElapsed = 0
+  -- Curling up mid ground pound calls the pound off (see
+  -- tryGroundPound: a ball doesn't pound) — he just falls as a ball.
+  self.isGroundPounding = false
 end
 
 -- Instantly becomes a ball — no curl-in animation, no guards (not even
@@ -893,6 +896,9 @@ end
 -- do nothing except leave him stuck in the pose.
 function Player:tryGroundPound()
   if self.isGroundPounding or self.isDying or self.onSurface then return end
+  -- Not as a ball, or while curling into/out of one — the pound is his
+  -- own move, on his feet.
+  if self.isBall or self.morphState then return end
   if not state.gravitySystem or not state.gravitySystem:findDominantPlanet(self.pos) then return end
   self.isGroundPounding = true
 end
