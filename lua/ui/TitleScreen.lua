@@ -1058,11 +1058,15 @@ end
 
 -- Call once, at the end of love.load (the player, the shelter and
 -- state.respawnPoint all need to exist already).
-function TitleScreen.enter()
+--
+-- fadeIn: true to open on black and fade the title screen in (coming
+-- back from the pause menu's EXIT TO TITLE — see main.lua); omitted on
+-- the game's own first start, which just shows it.
+function TitleScreen.enter(fadeIn)
   state.titleScreen = true
-  phase = "title"
+  phase = fadeIn and "fadeIn" or "title"
   phaseTimer = 0
-  fadeAlpha = 0
+  fadeAlpha = fadeIn and 1 or 0
   auto.action, auto.timer, auto.airTime, auto.pullTime = "pause", 1.0, 0, 0
   auto.run, auto.target = false, nil
   auto.collectPlanet, auto.coin, auto.coinTime, auto.failedHops = nil, nil, 0, {}
@@ -1148,7 +1152,9 @@ function TitleScreen.update(dt)
   elseif phase == "fadeIn" then
     fadeAlpha = math.max(0, 1 - phaseTimer / FADE_IN_SECONDS)
     if phaseTimer >= FADE_IN_SECONDS then
-      phase = nil
+      -- Faded in on the game (nothing more to do), or on the title
+      -- screen itself (now waiting for start).
+      phase = state.titleScreen and "title" or nil
       fadeAlpha = 0
     end
   end

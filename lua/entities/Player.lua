@@ -17,6 +17,7 @@ local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local DustPuff = require("lua.effects.DustPuff")
 local Splash = require("lua.effects.Splash")
+local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
 local TargetLock = require("lua.systems.TargetLock")
 
@@ -28,6 +29,12 @@ Player.__index = Player
 -- poseBlend) takes to ease back into whatever the normal pose would
 -- be, rather than snapping there in one frame.
 local INTRO_POSE_TRANSITION_SECONDS = 0.6
+
+-- Ground pound (see Player:update's own ground-pound bookkeeping, and
+-- GROUND_POUND_POSE / Player:getGroundPoundSeatDrop further down).
+local GROUND_POUND_SETTLE_TICKS = 7   -- baseline (60fps) ticks the pose takes to sink down into its seated position at the start of a pound
+local GROUND_POUND_IMPACT_TICKS = 14  -- ticks he stays sat on the ground after landing one, before standing back up
+local GROUND_POUND_SEAT_ADJUST = 0    -- world units added to the computed seat drop (positive = lower still) — fine-tuning only
 
 -- Sun shading on the astronaut — the same treatment every planetoid
 -- gets (see Planetoid.lua's own getSunShadingShader), applied separately to
@@ -300,6 +307,16 @@ function Player.new(x, y)
   -- :update() the same way wallJumpLockTimer does.
   self.swimStrokeTimer = 0
   self.swimStrokeDuration = 18
+
+  -- Ground-pound visuals (see GROUND_POUND_IMPACT_TICKS and the
+  -- bookkeeping in Player:update). groundPoundPoseTime: ticks spent in
+  -- the current pound, for easing the pose down into place.
+  -- groundPoundImpactTimer: ticks left of the "sat on the ground" beat
+  -- after landing one. wasGroundPounding: last frame's isGroundPounding,
+  -- to catch the moment a pound ends.
+  self.groundPoundPoseTime = 0
+  self.groundPoundImpactTimer = 0
+  self.wasGroundPounding = false
 
   self.bubbles = {}
 
@@ -861,24 +878,23 @@ function Player:jump()
   end
 end
 
+-- Jump pressed in mid-air (the input handlers only call this when
+-- there's nothing to jump off and nothing to swim in): slam straight
+-- down. Works at ANY point in the air — on the way up from a jump, on
+-- the way back down, or after simply walking off a ledge.
+--
+-- It used to only take while he was still moving AWAY from the ground
+-- (the first few frames after a jump), which is why it needed a second
+-- press almost immediately, and couldn't be done at all from a fall.
+--
+-- The one requirement left is that something is actually pulling on
+-- him: a pound is just heavier gravity (GROUND_POUND_GRAV_MULTIPLIER)
+-- until he lands, so out in open space with no planet in range it would
+-- do nothing except leave him stuck in the pose.
 function Player:tryGroundPound()
-  if self.isGroundPounding or self.isDying then return end
-  local planet = nil
-  if state.gravitySystem then
-    planet = state.gravitySystem:findDominantPlanet(self.pos)
-  end
-  planet = planet or self.lastInfluencePlanet
-  if planet then
-    local outwardDir
-    if planet.isRoundedRect and planet.nearestSurfacePoint then
-      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
-      outwardDir = surface.normal
-    else
-      outwardDir = self.pos:subtract(planet.pos):normalize()
-    end
-    local radialVel = self.vel:dot(outwardDir)
-    if radialVel > 0 then self.isGroundPounding = true end
-  end
+  if self.isGroundPounding or self.isDying or self.onSurface then return end
+  if not state.gravitySystem or not state.gravitySystem:findDominantPlanet(self.pos) then return end
+  self.isGroundPounding = true
 end
 
 -- Spawns an occasional dust puff at the player's feet while actively
@@ -956,6 +972,12 @@ function Player:move(keys)
   -- resync, etc.) keeps running exactly as normal rather than being
   -- skipped wholesale. isTeleporting (Beam.lua) gets the same treatment.
   if self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then keys = {} end
+  -- Sat on the ground for a beat after a ground pound lands (see
+  -- GROUND_POUND_IMPACT_TICKS) — no walking off mid-impact. Jumping is
+  -- still allowed, and ends the beat.
+  -- (wasGroundPounding covers the one frame between touching down and
+  -- Player:update starting that timer.)
+  if self.groundPoundImpactTimer > 0 or (self.wasGroundPounding and self.onSurface) then keys = {} end
 
   if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
     local planet = self.currentPlanet
@@ -1350,6 +1372,29 @@ function Player:update()
   if self.swimStrokeTimer > 0 then
     self.swimStrokeTimer = math.max(0, self.swimStrokeTimer - state.timeScale)
   end
+
+  -- Ground pound: time the pose, and catch the landing. isGroundPounding
+  -- is cleared by the collision pass the moment he touches down (after
+  -- this function has already run for that frame), so "it was true last
+  -- time and now it isn't, and he's standing on something" is the
+  -- landing — as opposed to a pound that ended some other way (bouncing
+  -- off an Ooomba, dropping into water), which gets no impact.
+  if self.isGroundPounding and not self.onSurface then
+    self.groundPoundPoseTime = self.groundPoundPoseTime + state.timeScale
+  end
+  if self.wasGroundPounding and not self.isGroundPounding and self.onSurface then
+    self.groundPoundImpactTimer = GROUND_POUND_IMPACT_TICKS
+    local down = self:visualDownDirection(self.currentPlanet)
+    GroundPoundBurst.spawn(
+      self.pos.x + down.x * self.radius, self.pos.y + down.y * self.radius,
+      Vector2.new(-down.x, -down.y))
+  elseif self.groundPoundImpactTimer > 0 then
+    self.groundPoundImpactTimer = self.onSurface and math.max(0, self.groundPoundImpactTimer - state.timeScale) or 0
+  end
+  if not self.isGroundPounding and self.groundPoundImpactTimer <= 0 then
+    self.groundPoundPoseTime = 0
+  end
+  self.wasGroundPounding = self.isGroundPounding
 
   -- Recomputed fresh every frame, regardless of onSurface — a water
   -- planet never sets onSurface (see CollisionSystem's own comment), so
@@ -1763,6 +1808,64 @@ local BALL_MORPH_FRAME_2 = {
   headY = 312.65, headAngle = 25 * math.pi / 180,
 }
 
+-- Ground-pound pose (Player:tryGroundPound / self.isGroundPounding),
+-- authored with paperdoll.html the same way as the poses above: both
+-- boots swung up and forward, blaster arm tucked slightly back, right
+-- arm thrown up overhead. Only the angles differ from the standing
+-- pose — every part sits at its ordinary attach point — and it's in
+-- the same table shape as the ball-morph frames, so it's drawn by the
+-- same drawBallMorphPose (whose draw order — leftboot, leftarm, body,
+-- rightboot, rightarm, head — is exactly the order this was authored
+-- in). A fixed pose, cut to directly, same as WALL_SLIDE_POSE.
+local GROUND_POUND_POSE = {
+  leftBootX = 111,   leftBootY = 241, leftBootAngle = -100 * math.pi / 180,
+  leftArmX  = 136,   leftArmY  = 9,   leftArmAngle  = -20 * math.pi / 180,
+  bodyY = 115,
+  rightBootX = -142, rightBootY = 241, rightBootAngle = -109 * math.pi / 180,
+  rightArmX  = -186, rightArmY  = -14, rightArmAngle  = 117 * math.pi / 180,
+  headY = -150, headAngle = 0,
+}
+
+
+-- How far (world units) the ground-pound pose has to be drawn below his
+-- standing position for the lowest part of it to sit exactly on the
+-- ground his feet would otherwise be standing on. Worked out from the
+-- pose itself — the bottom of the body, and each boot's image turned to
+-- its own angle about its own joint, whichever reaches lowest — against
+-- where the soles of his feet are when standing. Cached; none of it
+-- changes.
+local groundPoundSeatDrop = nil
+function Player:getGroundPoundSeatDrop()
+  if groundPoundSeatDrop then return groundPoundSeatDrop end
+  local images = state.characterImages
+  if not images or not images.body then return 0 end
+
+  local cfg, pose = self.bodyPartsConfig, GROUND_POUND_POSE
+  local _, bodyH = images.body:getDimensions()
+  local lowest = pose.bodyY + bodyH / 2
+
+  local function lowestOfBoot(img, attachY, jointX, jointY, angle)
+    if not img then return -math.huge end
+    local w, h = img:getDimensions()
+    local sinA, cosA = math.sin(angle), math.cos(angle)
+    local best = -math.huge
+    for _, corner in ipairs({ { 0, 0 }, { w, 0 }, { 0, h }, { w, h } }) do
+      best = math.max(best, attachY + (corner[1] - jointX) * sinA + (corner[2] - jointY) * cosA)
+    end
+    return best
+  end
+  lowest = math.max(lowest,
+    lowestOfBoot(images.leftboot, pose.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, pose.leftBootAngle),
+    lowestOfBoot(images.rightboot, pose.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, pose.rightBootAngle))
+
+  -- All in the rig's own unscaled units until the last step: the soles
+  -- of his feet are his collision radius below self.pos, and the rig's
+  -- origin is groundOffset above it.
+  local solesY = self.groundOffset + self.baseRadius / self.bodyScale
+  groundPoundSeatDrop = (solesY - lowest) * self.bodyScale + GROUND_POUND_SEAT_ADJUST
+  return groundPoundSeatDrop
+end
+
 local function lerpNum(a, b, t) return a + (b - a) * t end
 
 -- Blends every field of two ball-morph pose tables — plain linear
@@ -1877,6 +1980,32 @@ function Player:drawFullBody(orientation, originPos)
 
   if self.isWallSliding then
     self:drawWallSlidePose(orientation, originPos)
+    return
+  end
+
+  -- Mid ground pound: its own fixed pose (see GROUND_POUND_POSE) from
+  -- the moment it starts until he lands. The onSurface check is only a
+  -- guard — landing already clears isGroundPounding — so a pound can
+  -- never leave him stuck in this pose standing on the ground.
+  --
+  -- Also held through the impact beat after landing (and through the
+  -- single frame between touching down and Player:update noticing —
+  -- wasGroundPounding), so he's seen to actually HIT the ground in it.
+  --
+  -- And drawn lower than his standing self by getGroundPoundSeatDrop:
+  -- his collision circle still stops where his feet would be, but in
+  -- this pose his feet are up in front of him — without the drop he'd
+  -- land with his backside hovering well above the ground. Eased in
+  -- over the first GROUND_POUND_SETTLE_TICKS of the pound so he sinks
+  -- into the pose rather than jumping down the screen.
+  local poundAirborne = self.isGroundPounding and not self.onSurface
+  local poundLanded = self.onSurface and (self.groundPoundImpactTimer > 0 or self.wasGroundPounding)
+  if poundAirborne or poundLanded then
+    local settle = poundLanded and 1 or math.min(1, self.groundPoundPoseTime / GROUND_POUND_SETTLE_TICKS)
+    local drop = self:getGroundPoundSeatDrop() * settle
+    local downAngle = orientation + math.pi / 2
+    local seatedOrigin = Vector2.new(originPos.x + math.cos(downAngle) * drop, originPos.y + math.sin(downAngle) * drop)
+    self:drawBallMorphPose(orientation, seatedOrigin, GROUND_POUND_POSE)
     return
   end
 
@@ -2628,6 +2757,9 @@ function Player:respawn()
   self.morphState = nil
   self.morphElapsed = 0
   self.isGroundPounding = false
+  self.wasGroundPounding = false
+  self.groundPoundImpactTimer = 0
+  self.groundPoundPoseTime = 0
   self.isWallSliding = false
   self.touchingWall = nil
   self.wallContactNormal = nil

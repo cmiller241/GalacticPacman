@@ -71,6 +71,7 @@ end
 
 local state = require("lua.state")
 local TitleScreen = require("lua.ui.TitleScreen")
+local PauseMenu = require("lua.ui.PauseMenu")
 
 -- Shared by the Enter key handler and the mousedown handler below —
 -- same role and same logic as the original. levelSetup is required
@@ -121,6 +122,7 @@ local function attachInputHandlers()
     -- mouse" for InteractPrompt.lua's own button icon.
     state.lastKeyboardMouseInputTime = love.timer.getTime()
     if state.titleScreen then return end -- no shooting/pulling on the title screen
+    if PauseMenu.isOpen() then return end -- ...or while paused
     if tryRestartOrAdvance() then return end  -- same early-return as the original
     if button == 1 then
       state.mouseDown = true
@@ -143,6 +145,7 @@ local function attachInputHandlers()
   -- ----------------------------
   function love.wheelmoved(x, y)
     if state.titleScreen then return end -- no zooming on the title screen
+    if PauseMenu.isOpen() then return end -- ...or while paused
     -- Inverted vs the original's own `e.deltaY > 0 ? -STEP : STEP`
     -- specifically because LÖVE's y sign convention is the opposite
     -- of JS's deltaY — see this file's own header comment.
@@ -168,6 +171,17 @@ local function attachInputHandlers()
       if not isrepeat and (key == 'Enter' or key == ' ' or key == 'x') then
         TitleScreen.requestStart()
       end
+      return
+    end
+
+    -- Pause menu (see lua/ui/PauseMenu.lua): while it's open every key
+    -- goes to the menu and none to the game; otherwise Escape opens it.
+    if PauseMenu.isOpen() then
+      if not isrepeat then PauseMenu.keypressed(key) end
+      return
+    end
+    if key == 'escape' and not isrepeat then
+      PauseMenu.open()
       return
     end
 
