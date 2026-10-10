@@ -29,6 +29,93 @@ Player.__index = Player
 -- be, rather than snapping there in one frame.
 local INTRO_POSE_TRANSITION_SECONDS = 0.6
 
+-- Sun shading on the astronaut — the same treatment every planetoid
+-- gets (see Planetoid.lua's own getSunShadingShader), applied separately to
+-- EACH piece of his rig (head, body, each arm, each boot): a lit side
+-- facing the sun, falling off into shadow on the far side, with a soft
+-- highlight on the lit side. Each piece is shaded as its own rounded
+-- form, so he reads as a set of solid parts rather than one flat cutout.
+--
+-- The numbers mirror Planetoid.lua's: the shadow gradient is centered
+-- shadowOffset of the way toward the sun and runs out over shadowReach
+-- (both in units of the piece's own half-size); the highlight sits
+-- highlightOffset toward the sun and is highlightSize across.
+--   strength   how much of that shadow is actually applied — 1 is the
+--              full planetoid treatment (far side nearly black), 0 none.
+--
+-- HERO_SHADING_ENABLED is the one switch for all of it — the rig's
+-- pieces AND the ball he curls into. false draws him exactly as he was
+-- before any of this existed.
+local HERO_SHADING_ENABLED = true
+
+local BODY_SHADING = {
+  strength = 0.28,
+  shadowOffset = 0.5,
+  shadowReach = 1.6,
+  overallDarken = 0.08,
+  highlightAlpha = 0.22,
+  highlightSize = 0.55,
+  highlightOffset = 0.48,
+}
+
+-- One shader for every piece. It needs to know, for each pixel of
+-- whichever image is being drawn, where that pixel sits relative to the
+-- image's own center IN SCREEN SPACE — the rig rotates, scales and
+-- mirrors its pieces every which way, and the light has to come from
+-- the same direction on screen regardless. Rather than being told each
+-- piece's transform, it recovers that from the image's own texture
+-- coordinates: dFdx/dFdy say how the coordinates change from one screen
+-- pixel to the next, and inverting that turns "this far from the middle
+-- of the image" back into a direction and distance on screen. Anything
+-- drawn without an image (plain shapes) has no such gradient and is
+-- left untouched.
+local bodyShadingShader = nil
+local function getBodyShadingShader()
+  if bodyShadingShader then return bodyShadingShader end
+  bodyShadingShader = love.graphics.newShader([[
+    extern vec2 lightDir;        // unit vector on screen, toward the sun
+    extern float strength;
+    extern float shadowOffset;
+    extern float shadowReach;
+    extern float overallDarken;
+    extern float highlightAlpha;
+    extern float highlightSize;
+    extern float highlightOffset;
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 texel = Texel(tex, uv) * color;
+
+      vec2 dx = dFdx(uv);
+      vec2 dy = dFdy(uv);
+      float det = dx.x * dy.y - dx.y * dy.x;
+      if (abs(det) < 1e-12) return texel;
+
+      // Screen-space offset of this pixel from the image's center, and
+      // the image's own half-width/half-height as screen-space vectors.
+      vec2 d = uv - vec2(0.5);
+      vec2 offset = vec2(dy.y * d.x - dy.x * d.y, dx.x * d.y - dx.y * d.x) / det;
+      vec2 halfW = vec2(dy.y, -dx.y) * 0.5 / det;
+      vec2 halfH = vec2(-dy.x, dx.x) * 0.5 / det;
+      float size = max(length(halfW), length(halfH));
+      if (size < 1e-6) return texel;
+      vec2 q = offset / size;   // -1..1 across the piece's longer side
+
+      float lit = clamp(1.0 - length(q - lightDir * shadowOffset) / shadowReach, 0.0, 1.0);
+      float shade = mix(1.0, lit, strength) * (1.0 - overallDarken * strength);
+
+      float h = clamp(1.0 - length(q - lightDir * highlightOffset) / highlightSize, 0.0, 1.0);
+      h = h * h * highlightAlpha;
+
+      vec3 rgb = texel.rgb * shade + vec3(1.0, 0.98, 0.92) * h * texel.a;
+      return vec4(rgb, texel.a);
+    }
+  ]])
+  for _, name in ipairs({ "strength", "shadowOffset", "shadowReach", "overallDarken", "highlightAlpha", "highlightSize", "highlightOffset" }) do
+    bodyShadingShader:send(name, BODY_SHADING[name])
+  end
+  return bodyShadingShader
+end
+
 -- Water bubbles: spawn just outside the player's own body, on whichever
 -- side currently faces AWAY from the water planet's center (matches the
 -- radial "up" convention every circular planet already uses — that's
@@ -1397,7 +1484,9 @@ function Player:updateOrientationAndFacing()
   -- state.introLocked and drawFullBody's own poseBlend) — skips the
   -- normal mouse-tracking facing logic below entirely, so moving the
   -- mouse during the cutscene can't turn him around mid-reveal.
-  if state.introLocked then
+  -- (Not on the title screen, which is also introLocked the whole time
+  -- but has him running around on autopilot — see TitleScreen.lua.)
+  if state.introLocked and not state.titleScreen then
     self.facingDirection = 1
     return
   end
@@ -1406,10 +1495,13 @@ function Player:updateOrientationAndFacing()
   local lastWheel = state.lastWheelTime or 0
   local now = love.timer.getTime()
 
+  -- The title screen ignores the mouse outright (always "idle"), so
+  -- the autopilot's own movement decides which way he faces rather
+  -- than wherever the cursor happens to be sitting.
   local recentlyScrolled = (now - lastWheel) < self.mouseWheelSuppressDuration
   self.mouseIdle = not self.lockedTarget
     and not state.gamepadAimActive
-    and (recentlyScrolled or (now - lastMove) > self.mouseIdleThreshold)
+    and (state.titleScreen or recentlyScrolled or (now - lastMove) > self.mouseIdleThreshold)
 
   if self.mouseIdle then return end
 
@@ -1503,8 +1595,12 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
     targetWorldX = shoulderX + math.cos(forwardAngle) * 1000
     targetWorldY = shoulderY + math.sin(forwardAngle) * 1000
   elseif self.lockedTarget then
-    targetWorldX = self.lockedTarget.pos.x
-    targetWorldY = self.lockedTarget.pos.y
+    -- lockAimLeadX/Y: an optional offset from the target's own center
+    -- to aim at instead — nil in ordinary play. The title screen's
+    -- autopilot sets it to lead a moving asteroid, since a fireball
+    -- takes time to arrive (see TitleScreen.lua).
+    targetWorldX = self.lockedTarget.pos.x + (self.lockAimLeadX or 0)
+    targetWorldY = self.lockedTarget.pos.y + (self.lockAimLeadY or 0)
   elseif self.pullTarget then
     targetWorldX, targetWorldY = self:getPullAnchor(self.pullTarget)
   elseif state.gamepadAimActive then
@@ -1817,7 +1913,11 @@ function Player:drawFullBody(orientation, originPos)
   -- closing back up; he's already drawn in front of the door by then,
   -- so there's nothing left for the rigid pose to protect against.
   local poseBlend = 0
-  if state.spaceShelter and not state.spaceShelter.playerInFront then
+  if state.titleScreen then
+    -- Out in the belt on autopilot (see TitleScreen.lua), nowhere near
+    -- the door this pose exists for — ordinary pose throughout.
+    poseBlend = 0
+  elseif state.spaceShelter and not state.spaceShelter.playerInFront then
     poseBlend = 1
   elseif self.introPoseBlendStart then
     local elapsed = love.timer.getTime() - self.introPoseBlendStart
@@ -1968,6 +2068,76 @@ function Player:drawBallMode(orientation)
   love.graphics.setLineWidth(prevLineWidth)
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.pop()
+
+  self:drawBallShading()
+end
+
+-- The ball's own share of the sun shading (see BODY_SHADING). The rig's
+-- pieces get theirs from a shader that works off each image — but the
+-- ball is plain drawn shapes, with no image for that shader to read, so
+-- it's shaded the direct way instead: the same shadow and the same
+-- highlight, as two soft discs laid over it. Same numbers, so a ball
+-- and a standing astronaut are lit identically. Drawn in world space,
+-- outside the ball's own roll rotation — the markings spin, the light
+-- doesn't.
+local ballShadowMesh, ballHighlightMesh = nil, nil
+local function getBallShadingMeshes()
+  if ballShadowMesh then return ballShadowMesh, ballHighlightMesh end
+  local s = BODY_SHADING
+  local segments, rings = 48, 10
+
+  -- Both are unit discs built for a light shining from +x; drawing them
+  -- rotated to the sun's actual direction puts the light where it is.
+  local function disc(alphaAt, r, g, b)
+    local vertices = {}
+    local function vertex(angle, t)
+      local x, y = math.cos(angle) * t, math.sin(angle) * t
+      return { x, y, 0, 0, r, g, b, alphaAt(x, y) }
+    end
+    for ring = 1, rings do
+      local t0, t1 = (ring - 1) / rings, ring / rings
+      for i = 0, segments - 1 do
+        local a0, a1 = (i / segments) * math.pi * 2, ((i + 1) / segments) * math.pi * 2
+        table.insert(vertices, vertex(a0, t0)); table.insert(vertices, vertex(a0, t1)); table.insert(vertices, vertex(a1, t1))
+        table.insert(vertices, vertex(a0, t0)); table.insert(vertices, vertex(a1, t1)); table.insert(vertices, vertex(a1, t0))
+      end
+    end
+    return love.graphics.newMesh(vertices, "triangles", "static")
+  end
+
+  -- How much darker each point is than its own color — the same
+  -- formula as the shader, written as an amount of black to lay on top.
+  ballShadowMesh = disc(function(x, y)
+    local dx, dy = x - s.shadowOffset, y
+    local lit = math.max(0, math.min(1, 1 - math.sqrt(dx * dx + dy * dy) / s.shadowReach))
+    local shade = (1 + (lit - 1) * s.strength) * (1 - s.overallDarken * s.strength)
+    return 1 - shade
+  end, 0, 0, 0)
+
+  ballHighlightMesh = disc(function(x, y)
+    local dx, dy = x - s.highlightOffset, y
+    local h = math.max(0, math.min(1, 1 - math.sqrt(dx * dx + dy * dy) / s.highlightSize))
+    return h * h * s.highlightAlpha
+  end, 1, 0.98, 0.92)
+
+  return ballShadowMesh, ballHighlightMesh
+end
+
+function Player:drawBallShading()
+  if not HERO_SHADING_ENABLED then return end
+  local toSunX = (state.sceneWidth or 0) / 2 - self.pos.x
+  local toSunY = (state.sceneHeight or 0) / 2 - self.pos.y
+  if toSunX == 0 and toSunY == 0 then return end
+  local sunAngle = math.atan2(toSunY, toSunX)
+
+  local shadow, highlight = getBallShadingMeshes()
+  local r = self.radius
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(shadow, self.pos.x, self.pos.y, sunAngle, r, r)
+  love.graphics.setBlendMode("add", "alphamultiply")
+  love.graphics.draw(highlight, self.pos.x, self.pos.y, sunAngle, r, r)
+  love.graphics.setBlendMode("alpha")
+  love.graphics.setColor(1, 1, 1, 1)
 end
 
 -- Scale/glow "blip" pulse during a Beam.lua teleport — ported from the
@@ -2082,17 +2252,37 @@ function Player:draw()
     if phase ~= 0 then return end
   end
 
+  -- Sun shading on every piece of the rig — see getBodyShadingShader.
+  local shadingShader = self:applyBodyShading()
+
   if scale == 1 then
     self:drawRig()
-    return
+  else
+    love.graphics.push()
+    love.graphics.translate(self.pos.x, self.pos.y)
+    love.graphics.scale(scale, scale)
+    love.graphics.translate(-self.pos.x, -self.pos.y)
+    self:drawRig()
+    love.graphics.pop()
   end
 
-  love.graphics.push()
-  love.graphics.translate(self.pos.x, self.pos.y)
-  love.graphics.scale(scale, scale)
-  love.graphics.translate(-self.pos.x, -self.pos.y)
-  self:drawRig()
-  love.graphics.pop()
+  if shadingShader then love.graphics.setShader() end
+end
+
+-- Turns the body-shading shader on for whatever's drawn next, pointed
+-- at wherever the sun is from him right now. Returns the shader (so the
+-- caller knows to turn it back off), or nil if shading is switched off.
+function Player:applyBodyShading()
+  if not HERO_SHADING_ENABLED then return nil end
+  local toSunX = (state.sceneWidth or 0) / 2 - self.pos.x
+  local toSunY = (state.sceneHeight or 0) / 2 - self.pos.y
+  local dist = math.sqrt(toSunX * toSunX + toSunY * toSunY)
+  if dist < 1 then return nil end
+
+  local shader = getBodyShadingShader()
+  shader:send("lightDir", { toSunX / dist, toSunY / dist })
+  love.graphics.setShader(shader)
+  return shader
 end
 
 -- Everything draw() USED to be, unchanged — just renamed so draw()
@@ -2245,21 +2435,13 @@ function Player:applyPullForce()
   end
 end
 
-function Player:shootFireball()
-  if self.mode ~= "space" and self.mode ~= "platform" then return end
-  if self.isBall or self.isTeleporting or self.isDying then return end
-
-  local now = love.timer.getTime()
-  self.lastShotTime = self.lastShotTime or 0
-  self.fireCooldown = self.fireCooldown or 0.15
-  if now - self.lastShotTime < self.fireCooldown then return end
-  self.lastShotTime = now
-
-  local angle = self.aimWorldAngle or 0
-  if self.blasterAngleOffset then
-    angle = angle + self.blasterAngleOffset
-  end
-
+-- World position of the blaster's own muzzle — the hole at the end of his
+-- arm — given where the arm is currently aimed (self.aimShoulderPos/
+-- aimWorldAngle, set whenever he is drawn). Everything that comes out of
+-- the blaster starts here: fireballs (shootFireball, just below) and the
+-- pull beam (lua/effects/PullBeam.lua). Falls back to his own position
+-- before he has ever been drawn.
+function Player:getMuzzlePosition()
   -- Exact muzzle pixel within leftarm.png (602x256) — NOT the old
   -- fixed-distance-along-the-aim-angle approximation (blasterMuzzleLength),
   -- which only ever put the origin somewhere along the right ray, not
@@ -2313,6 +2495,26 @@ function Player:shootFireball()
     originX = self.pos.x
     originY = self.pos.y
   end
+
+  return originX, originY
+end
+
+function Player:shootFireball()
+  if self.mode ~= "space" and self.mode ~= "platform" then return end
+  if self.isBall or self.isTeleporting or self.isDying then return end
+
+  local now = love.timer.getTime()
+  self.lastShotTime = self.lastShotTime or 0
+  self.fireCooldown = self.fireCooldown or 0.15
+  if now - self.lastShotTime < self.fireCooldown then return end
+  self.lastShotTime = now
+
+  local angle = self.aimWorldAngle or 0
+  if self.blasterAngleOffset then
+    angle = angle + self.blasterAngleOffset
+  end
+
+  local originX, originY = self:getMuzzlePosition()
 
   state.fireballs = state.fireballs or {}
   local Fireball = require("lua.entities.Fireball")

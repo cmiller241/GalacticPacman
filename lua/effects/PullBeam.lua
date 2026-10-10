@@ -55,8 +55,9 @@ local function drawPullIndicator()
   local now = love.timer.getTime()
   local pulse = (math.sin(now * 6) + 1) / 2   -- ~0..1 breathing
 
-  local originX = (player.aimShoulderPos and player.aimShoulderPos.x) or player.pos.x
-  local originY = (player.aimShoulderPos and player.aimShoulderPos.y) or player.pos.y
+  -- Out of the blaster's own muzzle (the hole at the end of his arm),
+  -- same as a fireball — it used to start back at his shoulder.
+  local originX, originY = player:getMuzzlePosition()
 
   local dx = target.pos.x - originX
   local dy = target.pos.y - originY

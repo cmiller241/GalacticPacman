@@ -709,8 +709,7 @@ function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
       local dx, dy = player.pos.x - o.pos.x, player.pos.y - o.pos.y
       local r = player.radius + o.hitRadius
       if dx * dx + dy * dy <= r * r then
-        local feetY = player.pos.y + player.radius
-        if not player.onSurface and player.vel.y > 0 and feetY <= o.pos.y then
+        if o:isStompedBy(player) then
           o:startSquash()
         else
           player:startDeath()
@@ -810,6 +809,10 @@ function CollisionSystem:handleCoinCollisions(player, coins)
   end
 end
 
+-- Returns { [asteroid] = the planetoid it hit } for every asteroid that
+-- touched a planetoid's surface this frame — the caller breaks them
+-- (see main.lua's own breakAsteroid, which uses the planetoid to throw
+-- the pieces back off its surface).
 function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
   local toBreak = {}
   if not asteroids then return toBreak end
@@ -828,7 +831,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
       if not p.isSkyDome then
         local dist = self:distanceToPlanetSurface(a.pos, p)
         if dist < a.radius then
-          toBreak[a] = true
+          toBreak[a] = p
         end
       end
 
@@ -837,7 +840,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
         if a.pos.y < topY then
           local domeSurface = p:nearestDomeSurfacePoint(a.pos.x, a.pos.y)
           if domeSurface.distance < a.radius then
-            toBreak[a] = true
+            toBreak[a] = p
             if type(p.triggerShieldImpact) == "function" then
               local intensity = math.min(1, a.radius / 45)
               p:triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity)
@@ -851,7 +854,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
         if a.pos.y > topY then
           local baseSurface = p:nearestBaseSurfacePoint(a.pos.x, a.pos.y)
           if baseSurface.distance < a.radius then
-            toBreak[a] = true
+            toBreak[a] = p
           end
         end
       end
