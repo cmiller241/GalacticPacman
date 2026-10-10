@@ -160,8 +160,6 @@ function Planetoid.new(x, y, radius, color)
   self.color = color
   local direction = Vector2.new(math.random() * 2 - 1, math.random() * 2 - 1):normalize()
   self.vel = direction:multiply(constants.PLANET_SPEED)
-  self.cachedAlpha = 0.3
-  self.lastAlphaUpdate = 0
   self.isSpikey = false
   self.bodyCanvas = nil
   self.bodyCanvasPadding = 0
@@ -291,15 +289,6 @@ end
     sharedBodyCanvasCache[self.color] = colorCache
   end
   colorCache[self.radius] = finalCanvas
-end
-
-function Planetoid:updateCachedAlpha()
-  local now = love.timer.getTime() * 1000
-  if now - self.lastAlphaUpdate > 500 then
-    local dist = self.pos:subtract(state.player.pos):length()
-    self.cachedAlpha = math.max(0.01, 0.3 - (dist / 1000) * 0.65)
-    self.lastAlphaUpdate = now
-  end
 end
 
 function Planetoid:draw()

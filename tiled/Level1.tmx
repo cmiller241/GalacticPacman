@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="3" nextobjectid="89">
+<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="3" nextobjectid="107">
  <editorsettings>
   <export target="Level1.lua" format="lua"/>
  </editorsettings>
@@ -701,6 +701,93 @@
     <property name="respawnX" value="1844"/>
     <property name="respawnY" value="1650"/>
    </properties>
+  </object>
+  <object id="89" class="Sphere" x="417" y="1520">
+   <point/>
+  </object>
+  <object id="90" class="Sphere" x="500" y="1279">
+   <point/>
+  </object>
+  <object id="91" class="Sphere" x="569" y="971">
+   <point/>
+  </object>
+  <object id="92" class="Sphere" x="1012" y="916">
+   <properties>
+    <property name="radius" value="100"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="93" class="Sphere" x="1378" y="686">
+   <properties>
+    <property name="gravity" value="500"/>
+    <property name="ooomba" value="6"/>
+    <property name="radius" value="200"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="95" class="Spikey-Orbit" x="1375" y="868">
+   <properties>
+    <property name="orbit" value="93"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="96" class="Sphere" x="1810" y="331">
+   <point/>
+  </object>
+  <object id="97" class="Spikey-Orbit" x="1762" y="414">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="98" class="Spikey-Orbit" x="1856" y="488">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="99" class="Spikey-Orbit" x="1971" y="401">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="100" class="Spikey-Orbit" x="1846" y="202">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="101" class="Spikey-Orbit" x="1715" y="271">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="102" class="Spikey-Orbit" x="1900" y="300">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="10"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="103" class="Ooomba" x="2656" y="1214">
+   <point/>
+  </object>
+  <object id="104" class="Ooomba" x="2296" y="1212">
+   <point/>
+  </object>
+  <object id="105" class="Ooomba" x="1926" y="1146">
+   <point/>
+  </object>
+  <object id="106" class="Ooomba" x="1477" y="1145">
+   <point/>
   </object>
  </objectgroup>
 </map>

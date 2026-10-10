@@ -23,6 +23,7 @@ local state = require("lua.state")
 local worldGen = require("lua.setup.worldGen")
 local Asteroid = require("lua.entities.Asteroid")
 local Ooomba = require("lua.entities.Ooomba")
+local MetalGradient = require("lua.effects.MetalGradient")
 
 local TitleScreen = {}
 
@@ -1168,43 +1169,14 @@ end
 -- it's drawn — img/title.png itself is untouched. Multiplying means the
 -- white letter faces take on the gradient while the black extrusion
 -- behind them stays black. The gradient is the classic chrome look, top
--- to bottom (LOGO_METAL_STOPS): cool sky tones, up to white, a hard
+-- to bottom (see lua/effects/MetalGradient.lua): cool sky tones, up to white, a hard
 -- dark "horizon" line just past the middle, then warm tones below it.
-local LOGO_METAL_STOPS = {
-  -- { position down the logo (0 = top, 1 = bottom), r, g, b }
-  { 0.00, 0.62, 0.74, 0.95 },
-  { 0.30, 0.90, 0.95, 1.00 },
-  { 0.47, 1.00, 1.00, 1.00 },
-  { 0.52, 0.30, 0.33, 0.44 }, -- the horizon line
-  { 0.62, 0.62, 0.58, 0.60 },
-  { 0.84, 1.00, 0.92, 0.76 },
-  { 1.00, 0.72, 0.60, 0.50 },
-}
-
-local logoMetalShader, logoMetalGradient = nil, nil
+local logoMetalShader = nil
 local function getLogoMetal()
   if logoMetalShader then return logoMetalShader end
 
-  -- The gradient as a 1px-wide strip, sampled by how far down the logo
-  -- a pixel is.
-  local height = 256
-  local data = love.image.newImageData(1, height)
-  for y = 0, height - 1 do
-    local t = y / (height - 1)
-    local a, b = LOGO_METAL_STOPS[1], LOGO_METAL_STOPS[#LOGO_METAL_STOPS]
-    for i = 1, #LOGO_METAL_STOPS - 1 do
-      if t >= LOGO_METAL_STOPS[i][1] and t <= LOGO_METAL_STOPS[i + 1][1] then
-        a, b = LOGO_METAL_STOPS[i], LOGO_METAL_STOPS[i + 1]
-        break
-      end
-    end
-    local span = math.max(1e-6, b[1] - a[1])
-    local k = math.max(0, math.min(1, (t - a[1]) / span))
-    data:setPixel(0, y, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k, a[4] + (b[4] - a[4]) * k, 1)
-  end
-  logoMetalGradient = love.graphics.newImage(data)
-  logoMetalGradient:setFilter("linear", "linear")
-
+  -- The gradient itself is MetalGradient.lua's (shared with the game's
+  -- metallic Spheres), sampled by how far down the logo a pixel is.
   logoMetalShader = love.graphics.newShader([[
     extern Image gradient;
     extern float opacity;
@@ -1216,7 +1188,7 @@ local function getLogoMetal()
       return vec4(texel.rgb * metal, texel.a) * color;
     }
   ]])
-  logoMetalShader:send("gradient", logoMetalGradient)
+  logoMetalShader:send("gradient", MetalGradient.getImage())
   logoMetalShader:send("opacity", LOGO_METAL_OPACITY)
   return logoMetalShader
 end
