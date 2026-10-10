@@ -84,7 +84,7 @@ end
 -- assetLoading.lua), matched case-insensitively. A name that isn't a
 -- known button is left exactly as typed, asterisks included, so a typo
 -- shows up as one instead of silently vanishing.
-local ICON_HEIGHT = 24 -- screen px tall every icon is drawn, whatever its source size — about the font's own capital height. 2x for the 12px pixel-art ones; a high-res one (the Circle button) is scaled down to match.
+local ICON_HEIGHT = 36 -- screen px tall every icon is drawn, whatever its source size — about the full height of a line of text. A clean 3x for the 12px pixel-art ones; a high-res one (the Circle button) is scaled down to match. (Was 24, about the capital height.)
 local ICON_PAD = 3   -- screen px kept clear on either side of an icon
 
 local function iconFor(name)

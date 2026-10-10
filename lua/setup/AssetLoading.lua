@@ -90,6 +90,9 @@ local function loadAssets(onComplete)
   -- Signpost (see lua/world/Sign.lua) — 40x48 pixel art, drawn at the
   -- same 2x the terrain tiles use, so the "nearest" default is kept.
   state.signTexture = love.graphics.newImage("img/sign.png")
+  -- The same signpost without the grass at its foot, for planting on a
+  -- bare planetoid (see main.lua's own belt-landing-planet sign).
+  state.signPlanetTexture = love.graphics.newImage("img/sign-planet.png")
 
   -- Inline button icons — pixel art, 12px tall, drawn at 2x, "nearest"
   -- default kept (all but CIRCLE — see just below the loop). Keyed by the UPPERCASE name a dialogue string uses

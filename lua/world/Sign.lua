@@ -58,11 +58,22 @@ end
 -- convention Ooomba/Lever/Crank use for their own center-bottom
 -- anchor. rawMessage: the Tiled object's own "message" custom
 -- property, pipe-delimited (see splitMessages above).
-function Sign.new(x, y, rawMessage)
+--
+-- options (all optional):
+--   texture  the image to draw instead of img/sign.png — same 40x48
+--            size and 2x scale (e.g. img/sign-planet.png).
+--   up       unit Vector2 pointing the way the sign stands, away from
+--            the ground it's planted in. Straight up the screen by
+--            default, which is right for terrain; a sign planted
+--            somewhere round a planetoid passes the direction out from
+--            that planetoid's center, and is drawn turned to match.
+function Sign.new(x, y, rawMessage, options)
+  options = options or {}
   local self = setmetatable({}, Sign)
 
   self.pos = Vector2.new(x, y)
-  self.topY = y - SIGN_HEIGHT
+  self.texture = options.texture
+  self.up = options.up or Vector2.new(0, -1)
 
   self.messages = splitMessages(rawMessage)
   self.messageIndex = 1
@@ -139,11 +150,15 @@ function Sign:draw()
   love.graphics.setColor(1, 1, 1, 1)
   -- Origin at the sprite's own bottom-center, so it lands exactly on
   -- self.pos. Floored so the 2x pixels stay on whole world units.
-  love.graphics.draw(state.signTexture, math.floor(self.pos.x), math.floor(self.pos.y), 0,
+  -- Turned so its post points along self.up — no rotation at all for
+  -- the ordinary upright case.
+  local rotation = math.atan2(self.up.y, self.up.x) + math.pi / 2
+  love.graphics.draw(self.texture or state.signTexture, math.floor(self.pos.x), math.floor(self.pos.y), rotation,
     SPRITE_SCALE, SPRITE_SCALE, SPRITE_WIDTH / 2, SPRITE_HEIGHT)
 end
 
 local TOOLTIP_GAP_ABOVE = 26
+local TOOLTIP_PILL_HEIGHT = 30 -- InteractPrompt.lua's own pill is about this tall (text height + its padding)
 
 -- World-space "you can interact with this" hint — same convention
 -- Lever.lua/Crank.lua's own :drawTooltip already use, call from inside
@@ -156,7 +171,14 @@ function Sign:drawTooltip()
   if not self.playerNearby or self.dialogueActive then return end
   if state.player and state.player.isBall then return end
 
-  InteractPrompt.draw(self.pos.x, self.topY - TOOLTIP_GAP_ABOVE)
+  -- Just beyond the far end of the sign from the ground, whichever way
+  -- that is (self.up). The pill itself always reads upright and hangs
+  -- ABOVE the y it's given, so for a sign pointing down the screen it's
+  -- nudged a pill's height further out to clear the sign instead of
+  -- sitting on top of it — zero extra for an ordinary upright sign.
+  local reach = SIGN_HEIGHT + TOOLTIP_GAP_ABOVE
+  local pillHeightNudge = TOOLTIP_PILL_HEIGHT * (1 + self.up.y) / 2
+  InteractPrompt.draw(self.pos.x + self.up.x * reach, self.pos.y + self.up.y * reach + pillHeightNudge)
 end
 
 -- Screen-space dialogue box — call AFTER the camera transform is
