@@ -14,6 +14,7 @@
 -- exists to amortize.
 
 local state = require("lua.state")
+local MetalGradient = require("lua.effects.MetalGradient")
 
 local GlowOrb = {}
 
@@ -34,6 +35,11 @@ local function getShader()
     extern vec3 colorRim;    // bright highlight right at the lit edge
     extern vec3 colorGlow;   // soft outer glow color
     extern vec2 sunDir;      // unit vector from this orb's center TOWARD the sun, world space
+    extern Image metalGradient;    // lua/effects/MetalGradient.lua's chrome strip
+    extern number metalOpacity;    // 0 = no metal layer (the default); see the metal block below
+    extern number highlightAlpha;  // 0 = no highlight (the default); see the highlight block below
+    extern number highlightSize;   // its radius, as a fraction of the body's radius
+    extern number highlightOffset; // how far toward the sun its center sits, as a fraction of the body's radius
 
     vec4 effect(vec4 color, Image tex, vec2 texture_coords, vec2 screen_coords) {
       vec2 local = (screen_coords - originScreen) / zoom - vec2(boxHalf, boxHalf);
@@ -62,6 +68,29 @@ local function getShader()
       float rimT = smoothstep(radius * 0.6, radius, dist) * clamp(facing, 0.0, 1.0);
       bodyColor = mix(bodyColor, colorRim, rimT * rimStrength);
 
+      // Metal: the chrome gradient MULTIPLIED over the body, same idea
+      // (and the very same gradient) as the title-screen logo, at
+      // metalOpacity — 0 leaves the body untouched. On a flat logo the
+      // gradient simply runs top to bottom; here it's wrapped round the
+      // ball the way a real chrome sphere mirrors its surroundings: each
+      // point shows what a ray from the viewer would bounce off toward
+      // (sky if it bounces upward, ground if downward), which bends the
+      // bands — the horizon line especially — to follow the sphere's
+      // own curve instead of cutting straight across it like a stripe
+      // painted on a disc. reflectY runs -1 (straight up) to 1 (down).
+      float reflectY = 2.0 * nz * normal.y;
+      vec3 metal = Texel(metalGradient, vec2(0.5, 0.5 + 0.5 * reflectY)).rgb;
+      bodyColor *= mix(vec3(1.0), metal, metalOpacity);
+
+      // Soft highlight on the sun-facing side — the very same one
+      // every ordinary planetoid has (see Planetoid.lua's own
+      // getSunShadingShader: same shape, same falloff, same warm white,
+      // added on top), so an orb that opts in is lit to match them.
+      // Off (highlightAlpha 0) unless the caller asks for it.
+      vec2 q = local / radius;
+      float h = clamp(1.0 - length(q - sunDir * highlightOffset) / highlightSize, 0.0, 1.0);
+      bodyColor += vec3(1.0, 0.98, 0.92) * (h * h * highlightAlpha);
+
       // Single unified alpha: 1.0 through the body's own interior,
       // soft-edged at the true radius, then fading down to 0 by
       // glowRadius — computed without branching so it stays cheap even
@@ -80,7 +109,10 @@ end
 -- x, y, radius: world units — the orb's true center/body radius.
 -- colors: { dark, light, rim, glow } each an {r,g,b} table (0..1).
 -- options (all optional): glowRadiusMult (default 1.6), edgeSoftness
--- (default 2), glowStrength (default 0.5), rimStrength (default 0.6).
+-- (default 2), glowStrength (default 0.5), rimStrength (default 0.6),
+-- highlightAlpha (default 0 = none) with highlightSize/highlightOffset
+-- (defaults 0.55/0.48) — the planetoid-style soft highlight;
+-- metalOpacity (default 0 = none) — the chrome gradient layer.
 function GlowOrb.draw(x, y, radius, colors, options)
   options = options or {}
   local sh = getShader()
@@ -101,6 +133,11 @@ function GlowOrb.draw(x, y, radius, colors, options)
   sh:send("edgeSoftness", options.edgeSoftness or 2)
   sh:send("glowStrength", options.glowStrength or 0.5)
   sh:send("rimStrength", options.rimStrength or 0.6)
+  sh:send("metalGradient", MetalGradient.getImage())
+  sh:send("metalOpacity", options.metalOpacity or 0)
+  sh:send("highlightAlpha", options.highlightAlpha or 0)
+  sh:send("highlightSize", options.highlightSize or 0.55)
+  sh:send("highlightOffset", options.highlightOffset or 0.48)
   sh:send("colorDark", colors.dark)
   sh:send("colorLight", colors.light)
   sh:send("colorRim", colors.rim)

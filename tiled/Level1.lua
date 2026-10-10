@@ -10,7 +10,7 @@ return {
   tilewidth = 32,
   tileheight = 32,
   nextlayerid = 3,
-  nextobjectid = 89,
+  nextobjectid = 107,
   properties = {},
   tilesets = {
     {
@@ -1546,6 +1546,254 @@ return {
             ["respawnX"] = "1844",
             ["respawnY"] = "1650"
           }
+        },
+        {
+          id = 89,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 417,
+          y = 1520,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 90,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 500,
+          y = 1279,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 91,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 569,
+          y = 971,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 92,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 1012,
+          y = 916,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["radius"] = "100"
+          }
+        },
+        {
+          id = 93,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 1378,
+          y = 686,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["gravity"] = "500",
+            ["ooomba"] = "6",
+            ["radius"] = "200"
+          }
+        },
+        {
+          id = 95,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1375,
+          y = 868,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "93",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 96,
+          name = "",
+          class = "Sphere",
+          shape = "point",
+          x = 1810,
+          y = 331,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 97,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1762,
+          y = 414,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 98,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1856,
+          y = 488,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 99,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1971,
+          y = 401,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 100,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1846,
+          y = 202,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 101,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1715,
+          y = 271,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "5"
+          }
+        },
+        {
+          id = 102,
+          name = "",
+          class = "Spikey-Orbit",
+          shape = "point",
+          x = 1900,
+          y = 300,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {
+            ["orbit"] = "96",
+            ["speed"] = "10"
+          }
+        },
+        {
+          id = 103,
+          name = "",
+          class = "Ooomba",
+          shape = "point",
+          x = 2656,
+          y = 1214,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 104,
+          name = "",
+          class = "Ooomba",
+          shape = "point",
+          x = 2296,
+          y = 1212,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 105,
+          name = "",
+          class = "Ooomba",
+          shape = "point",
+          x = 1926,
+          y = 1146,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
+        {
+          id = 106,
+          name = "",
+          class = "Ooomba",
+          shape = "point",
+          x = 1477,
+          y = 1145,
+          width = 0,
+          height = 0,
+          rotation = 0,
+          visible = true,
+          properties = {}
         }
       }
     }

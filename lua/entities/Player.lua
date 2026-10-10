@@ -518,6 +518,7 @@ local BALL_MODE_ENABLED = true
 function Player:enterBallMode()
   if not BALL_MODE_ENABLED then return end
   if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
+  if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   self.morphState = "toBall"
   self.morphElapsed = 0
   -- Curling up mid ground pound calls the pound off (see
@@ -545,6 +546,7 @@ end
 -- (same reasoning as enterBallMode's own dialogueActive check above).
 function Player:exitBallMode()
   if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
+  if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -784,6 +786,7 @@ function Player:jump()
   -- one separately. isTeleporting (Beam.lua) gets the same treatment —
   -- same reasoning, frozen-in-place for a moment rather than mid-action.
   if self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
+  if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
 
   -- Requires actually MOVING at run speed, not just holding the run
   -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
@@ -896,6 +899,7 @@ end
 -- do nothing except leave him stuck in the pose.
 function Player:tryGroundPound()
   if self.isGroundPounding or self.isDying or self.onSurface then return end
+  if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   -- Not as a ball, or while curling into/out of one — the pound is his
   -- own move, on his feet.
   if self.isBall or self.morphState then return end
@@ -1394,6 +1398,7 @@ function Player:update()
     GroundPoundBurst.spawn(
       self.pos.x + down.x * self.radius, self.pos.y + down.y * self.radius,
       Vector2.new(-down.x, -down.y))
+    if state.audioManager then state.audioManager:playGroundPound() end
   elseif self.groundPoundImpactTimer > 0 then
     self.groundPoundImpactTimer = self.onSurface and math.max(0, self.groundPoundImpactTimer - state.timeScale) or 0
   end
@@ -2637,6 +2642,7 @@ end
 function Player:shootFireball()
   if self.mode ~= "space" and self.mode ~= "platform" then return end
   if self.isBall or self.isTeleporting or self.isDying then return end
+  if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0

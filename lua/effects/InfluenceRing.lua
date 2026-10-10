@@ -18,10 +18,10 @@ local GAP_LENGTH = 5
 local LINE_WIDTH = 3
 local COLOR = { 173 / 255, 216 / 255, 230 / 255 }
 
--- alpha: same per-planet cachedAlpha the JS version blended the baked
--- ring in with (see Planetoid:updateCachedAlpha) — fades the ring out
--- for planets far from the player instead of cluttering the whole
--- screen with them at full strength.
+-- alpha: how strongly to draw it — decided by the caller (see the ring
+-- pass in main.lua's love.draw) from how much this body's gravity
+-- matters to the player right now, rather than drawing every ring on
+-- screen at full strength.
 function InfluenceRing.draw(x, y, radius, alpha)
   if radius <= 0 or alpha <= 0 then return end
 

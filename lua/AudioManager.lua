@@ -49,15 +49,21 @@ function AudioManager.new()
   self.bangSmall = love.audio.newSource('sounds/bangSmall.wav', 'static')
   self.goombaStompAudio = love.audio.newSource('sounds/mario-goomba-stomp.mp3', 'static')
   self.fireballAudio = love.audio.newSource('sounds/mario-fireball.mp3', 'static')
+  self.groundPoundAudio = love.audio.newSource('sounds/groundpound.wav', 'static')
 
   local allSources = {
     self.eatDotAudio0, self.eatDotAudio1, self.deathAudio, self.jumpAudio,
     self.jumpSmallAudio, self.bangLarge, self.bangMedium, self.bangSmall,
-    self.goombaStompAudio, self.fireballAudio
+    self.goombaStompAudio, self.fireballAudio, self.groundPoundAudio
   }
   for _, source in ipairs(allSources) do
     source:setVolume(0.5)
   end
+
+  -- Played 30% faster than recorded. LÖVE can only speed a sound up by
+  -- raising its pitch along with it (there's no tempo-only control), so
+  -- it also sounds about four and a half semitones higher.
+  self.groundPoundAudio:setPitch(1.3)
 
   return self
 end
@@ -99,6 +105,12 @@ end
 
 function AudioManager:playFireball()
   cloneAndPlay(self.fireballAudio)
+end
+
+-- The slam of a ground pound landing (see Player.lua's own ground-pound
+-- bookkeeping in Player:update).
+function AudioManager:playGroundPound()
+  cloneAndPlay(self.groundPoundAudio)
 end
 
 function AudioManager:playBang(size, position)
