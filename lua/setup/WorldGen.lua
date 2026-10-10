@@ -35,6 +35,14 @@ worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5   -- 2.7
 -- into view over the following seconds instead of popping in.
 worldGen.BELT_SPAWN_INTERVAL = 6        -- frames between drip checks (~0.1s @60fps)
 worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500
+-- Whether the burst of planetoids a belt cell gets when it's first
+-- generated (generateCell) counts against BELT_MAX_TOTAL_PLANETOIDS
+-- too, not just the drip. true: a new region only adds as many as the
+-- cap still has room for, so the belt genuinely tops out at the cap.
+-- false: the old behavior — every new belt cell adds its full
+-- BELT_PLANETOIDS_PER_CELL regardless, which let the belt climb to
+-- 700-900 planetoids after a minute or so of moving around it.
+worldGen.BELT_CELL_BURST_RESPECTS_CAP = true
 local BELT_SPAWN_ARC_SPACING = 300      -- target arc-length (world units) between consecutive drip spawns
 local BELT_DRIFT_RADIUS_MIN = 28
 local BELT_DRIFT_RADIUS_MAX = 64
@@ -285,6 +293,16 @@ local function randomQuantizedRadius(min, max, step)
   return min + math.random(0, steps) * step
 end
 
+-- A belt planetoid is never GENERATED with less than this much clear
+-- space (surface to surface) between it and any other planetoid — both
+-- generation paths enforce it: the burst when a cell is first generated
+-- (createPlanetoidsInCell) and the ongoing drip (spawnDriftingBeltPlanetoid).
+-- A spot that can't satisfy it after BELT_PLACEMENT_ATTEMPTS tries is
+-- simply skipped, rather than placed too close anyway.
+local BELT_PLANETOID_MIN_GAP = 20
+local BELT_PLACEMENT_ATTEMPTS = 30
+local beltPlanetoidTooClose -- defined further down, next to the cell-generation code that first needed it
+
 local function applyBeltOrbit(planet)
   planet.isBeltPlanetoid = true
   local sunX, sunY = worldGen.sunPos()
@@ -357,10 +375,23 @@ end
 local function spawnDriftingBeltPlanetoid(refTheta)
   local inner, outer = worldGen.beltRadii()
   local rInner, rOuter = inner + 10, outer - 10
-  local r = math.sqrt(rInner * rInner + math.random() * (rOuter * rOuter - rInner * rInner))
   local radius = randomQuantizedRadius(BELT_DRIFT_RADIUS_MIN, BELT_DRIFT_RADIUS_MAX)
 
-  local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
+  -- Each try re-rolls both the ring radius and (inside
+  -- pushUpstreamUntilHidden) how far upstream it lands, until one comes
+  -- up with BELT_PLANETOID_MIN_GAP clear of every other planetoid. If
+  -- none does, this spawn is skipped — the drip runs again in a moment.
+  local x, y
+  local placed = false
+  for _ = 1, BELT_PLACEMENT_ATTEMPTS do
+    local r = math.sqrt(rInner * rInner + math.random() * (rOuter * rOuter - rInner * rInner))
+    x, y = pushUpstreamUntilHidden(refTheta, r, radius)
+    if not beltPlanetoidTooClose(x, y, radius) then
+      placed = true
+      break
+    end
+  end
+  if not placed then return nil end
 
   local p = Planetoid.new(x, y, radius, randomColor())
   applyBeltOrbit(p)
@@ -449,7 +480,7 @@ function worldGen.updateBeltSpawning()
   local total = countBeltPlanetoids()
   for _ = 1, spawnsNeeded do
     if total >= worldGen.BELT_MAX_TOTAL_PLANETOIDS then break end
-    spawnDriftingBeltPlanetoid(theta)
+    if not spawnDriftingBeltPlanetoid(theta) then break end -- no clear spot right now; try again next check
     total = total + 1
   end
 end
@@ -617,18 +648,16 @@ local function randomPointInCellBelt(col, row, radius)
   return sx + (dx / d) * clampedD, sy + (dy / d) * clampedD
 end
 
-local BELT_PLANETOID_MIN_GAP = 5 -- min surface-to-surface distance enforced between belt planetoids
-
--- Checked only against OTHER belt planetoids (not the whole
--- state.planetoids array, which also holds every regular/spikey/maze
--- planet in the game) — non-belt planetoids live in a completely
--- different region of the world and were never the ones observed
--- stacking. Cheap enough to call per placement attempt: this only runs
--- during the occasional cell-generation event, never per-frame, and
--- the active belt planetoid count at any one time is small.
-local function beltPlanetoidTooClose(x, y, radius)
+-- Checked against every ROUND planetoid, not just other belt ones — the
+-- belt-edge landing planet (see main.lua's own beam setup) and any
+-- regular planetoid that happens to sit near the ring count too.
+-- Rounded-rect ones (the sky dome and friends) are left out: their own
+-- `radius` is a loose bounding circle, and randomPointInCellBelt already
+-- steers clear of the dome by its real footprint. Cheap enough to call
+-- per placement attempt: a few hundred distance checks, only on a spawn.
+function beltPlanetoidTooClose(x, y, radius)
   for _, p in ipairs(state.planetoids) do
-    if p.isBeltPlanetoid then
+    if p.radius and not p.isRoundedRect then
       local dx, dy = p.pos.x - x, p.pos.y - y
       local minDist = p.radius + radius + BELT_PLANETOID_MIN_GAP
       if dx * dx + dy * dy < minDist * minDist then
@@ -644,29 +673,33 @@ local function createPlanetoidsInCell(col, row, count, belt)
   for i = 1, count do
     local radius = belt and randomQuantizedRadius(28, 64) or randomQuantizedRadius(30, 70)
     local x, y
+    local placed = true
     if belt then
-      -- Retries a handful of times to find a spot that isn't
-      -- overlapping an already-placed belt planetoid (including ones
-      -- from earlier in this same batch — they're inserted into
-      -- state.planetoids immediately below, so beltPlanetoidTooClose
-      -- sees them too). Falls back to the last-tried spot if a clean
-      -- one isn't found — a packed cell shouldn't hang cell generation
-      -- or leave a planetoid unplaced, just occasionally still overlap
-      -- in the rare worst case.
-      local attempts = 0
-      repeat
+      -- Retries until it finds a spot BELT_PLANETOID_MIN_GAP clear of
+      -- every other planetoid (including ones from earlier in this same
+      -- batch — they're inserted into state.planetoids immediately
+      -- below, so beltPlanetoidTooClose sees them too). If none turns
+      -- up, this one planetoid is left out — a packed cell ends up a
+      -- planetoid or two short rather than with two crammed together.
+      placed = false
+      for _ = 1, BELT_PLACEMENT_ATTEMPTS do
         x, y = randomPointInCellBelt(col, row, radius)
-        attempts = attempts + 1
-      until not beltPlanetoidTooClose(x, y, radius) or attempts >= 20
+        if not beltPlanetoidTooClose(x, y, radius) then
+          placed = true
+          break
+        end
+      end
     else
       x, y = randomPointInCell(col, row, radius)
     end
-    local p = Planetoid.new(x, y, radius, randomColor())
-    if belt then
-      applyBeltOrbit(p)
+    if placed then
+      local p = Planetoid.new(x, y, radius, randomColor())
+      if belt then
+        applyBeltOrbit(p)
+      end
+      table.insert(state.planetoids, p)
+      table.insert(created, p)
     end
-    table.insert(state.planetoids, p)
-    table.insert(created, p)
   end
   return created
 end
@@ -727,6 +760,11 @@ local function generateCell(col, row)
   if not belt and (worldGen.cellIntersectsSkyDome(col, row) or worldGen.cellIntersectsWaterPlanet(col, row)) then return end
 
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL
+  if belt and worldGen.BELT_CELL_BURST_RESPECTS_CAP then
+    -- See BELT_CELL_BURST_RESPECTS_CAP's own comment.
+    local room = worldGen.BELT_MAX_TOTAL_PLANETOIDS - countBeltPlanetoids()
+    planetCount = math.max(0, math.min(planetCount, room))
+  end
   local regulars = createPlanetoidsInCell(col, row, planetCount, belt)
 
   if not belt then

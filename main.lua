@@ -9,7 +9,9 @@ local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
 local Ooomba = require("lua.entities.Ooomba")
 local Explosion = require("lua.entities.Explosion")
+local Particle = require("lua.entities.Particle")
 local StompBurst = require("lua.effects.StompBurst")
+local TitleScreen = require("lua.ui.TitleScreen")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
 local CameraDirector = require("lua.systems.CameraDirector")
@@ -818,6 +820,78 @@ function love.load()
   state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 1920)
 
   state.gravitySystem = GravitySystem.new(state.planetoids)
+
+  -- Everything above sets the game up exactly as it starts — the title
+  -- screen then borrows the player and stands him out in the belt until
+  -- start is pressed (see lua/ui/TitleScreen.lua).
+  TitleScreen.enter()
+end
+
+-- Plain debris burst — port of js/utils.js's createParticles: `count`
+-- of Particle.lua's default small yellow particles thrown out in every
+-- direction.
+local function spawnDebrisParticles(pos, count)
+  for _ = 1, count do
+    local angle = math.random() * math.pi * 2
+    local speed = math.random() * 4 + 2
+    table.insert(state.particles, Particle.new(pos, Vector2.new(math.cos(angle) * speed, math.sin(angle) * speed)))
+  end
+end
+
+-- Port of js/game.js's breakAsteroid — what happens to an asteroid
+-- that's hit a planetoid or been shot: it's gone in a bang and a burst
+-- of debris, and unless it was already small (radius under 15) it
+-- leaves 2 smaller asteroids behind (3 if it was a big one, radius over
+-- 30), each half its radius, flung apart.
+--
+-- planet: the planetoid it hit, or nil if it was shot. One deliberate
+-- difference from the JS, for a round planetoid only: the pieces are
+-- thrown AWAY from its surface, off the planetoid's own velocity. The
+-- original threw them in any direction off the asteroid's own inbound
+-- velocity, which sent about half of them straight back into the
+-- planetoid to break again the very next frame.
+local function breakAsteroid(ast, planet)
+  for i = #state.asteroids, 1, -1 do
+    if state.asteroids[i] == ast then
+      table.remove(state.asteroids, i)
+      break
+    end
+  end
+
+  if state.audioManager then
+    local size = (ast.radius > 30 and "large") or (ast.radius > 20 and "medium") or "small"
+    state.audioManager:playBang(size, ast.pos)
+  end
+  spawnDebrisParticles(ast.pos, 150)
+  if ast.radius < 15 then return end
+
+  local awayAngle, baseVel = nil, ast.vel
+  if planet and planet.radius and not planet.isRoundedRect then
+    awayAngle = math.atan2(ast.pos.y - planet.pos.y, ast.pos.x - planet.pos.x)
+    baseVel = planet.vel or ast.vel
+  end
+
+  local pieceCount = ast.radius > 30 and 3 or 2
+  for _ = 1, pieceCount do
+    local piece = Asteroid.new(ast.pos.x, ast.pos.y, ast.radius / 2)
+    local angle = awayAngle and (awayAngle + (math.random() - 0.5) * math.pi * 0.8) or (math.random() * math.pi * 2)
+    local speed = 2 + math.random() * 3
+    piece.vel = Vector2.new(baseVel.x + math.cos(angle) * speed, baseVel.y + math.sin(angle) * speed)
+    piece.angle = math.random() * math.pi * 2
+    piece.angularSpeed = (math.random() * 2 - 1) * 0.1
+    -- A title-screen asteroid's pieces stay title-screen asteroids (see
+    -- TitleScreen.lua's own updateTitleAsteroids): same idea, a drift
+    -- relative to the belt's orbit, worked out from the velocity each
+    -- piece was just given.
+    if ast.titleDrift then
+      piece.titleDrift = {
+        x = piece.vel.x - (ast.vel.x - ast.titleDrift.x),
+        y = piece.vel.y - (ast.vel.y - ast.titleDrift.y),
+      }
+    end
+    table.insert(state.asteroids, piece)
+  end
+  spawnDebrisParticles(ast.pos, 10)
 end
 
 local function updatePlanetoidsPhysics()
@@ -853,6 +927,7 @@ function love.update(dt)
   end
 
   gamepadInput.pollGamepad(dt)
+  TitleScreen.update(dt)
   VatsCursor.update(dt)
 
   -- Normalizes this frame's real elapsed time to "how many 60fps-baseline
@@ -984,7 +1059,10 @@ function love.update(dt)
     end
   end
 
-  if state.spaceShelter then
+  -- Held at the very start of its opening sequence for as long as the
+  -- title screen is up (see TitleScreen.lua) — the door only starts
+  -- opening once the game has actually begun.
+  if state.spaceShelter and not state.titleScreen then
     state.spaceShelter:update(dt)
     if state.introLocked and state.spaceShelter.introDone then
       state.introLocked = false
@@ -1026,7 +1104,13 @@ function love.update(dt)
   -- PinballInterior's own gravity/collision there (see just below),
   -- not something walking-input steers directly, same as a real
   -- pinball only ever responding to flippers/plunger/gravity.
-  state.player:move((state.introLocked or state.player.inPinball) and {} or state.keys)
+  -- On the title screen he's driven by its own autopilot instead (see
+  -- TitleScreen.lua) — the real keys never reach him there at all.
+  if state.titleScreen then
+    state.player:move(TitleScreen.getKeys())
+  else
+    state.player:move((state.introLocked or state.player.inPinball) and {} or state.keys)
+  end
 
   -- PinballInterior:updateBall entirely REPLACES normal gravity and
   -- planet collision while he's inside it (see Player.lua's own
@@ -1083,19 +1167,35 @@ function love.update(dt)
   -- has just finished being squashed flat: gone, with a burst under the
   -- player's feet (or where it stood, if he's no longer on top of it)
   -- and a small hop for him off the top of it.
-  if state.ooombas and #state.ooombas > 0 then
+  --
+  -- "Under his feet", "the ground" and "a hop" are all along the
+  -- Ooomba's own up direction (Ooomba.up) — straight up the screen on
+  -- terrain, straight out from the center on a round planetoid — and
+  -- the hop is relative to whatever it was standing on, which for a
+  -- belt planetoid is itself moving.
+  --
+  -- Skipped entirely on the title screen: Bob's autopilot keeps clear
+  -- of Ooombas there (see TitleScreen.lua), and if he ever does brush
+  -- one anyway, nothing happens — he can't die before the game starts.
+  if state.ooombas and #state.ooombas > 0 and not state.titleScreen then
     local flattened = collisionSystem:handlePlayerOoombaCollisions(state.player, state.ooombas)
     for _, o in ipairs(flattened) do
       local player = state.player
-      local groundY = o.pos.y + o.halfHeight
+      local up = o.up
+      local groundX, groundY = o.pos.x - up.x * o.halfHeight, o.pos.y - up.y * o.halfHeight
       if o.squashPressed then
-        StompBurst.spawn(player.pos.x, math.min(player.pos.y + player.radius, groundY))
+        -- The point on the ground directly beneath him.
+        local sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x
+        StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up)
         if not player.onSurface then
-          player.vel.y = -OOOMBA_STOMP_BOUNCE
+          local groundVelX, groundVelY = o:groundVelocity()
+          local rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y
+          player.vel.x = player.vel.x + up.x * (OOOMBA_STOMP_BOUNCE - rising)
+          player.vel.y = player.vel.y + up.y * (OOOMBA_STOMP_BOUNCE - rising)
           player.isGroundPounding = false
         end
       else
-        StompBurst.spawn(o.pos.x, groundY)
+        StompBurst.spawn(groundX, groundY, up)
       end
       if state.audioManager then state.audioManager:playGoombaStomp() end
       for i = #state.ooombas, 1, -1 do
@@ -1150,7 +1250,11 @@ function love.update(dt)
   end
 
   if state.fireBars and #state.fireBars > 0 then
-    if collisionSystem.handlePlayerFireBarCollisions then
+    -- Not lethal on the title screen. They ARE drawn there, and Bob's
+    -- autopilot is what keeps him out of them (see TitleScreen.lua's own
+    -- "Fire bars" section) — this is only the safety net behind that: he
+    -- can't die before the game starts.
+    if collisionSystem.handlePlayerFireBarCollisions and not state.titleScreen then
       collisionSystem:handlePlayerFireBarCollisions(state.player, state.fireBars)
     end
     -- Deliberately no handleImmovableCollisions(state.fireBars, state.planetoids)
@@ -1171,16 +1275,17 @@ function love.update(dt)
     -- be an empty stub.
     collisionSystem:handleElasticCollisions(state.asteroids)
 
+    -- An asteroid that hits a planetoid breaks apart — see breakAsteroid.
     local toBreak = collisionSystem:handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids)
-    if next(toBreak) then
-      for i = #state.asteroids, 1, -1 do
-        if toBreak[state.asteroids[i]] then
-          table.remove(state.asteroids, i)
-        end
-      end
+    for asteroid, planet in pairs(toBreak) do
+      breakAsteroid(asteroid, planet)
     end
   end
 
+  -- Runs on the title screen too — Bob collects whatever coins his
+  -- autopilot carries him through, sound and all. Anything that adds to
+  -- state.score there is wiped when the game actually starts (see
+  -- TitleScreen.lua's own beginGame).
   if state.coins then
     collisionSystem:handleCoinCollisions(state.player, state.coins)
   end
@@ -1207,15 +1312,13 @@ function love.update(dt)
         local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
           state.fireballs, collidablePlanetoids, state.asteroids
         )
-        if next(toBreakAsteroids) then
-          for i = #state.asteroids, 1, -1 do
-            local a = state.asteroids[i]
-            if toBreakAsteroids[a] then
-              table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
-              if state.audioManager then state.audioManager:playFireball() end
-              table.remove(state.asteroids, i)
-            end
-          end
+        -- A shot asteroid breaks apart the same way one that hits a
+        -- planetoid does (see breakAsteroid), plus the fireball's own
+        -- explosion.
+        for a in pairs(toBreakAsteroids) do
+          table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
+          if state.audioManager then state.audioManager:playFireball() end
+          breakAsteroid(a, nil)
         end
         for _, hit in ipairs(planetHits) do
           if not reflected[hit.fireball] then
@@ -1969,6 +2072,13 @@ function love.draw()
     end
   end
 
+  -- Title screen: just the scene and its own prompt — no minimap, no
+  -- HUD text.
+  if state.titleScreen then
+    TitleScreen.draw()
+    return
+  end
+
   if state.minimap then
     state.minimap:draw()
   end
@@ -1987,4 +2097,7 @@ function love.draw()
     state.fireBars and #state.fireBars or 0
   ), 20, 100)
   love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 120)
+
+  -- The black fade-in out of the title screen, over everything.
+  TitleScreen.draw()
 end

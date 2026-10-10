@@ -87,7 +87,16 @@ function Ooomba.new(homeShape, startArcPos, options)
   -- Not named plain `radius`: utils.boundingRadius (target-lock outline,
   -- on-screen checks) prefers that field over halfWidth/halfHeight, and
   -- this is a contact circle, not the sprite's bounds.
-  self.hitRadius = HIT_RADIUS
+  -- Scaled with the sprite, so a smaller Ooomba (see Ooomba.newOnPlanet)
+  -- has a proportionally smaller contact circle.
+  self.hitRadius = HIT_RADIUS * (self.drawHeight / 90)
+
+  -- Which way is "up" for it right now — straight up the screen on
+  -- Tiled terrain, straight out from the center on a round planetoid.
+  -- Set properly each :update (and just below); everything that used to
+  -- assume a flat floor (drawing, squashing, stomp detection) works off
+  -- this instead.
+  self.up = Vector2.new(0, -1)
 
   -- See :startSquash/:updateSquash. squashHeight is how tall the sprite
   -- is currently drawn — drawHeight normally, shrinking toward 0 while
@@ -101,7 +110,9 @@ function Ooomba.new(homeShape, startArcPos, options)
   self.direction = options.direction or -1 -- -1 = toward arc position 0, 1 = toward the far end; the art faces left by default, so -1 needs no flip
 
   self.surfaceArcPos = startArcPos or 0
-  self.pos = homeShape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight).point
+  local startSurface = homeShape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
+  self.pos = startSurface.point
+  if not homeShape.forceUprightJump then self.up = startSurface.normal:clone() end
 
   self.walkCyclePhase = 0
   self.walkCycleSpeed = 0.12 -- how fast the 4-step stand/walk cycle advances
@@ -118,6 +129,61 @@ function Ooomba.new(homeShape, startArcPos, options)
   return self
 end
 
+-- An Ooomba that patrols a round planetoid, walking laps of it instead
+-- of back and forth along a strip of terrain. Same entity throughout —
+-- the planetoid is just presented to it as the same kind of arc-length
+-- path a TerrainShape is (getPerimeter/worldPointAtArcPosition), one
+-- that happens to loop (isLoop — see :update's own turn-around check).
+--
+-- planet: any round planetoid (needs pos + radius). startAngle: where on
+-- it to start, radians, same convention as Player.angle. options: as
+-- Ooomba.new — the same size by default as one on terrain.
+function Ooomba.newOnPlanet(planet, startAngle, options)
+  options = options or {}
+
+  local path = {
+    planet = planet,
+    isLoop = true,
+    getPerimeter = function()
+      return 2 * math.pi * planet.radius
+    end,
+    worldPointAtArcPosition = function(_, arcPos, offset)
+      local angle = arcPos / planet.radius
+      local normal = Vector2.new(math.cos(angle), math.sin(angle))
+      return {
+        point = Vector2.new(planet.pos.x + normal.x * (planet.radius + offset), planet.pos.y + normal.y * (planet.radius + offset)),
+        normal = normal,
+      }
+    end,
+  }
+
+  local self = Ooomba.new(path, (startAngle or 0) % (2 * math.pi) * planet.radius, options)
+  self.planet = planet
+  return self
+end
+
+-- Velocity of whatever it's standing on — a belt planetoid is moving
+-- the whole time; terrain isn't. Anything that asks "is the player
+-- coming down onto it" has to ask relative to this.
+function Ooomba:groundVelocity()
+  local planet = self.planet
+  if planet and planet.vel then return planet.vel.x, planet.vel.y end
+  return 0, 0
+end
+
+-- Whether touching it right now counts as landing on it from above:
+-- airborne, moving down toward the ground it stands on, with his feet
+-- no lower than its middle. "Down" and "above" are along self.up, so
+-- this is the same test on a planetoid as on flat terrain.
+function Ooomba:isStompedBy(player)
+  if player.onSurface then return false end
+  local up = self.up
+  local groundVelX, groundVelY = self:groundVelocity()
+  local sinking = -((player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y)
+  local feetAboveCenter = (player.pos.x - self.pos.x) * up.x + (player.pos.y - self.pos.y) * up.y - player.radius
+  return sinking > 0 and feetAboveCenter >= 0
+end
+
 function Ooomba:startSquash()
   self.isSquashing = true
 end
@@ -132,18 +198,28 @@ end
 -- once it's flat.
 function Ooomba:updateSquash(player)
   local timeScale = state.timeScale or 1
-  local bottomY = self.pos.y + self.halfHeight
-  local feetY = player.pos.y + player.radius
+  -- All measured along self.up (see its own comment): how far his feet
+  -- are above the ground it stands on, how far off to the side he is,
+  -- and how fast he's coming down relative to that ground.
+  local up = self.up
+  local relX, relY = player.pos.x - self.pos.x, player.pos.y - self.pos.y
+  local feetHeight = relX * up.x + relY * up.y + self.halfHeight - player.radius
+  local sideways = relX * -up.y + relY * up.x
+  local groundVelX, groundVelY = self:groundVelocity()
+  local sinking = -((player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y)
 
-  local above = not player.isDying
-    and math.abs(player.pos.x - self.pos.x) <= self.halfWidth + player.radius
-  local descending = above and not player.onSurface and player.vel.y > 0
+  local above = not player.isDying and math.abs(sideways) <= self.halfWidth + player.radius
+  local descending = above and not player.onSurface and sinking > 0
 
   if above then
-    self.squashHeight = math.max(0, math.min(self.squashHeight, bottomY - feetY))
+    self.squashHeight = math.max(0, math.min(self.squashHeight, feetHeight))
   end
   if descending then
-    if player.vel.y > SQUASH_FALL_SPEED then player.vel.y = SQUASH_FALL_SPEED end
+    if sinking > SQUASH_FALL_SPEED then
+      local excess = sinking - SQUASH_FALL_SPEED
+      player.vel.x = player.vel.x + up.x * excess
+      player.vel.y = player.vel.y + up.y * excess
+    end
   else
     self.squashHeight = math.max(0, self.squashHeight - SQUASH_SOLO_SPEED * timeScale)
   end
@@ -170,21 +246,29 @@ function Ooomba:update()
   -- than visually overhanging the end before reversing.
   local prevArcPos = self.surfaceArcPos
   local desiredArcPos = self.surfaceArcPos + self.direction * self.speed * speedMultiplier * timeScale
-  if desiredArcPos < self.halfWidth or desiredArcPos > perimeter - self.halfWidth then
+  -- Measured before any wrap below, so a lap boundary doesn't read as
+  -- one enormous step.
+  local actualDs = desiredArcPos - prevArcPos
+  if shape.isLoop then
+    -- A round planetoid (see Ooomba.newOnPlanet) has no ends to turn
+    -- around at — it just keeps walking laps.
+    self.surfaceArcPos = desiredArcPos % perimeter
+  elseif desiredArcPos < self.halfWidth or desiredArcPos > perimeter - self.halfWidth then
     self.direction = -self.direction -- reached the end — turn around instead of falling off
+    actualDs = 0
   else
     self.surfaceArcPos = desiredArcPos
   end
 
   local surface = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
   self.pos = surface.point
+  if not shape.forceUprightJump then self.up = surface.normal:clone() end
 
   self.walkCyclePhase = self.walkCyclePhase + self.walkCycleSpeed * timeScale
 
   -- Actual distance covered THIS frame, not the attempted step above —
   -- 0 on the very frame he turns around at an end, so that frame
   -- correctly spawns no footstep dust for a step he didn't actually take.
-  local actualDs = self.surfaceArcPos - prevArcPos
   self.walkTime = self.walkTime + (math.abs(actualDs) / self.strideLength) * math.pi * 2
   local bobT = math.sin(self.walkTime) ^ 2
   local justPlanted = bobT > 0.85 and self.lastWalkBobT <= 0.85
@@ -227,8 +311,16 @@ function Ooomba:draw()
   scaleX = scaleX * (1 + SQUASH_MAX_BULGE * (1 - squash))
   scaleY = scaleY * squash
 
+  -- Feet toward the ground, head along self.up — no rotation at all on
+  -- terrain (up is straight up the screen there), turned to stand
+  -- upright on the surface anywhere round a planetoid.
+  local up = self.up
+  local feetDist = self.halfHeight + DRAW_Y_OFFSET
+  local rotation = math.atan2(up.y, up.x) + math.pi / 2
+
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(img, quad, self.pos.x, self.pos.y + self.halfHeight + DRAW_Y_OFFSET, 0, scaleX, scaleY, sheetFrameW / 2, sheetFrameH)
+  love.graphics.draw(img, quad, self.pos.x - up.x * feetDist, self.pos.y - up.y * feetDist, rotation,
+    scaleX, scaleY, sheetFrameW / 2, sheetFrameH)
 end
 
 return Ooomba

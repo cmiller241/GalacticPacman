@@ -115,6 +115,12 @@ local function loadAssets(onComplete)
   state.buttonIcons.CIRCLE = love.graphics.newImage("img/prompt_circle.png", { mipmaps = true })
   state.buttonIcons.CIRCLE:setFilter("linear", "linear")
 
+  -- Title-screen logo (see lua/ui/TitleScreen.lua) — 1973x341, scaled
+  -- down to a fraction of the window's width at draw time, so "linear"
+  -- with mipmaps rather than the pixel-art "nearest" default.
+  state.titleLogoTexture = love.graphics.newImage("img/title.png", { mipmaps = true })
+  state.titleLogoTexture:setFilter("linear", "linear")
+
   -- The interact button for the "Press [button] to ..." prompts (see
   -- lua/ui/InteractPrompt.lua), per input device.
   state.promptIcons = {

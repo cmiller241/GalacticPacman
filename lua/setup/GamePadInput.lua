@@ -60,6 +60,7 @@
 local state = require("lua.state")
 local inputHandlers = require("lua.setup.inputHandlers")
 local tryRestartOrAdvance = inputHandlers.tryRestartOrAdvance
+local TitleScreen = require("lua.ui.TitleScreen")
 
 -- Positional mapping — see this file's own header comment for why
 -- these specific names correspond to these specific PS buttons.
@@ -153,6 +154,28 @@ local function pollGamepad(dt)
       tryRestartOrAdvance()
     end
     lastXPressed = xPressed
+    return
+  end
+
+  -- Title screen (see lua/ui/TitleScreen.lua): X starts the game and
+  -- nothing else on the controller does anything at all. Any button or
+  -- stick still counts as "using the gamepad", though, so the prompt
+  -- shows the X button rather than the Enter key.
+  if state.titleScreen then
+    local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
+    if xPressed and not lastXPressed then
+      TitleScreen.requestStart()
+    end
+    lastXPressed = xPressed
+
+    state.gamepadAimActive = false
+    state.gamepadFireHeld = false
+    state.gamepadRunHeld = false
+    local stickX, stickY = gp:getGamepadAxis("leftx") or 0, gp:getGamepadAxis("lefty") or 0
+    if gp:isGamepadDown(ALL_FACE_AND_SHOULDER_BUTTONS)
+       or math.abs(stickX) > STICK_DEADZONE or math.abs(stickY) > STICK_DEADZONE then
+      state.lastGamepadInputTime = love.timer.getTime()
+    end
     return
   end
 

@@ -13,8 +13,10 @@ Starfield.__index = Starfield
 -- bottom. The old flat BG_COLOR (0.015, 0.025, 0.07) was so dim it read
 -- as plain black rather than navy — TOP_COLOR below is brightened up
 -- enough to actually register as blue.
-local TOP_COLOR = { 0.06, 0.09, 0.22, 1 }
-local BOTTOM_COLOR = { 0.01, 0.015, 0.04, 1 }
+-- Brightened a step from { 0.06, 0.09, 0.22 } / { 0.01, 0.015, 0.04 } —
+-- on a darker display the bottom half read as flat black.
+local TOP_COLOR = { 0.09, 0.13, 0.30, 1 }
+local BOTTOM_COLOR = { 0.03, 0.045, 0.11, 1 }
 local GRADIENT_STRIPS = 48 -- horizontal bands approximating the gradient — plenty smooth at this scale, no shader needed
 local STAR_DENSITY = 8
 
@@ -98,6 +100,15 @@ function Starfield:draw(camera, visibleWidth, visibleHeight)
   local camX = camera and camera.x or 0
   local camY = camera and camera.y or 0
 
+  -- Stars are drawn in SCREEN pixels (this runs before love.draw applies
+  -- the camera's own scale), so what has to be covered is the window
+  -- itself — not visibleWidth/visibleHeight, which are the window's size
+  -- in WORLD units (window / zoom). Culling against those is what left
+  -- the right and bottom of the window starless whenever the camera was
+  -- zoomed in past 1: at zoom 1.4 they're only 71% of the window.
+  local screenW, screenH = love.graphics.getWidth(), love.graphics.getHeight()
+  local wrap = 3000
+
   for _, layer in ipairs(self.layers) do
     local px = camX * layer.parallax
     local py = camY * layer.parallax
@@ -110,16 +121,23 @@ function Starfield:draw(camera, visibleWidth, visibleHeight)
       local sy = star.y - py
 
       -- Simple wrap (keeps stars recycling)
-      local wrap = 3000
       sx = sx % wrap
-      if sx < 0 then sx = sx + wrap end
       sy = sy % wrap
-      if sy < 0 then sy = sy + wrap end
 
-      -- Only draw if roughly on screen (cheap cull)
-      if sx > -50 and sx < visibleWidth + 50 and
-         sy > -50 and sy < visibleHeight + 50 then
-        love.graphics.circle("fill", sx, sy, star.size * star.brightness)
+      -- The pattern repeats every `wrap` pixels, so it's tiled across
+      -- however much window there is — a window wider or taller than
+      -- one repeat (a 4K display) gets further copies rather than the
+      -- stars simply stopping at 3000px. On an ordinary window each
+      -- loop runs once, for stars inside it, and not at all otherwise.
+      local radius = star.size * star.brightness
+      local y = sy
+      while y < screenH + 50 do
+        local x = sx
+        while x < screenW + 50 do
+          love.graphics.circle("fill", x, y, radius)
+          x = x + wrap
+        end
+        y = y + wrap
       end
     end
   end

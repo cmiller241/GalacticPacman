@@ -70,6 +70,7 @@ local function toJsStyleKey(loveKey)
 end
 
 local state = require("lua.state")
+local TitleScreen = require("lua.ui.TitleScreen")
 
 -- Shared by the Enter key handler and the mousedown handler below —
 -- same role and same logic as the original. levelSetup is required
@@ -119,6 +120,7 @@ local function attachInputHandlers()
     -- Clicks, the wheel and key presses all count as "using keyboard/
     -- mouse" for InteractPrompt.lua's own button icon.
     state.lastKeyboardMouseInputTime = love.timer.getTime()
+    if state.titleScreen then return end -- no shooting/pulling on the title screen
     if tryRestartOrAdvance() then return end  -- same early-return as the original
     if button == 1 then
       state.mouseDown = true
@@ -140,6 +142,7 @@ local function attachInputHandlers()
   -- SCROLL WHEEL ZOOM
   -- ----------------------------
   function love.wheelmoved(x, y)
+    if state.titleScreen then return end -- no zooming on the title screen
     -- Inverted vs the original's own `e.deltaY > 0 ? -STEP : STEP`
     -- specifically because LÖVE's y sign convention is the opposite
     -- of JS's deltaY — see this file's own header comment.
@@ -155,8 +158,20 @@ local function attachInputHandlers()
   -- ----------------------------
   function love.keypressed(loveKey, scancode, isrepeat)
     local key = toJsStyleKey(loveKey)
-    state.keys[key] = true
     state.lastKeyboardMouseInputTime = love.timer.getTime()
+
+    -- Title screen (see lua/ui/TitleScreen.lua): Enter, Space or X
+    -- starts the game and no other key does anything — checked before
+    -- state.keys is even set, so held keys (zoom, movement) can't act
+    -- on the scene underneath either.
+    if state.titleScreen then
+      if not isrepeat and (key == 'Enter' or key == ' ' or key == 'x') then
+        TitleScreen.requestStart()
+      end
+      return
+    end
+
+    state.keys[key] = true
 
     if key == ' ' then
       if state.player and state.player.inPinball then
