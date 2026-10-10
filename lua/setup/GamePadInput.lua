@@ -151,6 +151,7 @@ local function pollGamepad(dt)
     state.gamepadFireHeld = false
     state.gamepadRunHeld = isShiftHeld()
     state.gamepadIsActiveDevice = false
+    state.gamepadPullHeld = false
     return
   end
 
@@ -406,11 +407,16 @@ local function pollGamepad(dt)
   if state.player then
     if l2Pressed and not lastL2Pressed then
       state.player:trySelectPullTarget(state.player.lockedTarget or state.player.aimTargetObject)
-    elseif not l2Pressed and lastL2Pressed then
+    elseif not l2Pressed and lastL2Pressed and not state.vatsActive then
+      -- Letting go of L2 drops the pull — except in V.A.T.S., where a
+      -- pull already under way carries on by itself while the next
+      -- target is being chosen (see main.lua's own V.A.T.S. rules, which
+      -- also settle what happens to it when V.A.T.S. ends).
       state.player:clearPullTarget()
     end
   end
   lastL2Pressed = l2Pressed
+  state.gamepadPullHeld = l2Pressed
 
   -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
   -- own on-screen cursor instead — see that file) ---

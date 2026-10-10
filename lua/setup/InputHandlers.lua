@@ -136,7 +136,9 @@ local function attachInputHandlers()
     if button == 1 then
       state.mouseDown = false
     elseif button == 2 then
-      if state.player then state.player:clearPullTarget() end
+      -- Not in V.A.T.S. — same rule as letting go of L2 (see
+      -- GamePadInput.lua's own L2 handling).
+      if state.player and not state.vatsActive then state.player:clearPullTarget() end
     end
   end
 

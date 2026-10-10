@@ -2035,6 +2035,24 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             -- wiring, which is where that reference actually gets
             -- resolved to the real spawned Sphere).
             id = obj.id,
+            -- Optional "radius" custom property — the Sphere's own
+            -- radius in WORLD units, the same units as its default
+            -- (Sphere.DEFAULT_RADIUS, 30), not Tiled pixels. nil when
+            -- not set (or not a number), which leaves it at that
+            -- default. A String in Tiled's own export, like every other
+            -- custom property here, hence tonumber.
+            radius = tonumber(obj.properties and obj.properties["radius"]),
+            -- Optional "ooomba" custom property — how many Ooombas
+            -- walk laps of this Sphere (see main.lua's own Sphere spawn
+            -- loop and Ooomba.newOnPlanet). 0 when not set.
+            ooombaCount = math.max(0, math.floor(tonumber(obj.properties and obj.properties["ooomba"]) or 0)),
+            -- Optional "gravity" custom property — the radius of this
+            -- Sphere's gravity, measured from its CENTER, in world
+            -- units (the same units as "radius"): anywhere within that
+            -- distance, it's what pulls on the player. nil when not
+            -- set, which leaves the Sphere's own small default (see
+            -- Sphere.new).
+            gravityRadius = tonumber(obj.properties and obj.properties["gravity"]),
           })
         elseif obj.class == "Spikey" then
           table.insert(spikeySpawns, {

@@ -33,8 +33,23 @@ local ORB_COLORS = {
   glow = { 0.55, 0.70, 0.95 },
 }
 
+-- With the same soft sun-side highlight every ordinary planetoid has,
+-- read straight from Planetoid's own settings so the two always match —
+-- change it there and Spheres follow.
+--
+-- And with the chrome gradient multiplied over it (see GlowOrb.lua's
+-- own metal block and lua/effects/MetalGradient.lua) — the same metal
+-- as the title-screen logo, wrapped round the ball. METAL_OPACITY is
+-- how strongly: 0 none, 1 the full gradient.
+Sphere.METAL_OPACITY = 0.5
+
 local function drawMetallic(self)
-  GlowOrb.draw(self.pos.x, self.pos.y, self.radius, ORB_COLORS)
+  GlowOrb.draw(self.pos.x, self.pos.y, self.radius, ORB_COLORS, {
+    metalOpacity = Sphere.METAL_OPACITY,
+    highlightAlpha = Planetoid.HIGHLIGHT_ALPHA,
+    highlightSize = Planetoid.HIGHLIGHT_SIZE,
+    highlightOffset = Planetoid.HIGHLIGHT_OFFSET,
+  })
 end
 
 -- x, y: world position of the sphere's CENTER.

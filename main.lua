@@ -65,6 +65,12 @@ local ZOOM_WINDOW_SNAP = 0.002
 -- Upward speed (world units per baseline frame) the player hops off a
 -- freshly flattened Ooomba with — a small rebound, well under a jump.
 local OOOMBA_STOMP_BOUNCE = 7
+-- Opacity of the 'R' gravity rings (see the ring pass in love.draw).
+local INFLUENCE_RING_ALPHA_PULLING = 0.9  -- the body whose gravity has hold of him right now
+local INFLUENCE_RING_ALPHA_INSIDE = 0.5   -- he's inside its reach, but another body has the stronger claim
+local INFLUENCE_RING_ALPHA_NEAR = 0.35    -- he's just outside its reach...
+local INFLUENCE_RING_ALPHA_FAR = 0.05     -- ...down to this once he's INFLUENCE_RING_FADE_DISTANCE beyond it
+local INFLUENCE_RING_FADE_DISTANCE = 700
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
@@ -109,6 +115,8 @@ local function resetWorldState()
   state.gameOver, state.levelComplete = false, false
   state.keys = {}
   state.mouseDown = false
+  state.vatsWasActive = false
+  state.gamepadPullHeld = false
 
   -- The old world's canvases (baked terrain and so on) are garbage now;
   -- collected here, before building their replacements, rather than
@@ -167,7 +175,12 @@ function love.load()
   -- greeting afterward.
   state.scriptsCompleted = {}
   state.vatsActive = false
-  state.vatsAutoEnterOnLock = true
+  -- Whether cycling the lock-on target with L1/R1 also drops into
+  -- V.A.T.S. (slow motion + the screen overlay) on its own. Off: L1/R1
+  -- just pick the next/previous target in real time, and V.A.T.S. is
+  -- only ever entered deliberately, with Triangle (see GamePadInput.lua's
+  -- own maybeAutoEnterVats and Triangle handling).
+  state.vatsAutoEnterOnLock = false
   state.vatsTimeScale = VATS_TIME_SCALE
   state.score = 0
   state.level = 1
@@ -242,7 +255,7 @@ function love.load()
   -- up at all yet (no ball entity, no flipper-swing/plunger-pull
   -- gameplay) — this is the exterior landmark + overlay + ready-to-use
   -- collision, nothing more.
-  local SHOW_PINBALL_PLANET = true
+  local SHOW_PINBALL_PLANET = false -- off for now: no pinball planet, and so no entry beam for it either (that only exists if the planet does). true brings both back.
   if SHOW_PINBALL_PLANET then
     -- Doubled from the original 225/375/50, per explicit request after
     -- seeing it in place — the overlay's own shapes are plain vector
@@ -604,9 +617,47 @@ function love.load()
     -- from.
     local entitiesById = {}
     for _, spawn in ipairs(terrainLevel.sphereSpawns or {}) do
-      local sphere = Sphere.new(spawn.x, spawn.y)
+      -- spawn.radius: the object's optional "radius" property in Tiled;
+      -- nil falls back to Sphere.DEFAULT_RADIUS.
+      local sphere = Sphere.new(spawn.x, spawn.y, spawn.radius)
       table.insert(state.planetoids, sphere)
       if spawn.id then entitiesById[spawn.id] = sphere end
+
+      -- spawn.gravityRadius: the object's optional "gravity" property —
+      -- how far out from the Sphere's center its gravity reaches. A
+      -- Sphere's own default reach is deliberately tiny (see Sphere.new),
+      -- so small that a jump off anywhere but the very top leaves its
+      -- pull and never comes back; setting this is how a Sphere becomes
+      -- somewhere he can jump around on. It has to reach past the
+      -- surface to do anything at all, so a value that doesn't is
+      -- reported rather than silently applied.
+      if spawn.gravityRadius then
+        if spawn.gravityRadius > sphere.radius then
+          sphere.influenceRadius = spawn.gravityRadius
+        else
+          print(string.format(
+            "main.lua: Sphere at (%.0f, %.0f) has gravity=%s, which is not beyond its own radius of %s — ignored.",
+            spawn.x, spawn.y, tostring(spawn.gravityRadius), tostring(sphere.radius)))
+        end
+      end
+
+      -- spawn.ooombaCount: the object's optional "ooomba" property —
+      -- that many Ooombas walking laps of this Sphere (see
+      -- Ooomba.newOnPlanet). Spaced evenly round it and all walking the
+      -- same way at the same speed, so they keep their spacing and
+      -- never bunch up or pass through one another; which way is
+      -- picked per Sphere, and the starting point is random so two
+      -- Spheres with Ooombas don't look like copies of each other.
+      -- Ordinary Ooombas in every other respect: lethal to touch, can
+      -- be stomped or shot.
+      if (spawn.ooombaCount or 0) > 0 then
+        local direction = math.random() < 0.5 and -1 or 1
+        local firstAngle = math.random() * math.pi * 2
+        for i = 1, spawn.ooombaCount do
+          local angle = firstAngle + (i - 1) / spawn.ooombaCount * math.pi * 2
+          table.insert(state.ooombas, Ooomba.newOnPlanet(sphere, angle, { direction = direction }))
+        end
+      end
     end
 
     -- "Sphere-Move" objects (see lua/world/SphereMove.lua): same Sphere,
@@ -871,7 +922,7 @@ function love.load()
     state.signs = state.signs or {}
     table.insert(state.signs, Sign.new(
       planet.pos.x + up.x * planet.radius, planet.pos.y + up.y * planet.radius,
-      "With so many planets clustered together, consider pressing **TRIANGLE** to slow down time. In this state, you can move the right joystick cursor around to select planets you can pull beam toward. ",
+      "With so many planets clustered together, consider pressing **TRIANGLE** to slow down time. In this state, you can move the right joystick cursor around to select planets you can pull beam toward using the **L2** button. If you want time to go back to normal, press **TRIANGLE** again",
       { texture = state.signPlanetTexture, up = up }))
   end
 
@@ -1025,6 +1076,33 @@ function love.update(dt)
   -- is closed. The pad is still polled above, since that's how the menu
   -- itself is driven.
   if PauseMenu.isOpen() then return end
+
+  -- V.A.T.S. rules. While it's active (Triangle — see GamePadInput.lua)
+  -- the player doesn't act on his own: no walking (see the move call
+  -- further down), and no jumping, ground-pounding, curling into a ball
+  -- or firing (each of those Player methods refuses while
+  -- state.vatsActive). All he can do is choose a target — L1/R1 or the
+  -- right-stick cursor — and press L2 to pull-beam to it, which ends
+  -- V.A.T.S. (Player:trySelectPullTarget).
+  --
+  -- A pull already under way when V.A.T.S. is entered carries on by
+  -- itself, even with L2 released (GamePadInput.lua doesn't drop it
+  -- while V.A.T.S. is active) — which is what lets him chain from one
+  -- planetoid to the next without landing: pull, V.A.T.S., pick the
+  -- next, pull again.
+  --
+  -- And the moment V.A.T.S. ends, however it ends:
+  --   - whatever was locked during it is unlocked;
+  --   - a pull that was only still going because V.A.T.S. was holding
+  --     it — nobody is actually holding L2 (or the right mouse button)
+  --     — is dropped, back to the ordinary hold-to-pull rule.
+  if state.vatsWasActive and not state.vatsActive and state.player then
+    state.player:clearLockTarget()
+    if state.player.pullTarget and not (state.gamepadPullHeld or love.mouse.isDown(2)) then
+      state.player:clearPullTarget()
+    end
+  end
+  state.vatsWasActive = state.vatsActive
 
   TitleScreen.update(dt)
   VatsCursor.update(dt)
@@ -1208,7 +1286,9 @@ function love.update(dt)
   if state.titleScreen then
     state.player:move(TitleScreen.getKeys())
   else
-    state.player:move((state.introLocked or state.player.inPinball) and {} or state.keys)
+    -- (No walking in V.A.T.S. either — see the V.A.T.S. rules near the
+    -- top of this function.)
+    state.player:move((state.introLocked or state.player.inPinball or state.vatsActive) and {} or state.keys)
   end
 
   -- PinballInterior:updateBall entirely REPLACES normal gravity and
@@ -1697,12 +1777,35 @@ function love.draw()
   -- range isn't a circle at all (isWithinGravityWindow / "whatever's
   -- underfoot"), so a ring around them would just be wrong, not merely
   -- redundant.
+  --
+  -- How strongly each ring shows says how much that body's gravity
+  -- matters to him RIGHT NOW (see the INFLUENCE_RING_* values at the top
+  -- of this file): brightest for the one actually pulling on him,
+  -- clearly visible for any other whose reach he's inside, and for the
+  -- rest fading with how far outside the ring's own edge he is. It used
+  -- to fade with his distance from the body's CENTER, which made a big
+  -- ring fainter than a small one for no better reason than its size —
+  -- standing on a large sphere, well inside its reach, its ring was
+  -- nearly invisible.
   if state.showInfluenceRings then
+    local player = state.player
+    local pulling = (player.onSurface and player.currentPlanet)
+      or (state.gravitySystem and state.gravitySystem:findDominantPlanet(player.pos))
     for _, p in ipairs(state.planetoids) do
       if p.influenceRadius and not p.isRoundedRect
          and utils.isOnScreen(p.pos.x, p.pos.y, p.influenceRadius, 50) then
-        p:updateCachedAlpha()
-        InfluenceRing.draw(p.pos.x, p.pos.y, p.influenceRadius, p.cachedAlpha)
+        local dx, dy = player.pos.x - p.pos.x, player.pos.y - p.pos.y
+        local outside = math.sqrt(dx * dx + dy * dy) - p.influenceRadius -- negative: he's within its reach
+        local alpha
+        if p == pulling then
+          alpha = INFLUENCE_RING_ALPHA_PULLING
+        elseif outside <= 0 then
+          alpha = INFLUENCE_RING_ALPHA_INSIDE
+        else
+          local t = math.min(1, outside / INFLUENCE_RING_FADE_DISTANCE)
+          alpha = INFLUENCE_RING_ALPHA_NEAR + (INFLUENCE_RING_ALPHA_FAR - INFLUENCE_RING_ALPHA_NEAR) * t
+        end
+        InfluenceRing.draw(p.pos.x, p.pos.y, p.influenceRadius, alpha)
       end
     end
   end
