@@ -98,6 +98,7 @@ local function resetWorldState()
   state.cranks, state.signs, state.gates = nil, nil, nil
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
+  state.beltLandingPlanet = nil
 
   -- Whatever was in progress.
   state.camera = nil
@@ -477,6 +478,7 @@ function love.load()
 
     local beltLandingPlanet = Sphere.new(beltPlanetX, beltPlanetY, BELT_PLANET_RADIUS)
     table.insert(state.planetoids, beltLandingPlanet)
+    state.beltLandingPlanet = beltLandingPlanet -- its own sign is planted further down, once state.signs exists
 
     local beltBeam = Beam.new(beltPlanetX, beltPlanetY - BELT_PLANET_RADIUS, -math.pi / 2)
 
@@ -851,6 +853,28 @@ function love.load()
   -- door sliding open around them, then closing again once they've
   -- stepped out. state.introLocked (checked in love.update) keeps
   -- movement input from interrupting that sequence.
+
+  -- A sign on the belt-edge landing planet (the white one the home beam
+  -- arrives on — see the beam pair above), planted on the far side from
+  -- its beam: the beam stands on top, so the sign hangs off the
+  -- underside, turned to stand on the surface there — not at the very
+  -- bottom (the south pole) but SIGN_OFFSET_FROM_SOUTH_POLE round from
+  -- it, toward the lower left (the side facing the belt). Negative
+  -- would put it toward the lower right instead. Added here rather
+  -- than up by the planet itself because state.signs is created by the
+  -- Tiled level's own sign loop, which runs in between.
+  if state.beltLandingPlanet then
+    local planet = state.beltLandingPlanet
+    local SIGN_OFFSET_FROM_SOUTH_POLE = math.rad(35)
+    local signAngle = math.pi / 2 + SIGN_OFFSET_FROM_SOUTH_POLE -- pi/2 is straight down the screen
+    local up = Vector2.new(math.cos(signAngle), math.sin(signAngle)) -- away from the planet's center, where the sign stands
+    state.signs = state.signs or {}
+    table.insert(state.signs, Sign.new(
+      planet.pos.x + up.x * planet.radius, planet.pos.y + up.y * planet.radius,
+      "With so many planets clustered together, consider pressing **TRIANGLE** to slow down time. In this state, you can move the right joystick cursor around to select planets you can pull beam toward. ",
+      { texture = state.signPlanetTexture, up = up }))
+  end
+
   local topY = dome:trueSurfaceY()
   local doorwayX = state.spaceShelter and (state.spaceShelter:getDoorwayPosition()) or dome.pos.x
   state.player = Player.new(doorwayX, topY - constants.PLAYER_RADIUS)
