@@ -94,6 +94,33 @@ local function loadAssets(onComplete)
   -- bare planetoid (see main.lua's own belt-landing-planet sign).
   state.signPlanetTexture = love.graphics.newImage("img/sign-planet.png")
 
+  -- Mining prism (see lua/world/Prism.lua) — 1000x3572 each, scaled
+  -- down a long way at draw time, so "linear" with mipmaps.
+  --
+  -- The file holds several pictures of the same prism side by side:
+  -- whole on the left, then more and more broken (what a cluster turns
+  -- into as it's shot — see Prism.DAMAGE_HITS, which has one entry per
+  -- broken picture). Each starts MINING_FRAME_WIDTH pixels after the
+  -- one before, and is cut out into an image of its own here rather
+  -- than drawn as a piece of the one sheet: Prism.lua's shader reads heavily blurred copies of
+  -- its image (small mipmaps) to find a prism's edges, and on a shared
+  -- sheet those would blur one picture into the other.
+  local MINING_FRAME_WIDTH = 1000
+  local miningSheet = love.image.newImageData("img/mining.png")
+  local function miningFrame(index)
+    local frame = love.image.newImageData(MINING_FRAME_WIDTH, miningSheet:getHeight())
+    frame:paste(miningSheet, 0, 0, index * MINING_FRAME_WIDTH, 0, MINING_FRAME_WIDTH, miningSheet:getHeight())
+    local image = love.graphics.newImage(frame, { mipmaps = true })
+    image:setFilter("linear", "linear")
+    return image
+  end
+  local MINING_DAMAGED_FRAMES = 2
+  state.miningTexture = miningFrame(0)
+  state.miningDamagedTextures = {}
+  for i = 1, MINING_DAMAGED_FRAMES do
+    state.miningDamagedTextures[i] = miningFrame(i)
+  end
+
   -- Inline button icons — pixel art, 12px tall, drawn at 2x, "nearest"
   -- default kept (all but CIRCLE — see just below the loop). Keyed by the UPPERCASE name a dialogue string uses
   -- between double asterisks (e.g. "Hold **R2** to fire" — see
