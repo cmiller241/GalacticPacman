@@ -1110,8 +1110,12 @@ local function beginGame()
 
   state.zoom = 1
   state.zoomTarget = nil
-  -- Coins the autopilot picked up on the title screen don't count.
+  -- Coins the autopilot picked up on the title screen don't count —
+  -- nor anything it mined (see main.lua's own breakAsteroid), including
+  -- pieces still on their way to him.
   state.score = 0
+  for name in pairs(state.elements or {}) do state.elements[name] = 0 end
+  state.elementPieces = {}
   love.audio.setVolume(GAME_VOLUME)
 
   -- worldGen streams around the CAMERA (see worldGen.streamFocus), which

@@ -39,6 +39,9 @@ local Lever = require("lua.world.Lever")
 local Crank = require("lua.world.Crank")
 local Mirror = require("lua.world.Mirror")
 local Sign = require("lua.world.Sign")
+local Prism = require("lua.world.Prism")
+local ElementPiece = require("lua.entities.ElementPiece")
+local CrystalPlanet = require("lua.world.CrystalPlanet")
 local PinballInterior = require("lua.interiors.PinballInterior")
 local Beam = require("lua.world.Beam")
 local Gate = require("lua.world.Gate")
@@ -105,6 +108,8 @@ local function resetWorldState()
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
   state.beltLandingPlanet = nil
+  state.miningPlanet, state.prisms = nil, nil
+  state.elementPieces = {}
 
   -- Whatever was in progress.
   state.camera = nil
@@ -183,6 +188,7 @@ function love.load()
   state.vatsAutoEnterOnLock = false
   state.vatsTimeScale = VATS_TIME_SCALE
   state.score = 0
+  state.elements = { rubinium = 0, asteroidium = 0 } -- how much of each he's mined (see lua/entities/ElementPiece.lua)
   state.level = 1
   state.fireballs = {}
   state.explosions = {}
@@ -498,6 +504,26 @@ function love.load()
     homeBeam.destination = beltBeam
     beltBeam.destination = homeBeam
     state.beams = { homeBeam, beltBeam }
+  end
+
+  -- === Mining planet ===
+  -- A ball of cyan glass (see lua/world/CrystalPlanet.lua) that turns,
+  -- drifts and can be ground-pounded along, with the mining
+  -- prisms (see lua/world/Prism.lua) growing out of it in clusters. Twice the
+  -- radius of the biggest planetoid the field generates (70 — see
+  -- WorldGen.lua's createPlanetoidsInCell). It STARTS directly below
+  -- the belt-edge landing planet, clear of the belt's outer edge.
+  do
+    local MINING_PLANET_RADIUS = 140
+    local MINING_PLANET_PRISM_CLUSTERS = 5
+    local MINING_PLANET_BELOW_LANDING_PLANET = 900 -- center to center
+    local anchor = state.beltLandingPlanet
+    local miningPlanet = CrystalPlanet.new(
+      anchor.pos.x, anchor.pos.y + MINING_PLANET_BELOW_LANDING_PLANET,
+      MINING_PLANET_RADIUS)
+    table.insert(state.planetoids, miningPlanet)
+    state.miningPlanet = miningPlanet
+    state.prisms = Prism.scatterClusters(miningPlanet, MINING_PLANET_PRISM_CLUSTERS)
   end
 
   -- === Pinball planet entry beam ===
@@ -938,6 +964,25 @@ function love.load()
   -- Where Player:respawn puts him back after dying — this same doorway.
   state.respawnPoint = { x = doorwayX, y = topY - constants.PLAYER_RADIUS, planet = dome }
 
+  -- TEMPORARY, for looking at the mining planet and its prisms: the
+  -- game starts him there instead of at the shelter door (and so does
+  -- every respawn). Set to false — or delete this block — to go back.
+  -- He's stood on the very top of it. The planet drifts, so the point
+  -- itself is kept on top of it every frame (see love.update — the
+  -- other half of this, marked TEMPORARY too). The shelter's
+  -- door-opening intro is marked already over, since he isn't there to
+  -- wait behind the door.
+  local TEMP_START_ON_MINING_PLANET = true
+  if TEMP_START_ON_MINING_PLANET and state.miningPlanet then
+    local planet = state.miningPlanet
+    state.respawnPoint = {
+      x = planet.pos.x, y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
+      planet = planet, followsPlanet = true,
+    }
+    state.spaceShelter.playerInFront = true
+    state.spaceShelter.introDone = true
+  end
+
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
   -- before: cell generation steers new planetoids/asteroids away from
@@ -981,11 +1026,55 @@ local function spawnDebrisParticles(pos, count)
   end
 end
 
+-- What happens when a cluster of prisms takes its last shot (see
+-- Prism.DESTROY_HITS): every prism of it goes up in an explosion and is
+-- gone for good, and RUBINIUM_PER_CLUSTER pieces of rubinium (see
+-- lua/entities/ElementPiece.lua) are thrown out of the wreck — each from
+-- somewhere along one of the prisms, out the way that prism pointed —
+-- and then make their own way to him.
+--
+-- prism: any one prism of the cluster.
+local RUBINIUM_PER_CLUSTER = 6
+local function breakPrismCluster(prism)
+  local cluster = prism.group.prisms
+
+  local gone = {}
+  for _, p in ipairs(cluster) do
+    gone[p] = true
+    local x, y = p:pointAlong(0.5)
+    table.insert(state.explosions, Explosion.new(x, y))
+  end
+  for i = #state.prisms, 1, -1 do
+    if gone[state.prisms[i]] then table.remove(state.prisms, i) end
+  end
+
+  local midX, midY = cluster[1]:pointAlong(0.5)
+  spawnDebrisParticles(Vector2.new(midX, midY), 60)
+  if state.audioManager then state.audioManager:playBang("large", Vector2.new(midX, midY)) end
+
+  for _ = 1, RUBINIUM_PER_CLUSTER do
+    local from = cluster[math.random(#cluster)]
+    local x, y, dirX, dirY = from:pointAlong(0.2 + math.random() * 0.7)
+    table.insert(state.elementPieces, ElementPiece.new("rubinium", x, y, dirX, dirY))
+  end
+end
+
 -- Port of js/game.js's breakAsteroid — what happens to an asteroid
 -- that's hit a planetoid or been shot: it's gone in a bang and a burst
 -- of debris, and unless it was already small (radius under 15) it
 -- leaves 2 smaller asteroids behind (3 if it was a big one, radius over
 -- 30), each half its radius, flung apart.
+--
+-- One too small to leave any pieces (radius under ASTEROID_SPLIT_MIN_RADIUS)
+-- just bursts.
+--
+-- Asteroidium (see lua/entities/ElementPiece.lua), only when it was
+-- SHOT: a too-small one always leaves some; a bigger one has an
+-- ASTEROIDIUM_CHANCE chance of leaving some INSTEAD of breaking into
+-- smaller asteroids. How many is part size, part luck — see
+-- asteroidiumCountFor. (The title screen's autopilot earns it too; what
+-- it collected is thrown away when the game starts — see
+-- TitleScreen.lua's own beginGame.)
 --
 -- planet: the planetoid it hit, or nil if it was shot. One deliberate
 -- difference from the JS, for a round planetoid only: the pieces are
@@ -993,6 +1082,21 @@ end
 -- original threw them in any direction off the asteroid's own inbound
 -- velocity, which sent about half of them straight back into the
 -- planetoid to break again the very next frame.
+local ASTEROID_SPLIT_MIN_RADIUS = 15
+local ASTEROIDIUM_CHANCE = 0.3
+-- The radius at which an asteroid gives the most it can (anything
+-- bigger gives the same) — about the biggest the field generates.
+local ASTEROIDIUM_FULL_RADIUS = 45
+
+-- How many pieces a shot asteroid of this radius leaves: a random number
+-- in a range that climbs with its size — 1 to 2 for the smallest, 2 to 4
+-- for a middling one, 3 to 6 for the biggest.
+local function asteroidiumCountFor(radius)
+  local size = (radius - ASTEROID_SPLIT_MIN_RADIUS) / (ASTEROIDIUM_FULL_RADIUS - ASTEROID_SPLIT_MIN_RADIUS)
+  size = math.max(0, math.min(1, size))
+  return math.random(1 + math.floor(size * 2), 2 + math.floor(size * 4 + 0.5))
+end
+
 local function breakAsteroid(ast, planet)
   for i = #state.asteroids, 1, -1 do
     if state.asteroids[i] == ast then
@@ -1006,7 +1110,18 @@ local function breakAsteroid(ast, planet)
     state.audioManager:playBang(size, ast.pos)
   end
   spawnDebrisParticles(ast.pos, 150)
-  if ast.radius < 15 then return end
+  local tooSmallToSplit = ast.radius < ASTEROID_SPLIT_MIN_RADIUS
+  if not planet and (tooSmallToSplit or math.random() < ASTEROIDIUM_CHANCE) then
+    for _ = 1, asteroidiumCountFor(ast.radius) do
+      local angle = math.random() * math.pi * 2
+      -- Starting a little way out from its middle, more for a bigger one.
+      local out = math.random() * ast.radius * 0.6
+      table.insert(state.elementPieces, ElementPiece.new("asteroidium",
+        ast.pos.x + math.cos(angle) * out, ast.pos.y + math.sin(angle) * out, math.cos(angle), math.sin(angle)))
+    end
+    return
+  end
+  if tooSmallToSplit then return end
 
   local awayAngle, baseVel = nil, ast.vel
   if planet and planet.radius and not planet.isRoundedRect then
@@ -1143,6 +1258,20 @@ function love.update(dt)
 
   updatePlanetoidsPhysics()
 
+  -- Planetoids that turn on the spot (see CrystalPlanet.lua) — before
+  -- Player:move below, which is what places him on the planetoid he's
+  -- being carried round by.
+  for _, p in ipairs(state.planetoids) do
+    if p.updateRotation then p:updateRotation(state.timeScale) end
+  end
+
+  -- TEMPORARY (goes with TEMP_START_ON_MINING_PLANET in love.load):
+  -- keeps the respawn point on top of the mining planet as it drifts.
+  if state.respawnPoint and state.respawnPoint.followsPlanet then
+    local point, planet = state.respawnPoint, state.respawnPoint.planet
+    point.x, point.y = planet.pos.x, planet.pos.y - planet.radius - constants.PLAYER_RADIUS
+  end
+
   -- Duck-typed, same pattern state.spikeys' own update loop already
   -- uses: only SphereMove (so far) actually has an :update() of its
   -- own, driving self.pos directly along its fixed patrol path — every
@@ -1252,6 +1381,25 @@ function love.update(dt)
 
   if state.fisherman then
     state.fisherman:update()
+  end
+
+  if state.prisms then
+    for _, prism in ipairs(state.prisms) do
+      prism:update(dt * (state.timeScale or 1))
+    end
+  end
+
+  -- Rubinium and asteroidium on their way to him (see
+  -- lua/entities/ElementPiece.lua): each piece that arrives is counted
+  -- and gone.
+  for i = #state.elementPieces, 1, -1 do
+    local piece = state.elementPieces[i]
+    piece:update(dt * (state.timeScale or 1), state.player)
+    if piece.collected then
+      state.elements[piece.elementName] = state.elements[piece.elementName] + 1
+      if state.audioManager then state.audioManager:playEatDot() end
+      table.remove(state.elementPieces, i)
+    end
   end
 
   -- Recomputed fresh every frame (never a flag some NPC sets and might
@@ -1486,6 +1634,25 @@ function love.update(dt)
       -- far enough to trust a fresh destructive check against
       -- whatever's sitting right next to it).
       local reflected = state.mirrors and collisionSystem:handleFireballMirrorCollisions(state.fireballs, state.mirrors) or {}
+
+      -- Prisms (see lua/world/Prism.lua): a fireball that reaches one
+      -- goes off against it, and the whole cluster it belongs to lights
+      -- up — and, on its last hit, shatters into rubinium (see
+      -- breakPrismCluster). Checked before the planetoids below, since every prism is
+      -- standing on one.
+      if state.prisms then
+        for i = #state.fireballs, 1, -1 do
+          local f = state.fireballs[i]
+          local prism = not reflected[f] and Prism.findAt(state.prisms, f.pos.x, f.pos.y, f.radius)
+          if prism then
+            local shattered = prism:hit()
+            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
+            if state.audioManager then state.audioManager:playFireball() end
+            table.remove(state.fireballs, i)
+            if shattered then breakPrismCluster(prism) end
+          end
+        end
+      end
 
       if state.asteroids then
         local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
@@ -1821,6 +1988,16 @@ function love.draw()
   for _, p in ipairs(state.planetoids) do
     if p.isWaterPlanet and p.drawBackdrop and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:drawBackdrop()
+    end
+  end
+
+  -- Before the planetoids, so the one each stands on covers its sunken
+  -- foot (see lua/world/Prism.lua).
+  if state.prisms then
+    for _, m in ipairs(state.prisms) do
+      if utils.isOnScreen(m.planet.pos.x, m.planet.pos.y, m:reach(), 50) then
+        m:draw()
+      end
     end
   end
 
@@ -2237,6 +2414,12 @@ function love.draw()
     end
   end
 
+  for _, piece in ipairs(state.elementPieces) do
+    if utils.isOnScreen(piece.pos.x, piece.pos.y, piece.radius, 50) then
+      piece:draw()
+    end
+  end
+
   if state.explosions then
     for _, e in ipairs(state.explosions) do
       e:draw()
@@ -2298,7 +2481,8 @@ function love.draw()
     state.asteroids and #state.asteroids or 0,
     state.fireBars and #state.fireBars or 0
   ), 20, 100)
-  love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 120)
+  love.graphics.print(string.format("Rubinium: %d  Asteroidium: %d", state.elements.rubinium, state.elements.asteroidium), 20, 120)
+  love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 140)
 
   PauseMenu.draw()
 
