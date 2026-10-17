@@ -547,6 +547,7 @@ end
 function Player:exitBallMode()
   if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
+  if self.inPinball then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inPinball first)
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -1486,7 +1487,11 @@ function Player:update()
   -- standing on solid ground.
   self.isWallSliding = false
 
-  if not self.onSurface then
+  -- Not while on a pinball table: PinballInterior:updateBall already
+  -- moved him this frame, with its own collision. Moving him again here
+  -- (with no collision at all, plus space drag) pushed the ball into the
+  -- table's walls at speed — e.g. off the top curve, back down the lane.
+  if not self.onSurface and not self.inPinball then
     -- Wall slide: touchingWall/wallContactNormal reflect contact as of
     -- the END of last frame's collision pass (CollisionSystem resets and
     -- rechecks them once per frame in main.lua) — one frame behind, same
@@ -2787,6 +2792,13 @@ function Player:respawn()
   self.isDying = false
   self.deathTimer = 0
   self.invincibleTimer = INVINCIBLE_TICKS
+
+  -- A respawn point can name a pinball table (point.pinball, a
+  -- PinballInterior) to put him straight onto its plunger as a ball.
+  self.inPinball = nil
+  if point and point.pinball then
+    point.pinball:onEnter(self)
+  end
 end
 
 return Player

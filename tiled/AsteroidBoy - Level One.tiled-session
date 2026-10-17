@@ -25,16 +25,27 @@
         },
         "Level1.tmx#Grass Tiles": {
             "scaleInDock": 1
+        },
+        "Pinball-Level.tmx": {
+            "scale": 0.25,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 564,
+                "y": 972
+            }
+        },
+        "Pinball-Level.tmx#Pinball": {
+            "scaleInDock": 1
         }
     },
     "last.exportedFilePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/tiled",
     "last.externalTilesetPath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/tiled",
     "last.imagePath": "C:/Users/cmill/OneDrive/Desktop/AsteroidBob/img",
     "lastUsedTilesetExportFilter": "All Files (*)",
-    "map.height": 30,
+    "map.height": 60,
     "map.lastUsedExportFilter": "Lua files (*.lua)",
     "map.lastUsedFormat": "tmx",
-    "map.width": 60,
+    "map.width": 30,
     "openFiles": [
         "Level1.tmx",
         "Grass Tiles.tsx"

@@ -20,7 +20,7 @@
 --   GamePadInput.lua   likewise for the controller.
 
 local state = require("lua.state")
-local worldGen = require("lua.setup.worldGen")
+local worldGen = require("lua.setup.WorldGen")
 local Asteroid = require("lua.entities.Asteroid")
 local Ooomba = require("lua.entities.Ooomba")
 local MetalGradient = require("lua.effects.MetalGradient")
