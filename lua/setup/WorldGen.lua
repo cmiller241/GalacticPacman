@@ -576,6 +576,35 @@ function worldGen.cellIntersectsWaterPlanet(col, row)
   return false
 end
 
+-- Same idea again for rectangular landmarks placed in main.lua (the
+-- pinball planet so far): any permanent planetoid flagged
+-- isSpawnExclusion keeps every regular cell its rectangle (plus a
+-- margin) touches empty, so nothing spawns on or around it.
+local LANDMARK_SPAWN_MARGIN = 600
+
+function worldGen.cellIntersectsLandmark(col, row)
+  if not state.planetoids then return false end
+  local x0 = col * worldGen.CELL_SIZE
+  local y0 = row * worldGen.CELL_SIZE
+  local x1 = x0 + worldGen.CELL_SIZE
+  local y1 = y0 + worldGen.CELL_SIZE
+  for _, p in ipairs(state.planetoids) do
+    if p.isSpawnExclusion then
+      local hw, hh = p.halfWidth or p.radius, p.halfHeight or p.radius
+      -- A turning landmark sweeps a whole circle, corner to corner.
+      if (p.rotationSpeed or 0) ~= 0 then
+        local reach = math.sqrt(hw * hw + hh * hh)
+        hw, hh = reach, reach
+      end
+      hw, hh = hw + LANDMARK_SPAWN_MARGIN, hh + LANDMARK_SPAWN_MARGIN
+      if x1 > p.pos.x - hw and x0 < p.pos.x + hw and y1 > p.pos.y - hh and y0 < p.pos.y + hh then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function randomPointInCell(col, row, radius)
   local originX = col * worldGen.CELL_SIZE
   local originY = row * worldGen.CELL_SIZE
@@ -757,7 +786,8 @@ local function generateCell(col, row)
   -- footprint touches is likewise left empty, purely to keep the extra
   -- gravity/collision/draw overhead of planetoids the player could
   -- never actually reach off the frame budget.
-  if not belt and (worldGen.cellIntersectsSkyDome(col, row) or worldGen.cellIntersectsWaterPlanet(col, row)) then return end
+  if not belt and (worldGen.cellIntersectsSkyDome(col, row) or worldGen.cellIntersectsWaterPlanet(col, row)
+      or worldGen.cellIntersectsLandmark(col, row)) then return end
 
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL
   if belt and worldGen.BELT_CELL_BURST_RESPECTS_CAP then

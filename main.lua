@@ -20,9 +20,9 @@ local Starfield = require("lua.world.Starfield")
 local Sun = require("lua.world.Sun")
 local PullBeam = require("lua.effects.PullBeam")
 local assetLoading = require("lua.setup.assetLoading")
-local inputHandlers = require("lua.setup.inputHandlers")
-local gamepadInput = require("lua.setup.gamepadInput")
-local worldGen = require("lua.setup.worldGen")
+local inputHandlers = require("lua.setup.InputHandlers")
+local gamepadInput = require("lua.setup.GamePadInput")
+local worldGen = require("lua.setup.WorldGen")
 local MiniMap = require("lua.ui.MiniMap")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local SpaceShelter = require("lua.world.SpaceShelter")
@@ -248,44 +248,53 @@ function love.load()
   -- "Pinball" planet — a tall RoundedRectPlanetoid (see
   -- lua/world/RoundedRectPlanetoid.lua; same typical baked body/
   -- sun-shading look every rounded-rect landmark already uses, just a
-  -- different shape than a plain circular Planetoid) sitting directly
-  -- below the dome, with an actual pinball-table level overlaid on its
-  -- face — an outer boundary, an obstacle wall, bumpers, flippers, and
-  -- plungers, all traced directly over the real reference image
-  -- (img/pinball.png) using pinball-editor.html, with real
-  -- circle-vs-polygon/bumper collision math behind the boundary/wall/
-  -- bumpers (see lua/interiors/PinballInterior.lua, drawn automatically
-  -- for any planetoid with a .interior — see main.lua's own draw loop
-  -- below). Half-width:half-height is ~0.6, matching that reference
-  -- image's own proportions. Actually entering/playing it isn't wired
-  -- up at all yet (no ball entity, no flipper-swing/plunger-pull
-  -- gameplay) — this is the exterior landmark + overlay + ready-to-use
-  -- collision, nothing more.
-  local SHOW_PINBALL_PLANET = false -- off for now: no pinball planet, and so no entry beam for it either (that only exists if the planet does). true brings both back.
+  -- different shape than a plain circular Planetoid) with a playable
+  -- pinball table on its face, built from the Tiled map
+  -- tiled/Pinball-Level2.lua (see lua/interiors/PinballInterior.lua,
+  -- drawn automatically for any planetoid with a .interior — see
+  -- main.lua's own draw loop below). Entered through the orange beam on
+  -- its top (set up further down), or by pull-beaming over from the belt.
+  --
+  -- The dome's mirror image across the sun: on the sun's LEFT, centered
+  -- on its height, with its right edge about the same distance from the
+  -- sun as the dome's left edge — just past the belt's outer edge, so
+  -- it's in view (and in pull-beam/lock-on reach) from the belt's left side.
+  -- Its cells are kept free of random spawns (see WorldGen.lua's
+  -- cellIntersectsLandmark and the isSpawnExclusion flag).
+  local SHOW_PINBALL_PLANET = true -- false removes the pinball planet and its entry beam
   if SHOW_PINBALL_PLANET then
-    -- Doubled from the original 225/375/50, per explicit request after
-    -- seeing it in place — the overlay's own shapes are plain vector
-    -- polygons (see PinballInterior.lua), so this doesn't add any new
-    -- detail, but it does make everything on the table more legible.
-    local PINBALL_PLANET_HALF_WIDTH = 450 -- 0.6 * half-height, matching the reference image's own aspect ratio
-    local PINBALL_PLANET_HALF_HEIGHT = 750
-    local PINBALL_PLANET_CORNER_RADIUS = 100
-    local PINBALL_PLANET_GAP = 300 -- clearance kept below the dome's own base before this planet starts
-    local pinballX = dome.pos.x
-    local pinballY = dome:domeAnchorY() + dome.baseRadiusY + PINBALL_PLANET_GAP + PINBALL_PLANET_HALF_HEIGHT
-
-    local pinballPlanet = RoundedRectPlanetoid.new(
-      pinballX, pinballY,
-      PINBALL_PLANET_HALF_WIDTH, PINBALL_PLANET_HALF_HEIGHT, PINBALL_PLANET_CORNER_RADIUS,
-      { 0.55, 0.57, 0.62, 1 })
-    pinballPlanet.isImmovable = true
-    pinballPlanet.isPermanent = true
-    pinballPlanet.vel.x, pinballPlanet.vel.y = 0, 0
-    pinballPlanet.rotationAngle = 0
-    pinballPlanet.rotationSpeed = 0
-    pinballPlanet.interior = PinballInterior.new(pinballPlanet)
-    table.insert(state.planetoids, pinballPlanet)
-    state.pinballPlanet = pinballPlanet
+    local pinballMap = require("tiled.Pinball-Level2")
+    -- The table is drawn centered on the planet at 64 world units per
+    -- tile; the planet is a margin bigger than it on every side, so the
+    -- table's square corners sit inside the planet's rounded ones.
+    local PINBALL_PLANET_MARGIN = 128
+    local halfW = pinballMap.width * 64 / 2 + PINBALL_PLANET_MARGIN
+    local halfH = pinballMap.height * 64 / 2 + PINBALL_PLANET_MARGIN
+    local sunX, sunY = worldGen.sunPos()
+    local domeEdgeFromSun = (dome.pos.x - domeHalfW) - sunX
+    local PINBALL_EXTRA_GAP = 100 -- nudged a little further out than the dome's mirror point
+    local planet = RoundedRectPlanetoid.new(
+      sunX - domeEdgeFromSun - PINBALL_EXTRA_GAP - halfW, sunY, halfW, halfH, 64, { 0.55, 0.57, 0.62, 1 })
+    planet.isImmovable = true
+    planet.isPermanent = true
+    planet.isSpawnExclusion = true
+    planet.vel.x, planet.vel.y = 0, 0
+    planet.rotationAngle = 0
+    -- Experimental: radians per frame the planet turns about its center
+    -- (0.0009 is about one full turn every two minutes). Off for now —
+    -- see docs/Pinball-Rotation-Ideas.md. The table turns with it (see
+    -- PinballInterior's tableToWorld/worldToTable), but the orange entry
+    -- beam does NOT, and at its current spot a turning planet swings
+    -- into the belt.
+    local TEMP_PINBALL_ROTATION_SPEED = 0
+    planet.rotationSpeed = TEMP_PINBALL_ROTATION_SPEED
+    -- Baked at 0.5x instead of the default 2x: at this size a 2x body
+    -- canvas would be over 20000 pixels tall, past GPUs' texture limits.
+    -- The table covers almost all of the face, so it barely shows.
+    planet.bodyCanvasScale = 0.5
+    planet.interior = PinballInterior.new(planet, pinballMap)
+    table.insert(state.planetoids, planet)
+    state.pinballPlanet = planet
   end
 
   -- Water planet landmark — an ordinary walkable/landable Planetoid
@@ -540,8 +549,7 @@ function love.load()
   -- curls him into a ball and hands control to PinballInterior the
   -- instant he lands. Getting back OUT happens by draining off the
   -- bottom of the table (PinballInterior:exitBall), not a return beam.
-  if state.pinballPlanet then
-    local pinball = state.pinballPlanet
+  local function addPinballEntryBeam(pinball)
     local PINBALL_BEAM_OFFSET_X = -pinball.halfWidth * 0.4 -- off-center so it doesn't sit exactly at the rounded top's own midpoint
     local pinballBeamX = pinball.pos.x + PINBALL_BEAM_OFFSET_X
     local pinballBeamY = pinball.pos.y - pinball.halfHeight
@@ -554,7 +562,10 @@ function love.load()
       end,
     }
     table.insert(state.beams, pinballBeam)
+    -- Draining puts him back on the planet's top, beside this beam.
+    pinball.interior.exitPosition = { x = pinballBeamX + pinball.halfWidth * 0.15 }
   end
+  if state.pinballPlanet then addPinballEntryBeam(state.pinballPlanet) end
 
   -- === TILED HILL TERRAIN above the sky dome's ground ===
   -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
@@ -972,13 +983,24 @@ function love.load()
   -- other half of this, marked TEMPORARY too). The shelter's
   -- door-opening intro is marked already over, since he isn't there to
   -- wait behind the door.
-  local TEMP_START_ON_MINING_PLANET = true
+  local TEMP_START_ON_MINING_PLANET = false
   if TEMP_START_ON_MINING_PLANET and state.miningPlanet then
     local planet = state.miningPlanet
     state.respawnPoint = {
       x = planet.pos.x, y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
       planet = planet, followsPlanet = true,
     }
+    state.spaceShelter.playerInFront = true
+    state.spaceShelter.introDone = true
+  end
+
+  -- TEMPORARY, for testing the pinball table: the game starts him on
+  -- its plunger, already a ball (and so does every respawn — see
+  -- Player:respawn's own point.pinball). Set to false to go back.
+  local TEMP_START_IN_PINBALL = true
+  if TEMP_START_IN_PINBALL and state.pinballPlanet then
+    local portal = state.pinballPlanet.interior:getPortalPosition()
+    state.respawnPoint = { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
     state.spaceShelter.playerInFront = true
     state.spaceShelter.introDone = true
   end
@@ -1446,7 +1468,8 @@ function love.update(dt)
   -- invincibility, none of which should pause just because he's now
   -- inside the table.
   if state.player.inPinball then
-    state.player.inPinball:updateBall(state.player, state.timeScale)
+    local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
+    state.player.inPinball:updateBall(state.player, state.timeScale, jumpHeld)
   elseif state.player.pullTarget then
     state.player:applyPullForce()
   else
@@ -1888,7 +1911,14 @@ function love.draw()
 
   love.graphics.push()
   love.graphics.scale(state.zoom, state.zoom)
-  love.graphics.translate(-state.camera.x, -state.camera.y)
+  -- Snapped to whole screen pixels: the camera follows the player's exact
+  -- (fractional) position, and drawing the world at sub-pixel offsets
+  -- made the pixel-art ("nearest"-filtered) tiles and textures shimmer —
+  -- big static things like the pinball planet visibly quivered as the
+  -- camera moved. state.camera itself stays exact for everything else.
+  local zoom = state.zoom
+  love.graphics.translate(-math.floor(state.camera.x * zoom + 0.5) / zoom,
+                          -math.floor(state.camera.y * zoom + 0.5) / zoom)
 
   if state.skyDomePlanet then
     state.skyDomePlanet:draw()
