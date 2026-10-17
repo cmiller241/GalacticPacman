@@ -19,7 +19,7 @@ local Vector2 = require("lua.vector2")
 local DustPuff = require("lua.effects.DustPuff")
 local Script = require("lua.systems.Script")
 local CameraDirector = require("lua.systems.CameraDirector")
-local worldGen = require("lua.setup.worldGen")
+local worldGen = require("lua.setup.WorldGen")
 local DialogueBox = require("lua.ui.DialogueBox")
 local InteractPrompt = require("lua.ui.InteractPrompt")
 

@@ -97,6 +97,7 @@ local function getSunShadingShader()
     extern float highlightAlpha;
     extern float highlightSize;
     extern float highlightOffset;
+    extern float shadingMix;     // 0..1, how much of the shading/highlight shows (1 = planetoids' full look)
 
     vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
       vec4 texel = Texel(tex, uv) * color;
@@ -114,7 +115,7 @@ local function getSunShadingShader()
       h = h * h * highlightAlpha;
 
       vec3 shaded = texel.rgb * shade + vec3(1.0, 0.98, 0.92) * h * texel.a;
-      return vec4(mix(texel.rgb, shaded, body), texel.a);
+      return vec4(mix(texel.rgb, shaded, body * shadingMix), texel.a);
     }
   ]])
   return sunShadingShader
@@ -321,10 +322,19 @@ end
 -- planetoid. Returns the shader so the caller can turn it back off, or
 -- nil if this one is too far from the sun to be shaded at all.
 function Planetoid:applySunShading(padding)
+  return Planetoid.applySunShadingAt(self.pos.x, self.pos.y, self.radius, padding)
+end
+
+-- The same, for any round body baked the planetoid way — an image
+-- with the body centered and `padding` of margin round it — so other
+-- things (the pinball bumpers, see PinballInterior.lua) can share the
+-- planetoids' exact look. mix (optional, 0..1, default 1) softens it:
+-- how much of the shading and highlight shows over the body's own colors.
+function Planetoid.applySunShadingAt(x, y, radius, padding, mix)
   local sunX = state.sceneWidth / 2
   local sunY = state.sceneHeight / 2
-  local toSunX = sunX - self.pos.x
-  local toSunY = sunY - self.pos.y
+  local toSunX = sunX - x
+  local toSunY = sunY - y
   local distToSun = math.sqrt(toSunX * toSunX + toSunY * toSunY)
 
   local maxDist = math.sqrt(state.sceneWidth * state.sceneWidth + state.sceneHeight * state.sceneHeight) / 2
@@ -333,13 +343,14 @@ function Planetoid:applySunShading(padding)
 
   local shader = getSunShadingShader()
   shader:send("lightDir", { toSunX / distToSun, toSunY / distToSun })
-  shader:send("bodyFraction", self.radius / (self.radius + padding))
+  shader:send("bodyFraction", radius / (radius + padding))
   shader:send("sunStrength", strength)
   shader:send("litBrightness", Planetoid.SUN_LIT_BRIGHTNESS)
   shader:send("overallDarken", Planetoid.SUN_OVERALL_DARKEN)
   shader:send("highlightAlpha", Planetoid.HIGHLIGHT_ALPHA)
   shader:send("highlightSize", Planetoid.HIGHLIGHT_SIZE)
   shader:send("highlightOffset", Planetoid.HIGHLIGHT_OFFSET)
+  shader:send("shadingMix", mix or 1)
   love.graphics.setShader(shader)
   return shader
 end

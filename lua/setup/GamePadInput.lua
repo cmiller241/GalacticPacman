@@ -58,7 +58,7 @@
 --   below depends on.
 
 local state = require("lua.state")
-local inputHandlers = require("lua.setup.inputHandlers")
+local inputHandlers = require("lua.setup.InputHandlers")
 local tryRestartOrAdvance = inputHandlers.tryRestartOrAdvance
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
@@ -286,6 +286,8 @@ local function pollGamepad(dt)
     end
   end
   lastXPressed = xPressed
+  -- Held state, for the pinball flippers staying up (see PinballInterior:updateBall).
+  state.gamepadJumpHeld = xPressed
 
   -- --- R2: fire ---
   -- Analog trigger, thresholded — see this file's own header comment.

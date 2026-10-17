@@ -74,7 +74,7 @@ end
 function Minimap:ensureBeltDots()
   if self._beltDots then return end
 
-  local worldGen = require("lua.setup.worldGen")
+  local worldGen = require("lua.setup.WorldGen")
   local cellSize = worldGen.CELL_SIZE or 3000
   local rMin = (worldGen.BELT_INNER_CELLS or 2) * cellSize
   local rMax = (worldGen.BELT_OUTER_CELLS or 3) * cellSize

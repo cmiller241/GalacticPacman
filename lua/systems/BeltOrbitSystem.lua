@@ -1,7 +1,7 @@
 -- lua/systems/BeltOrbitSystem.lua
 
 local state = require("lua.state")
-local worldGen = require("lua.setup.worldGen")
+local worldGen = require("lua.setup.WorldGen")
 
 local RESTORE = 0.012
 local TANGENT_KEEP = 0.02
