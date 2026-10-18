@@ -21,6 +21,7 @@ local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
 local TargetLock = require("lua.systems.TargetLock")
 local WaterSystem = require("lua.systems.WaterSystem")
+local PortalGun = require("lua.systems.PortalGun")
 
 local Player = {}
 Player.__index = Player
@@ -30,6 +31,7 @@ Player.__index = Player
 -- poseBlend) takes to ease back into whatever the normal pose would
 -- be, rather than snapping there in one frame.
 local INTRO_POSE_TRANSITION_SECONDS = 0.6
+local BLASTER_IN_USE_LINGER = 0.6 -- seconds after a shot his blaster arm stays aimed (see isUsingBlaster)
 
 -- Ground pound (see Player:update's own ground-pound bookkeeping, and
 -- GROUND_POUND_POSE / Player:getGroundPoundSeatDrop further down).
@@ -2004,6 +2006,21 @@ function Player:drawBallMorphTransition(orientation)
   love.graphics.pop()
 end
 
+-- Whether the blaster's in use right now, or was a moment ago: spraying
+-- water, holding fire, or a fireball/portal shot within the last
+-- BLASTER_IN_USE_LINGER seconds. Its arm then stays aimed (see
+-- drawFullBody) instead of drifting into the idle sway just because the
+-- mouse has sat still — the shots come out along the aim either way, so
+-- the arm has to show it.
+function Player:isUsingBlaster()
+  if WaterSystem.isSpraying() then return true end
+  if state.gamepadFireHeld or (state.mouseDown and (state.weaponMode or "blaster") == "blaster") then return true end
+  local now = love.timer.getTime()
+  if self.lastShotTime and now - self.lastShotTime < BLASTER_IN_USE_LINGER then return true end
+  if PortalGun.lastShotTime and now - PortalGun.lastShotTime < BLASTER_IN_USE_LINGER then return true end
+  return false
+end
+
 function Player:drawFullBody(orientation, originPos)
   local images = state.characterImages
   if not images then return end
@@ -2084,7 +2101,7 @@ function Player:drawFullBody(orientation, originPos)
   end
 
   local aimAngle = self:computeLeftArmAimAngle(orientation, dirSign, originPos)
-  if self.mouseIdle and not self.pullTarget then
+  if self.mouseIdle and not self.pullTarget and not self:isUsingBlaster() then
     local swayAngle = (self.onSurface and self.isWalking)
       and (walkAngle * self.armSwingScale)
       or (math.sin(love.timer.getTime() * 1.5) * 0.15)
