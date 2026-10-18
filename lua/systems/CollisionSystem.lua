@@ -25,7 +25,7 @@ end
 function CollisionSystem:handleImmovableCollisions(immovables, movables)
   for _, im in ipairs(immovables) do
     for _, mv in ipairs(movables) do
-      if not mv.isImmovable then
+      if not mv.isImmovable and not mv.recalling then -- (nothing stops a rewind — see Recall.lua)
         local normal, targetPos
         local domeContact = nil
 
@@ -257,7 +257,7 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
           for _, j in ipairs(bucket) do
             if not (sameArray and j <= i) then
               local p2 = entities2[j]
-              if not (p1.isImmovable or p2.isImmovable) then
+              if not (p1.isImmovable or p2.isImmovable or p1.recalling or p2.recalling) then -- (a rewinding one shoves others itself — see Recall.lua)
                 local offset = p1.pos:subtract(p2.pos)
                 local distSq = offset:lengthSq()
                 local sumR = p1[radiusProp1] + p2[radiusProp2]

@@ -92,6 +92,24 @@ local WATERFALL_SPLASH = {
   lightMin = 0.7,
 }
 
+-- A fireball hitting water (see WaterSystem.quenchFireball): it goes out
+-- in a burst of steam, boiling BOIL_ON_HIT cells' worth off the surface
+-- round where it hit at once, and leaving the spot hot — boiling off
+-- BOIL_PER_SECOND more (and steaming) for HOT_SECONDS, tailing off.
+local QUENCH_AT = 0.25            -- a cell at least this full counts as water to a fireball
+local BOIL_ON_HIT = 0.6
+local BOIL_PER_SECOND = 1.2
+local HOT_SECONDS = 2.5
+local BOIL_REACH_CELLS = 3        -- how far round the spot it boils water off
+local STEAM_BURST = 26            -- puffs in the burst when it hits
+local STEAM_PER_SECOND = 22       -- puffs a second off a hot spot, at first
+local STEAM_SECONDS = 1.4         -- how long a puff lasts
+local STEAM_RISE = 1.1            -- how fast a puff rises (per 60fps tick)
+local STEAM_SIZE = 5              -- a puff's starting radius...
+local STEAM_GROWTH = 14           -- ...and how much it grows over its life
+local STEAM_ALPHA = 0.32
+local COLOR_STEAM = { 0.92, 0.95, 1.00 }
+
 -- The look (see getWaterShader): shallow water near the surface fading
 -- to deep water further down, a drifting caustic net of light (the same
 -- kind the water planet has) that's brightest near the surface, a bright
@@ -122,6 +140,8 @@ local grid = nil          -- see WaterSystem.init
 local droplets = {}
 local splashes = {}
 local waterfallLandings = {} -- this frame's, from drawPools: { x, y, half, flow }
+local steam = {}          -- puffs: { x, y, vx, vy, life, maxLife }
+local hotSpots = {}       -- where fireballs went out: { x, y, c, r (grid) or planet, life, steamBudget }
 local sprayBudget = 0
 local isSpraying = false
 local totalWater = 0      -- everywhere, as of this frame (see WATER_CAP)
@@ -144,6 +164,7 @@ local poolWater = { isPool = true, pos = Vector2.new(0, 0), radius = 0 }
 function WaterSystem.reset()
   grid = nil
   droplets, splashes, waterfallLandings = {}, {}, {}
+  steam, hotSpots = {}, {}
   sprayBudget, stepClock = 0, 0
   isSpraying = false
   totalWater = 0
@@ -683,6 +704,159 @@ end
 ----------------------------------------------------------------------
 
 -- dt: real seconds.
+----------------------------------------------------------------------
+-- Fireballs and steam
+----------------------------------------------------------------------
+
+-- A puff of steam at (x, y), rising away from the water (up: which way
+-- that is), within `spread` radians of it.
+local function spawnSteam(x, y, upX, upY, spread)
+  local a = math.atan2(upY, upX) + (math.random() * 2 - 1) * (spread or 0.6)
+  local speed = STEAM_RISE * (0.5 + math.random())
+  local life = STEAM_SECONDS * (0.7 + math.random() * 0.6)
+  steam[#steam + 1] = {
+    x = x + (math.random() * 2 - 1) * 6, y = y + (math.random() * 2 - 1) * 3,
+    vx = math.cos(a) * speed, vy = math.sin(a) * speed, life = life, maxLife = life,
+  }
+end
+
+-- The water line over grid cell (c, r), if it's wet: up its column
+-- through the water to the top.
+local function surfaceAt(c, r)
+  local water, cols = grid.water, grid.cols
+  local i = r * cols + c + 1
+  if not water[i] then return nil end
+  while r > 0 and water[i - cols] do i, r = i - cols, r - 1 end
+  return grid.y0 + (r + 1) * CELL - math.min(1, water[i]) * CELL
+end
+
+-- Boils `amount` (cells' worth) off the surface of the water round grid
+-- cell (c, r) — shared between the surface cells (nothing on top of them)
+-- within BOIL_REACH_CELLS, a little higher up too, since the surface can
+-- be above where a fireball got to. Returns where the surface is there
+-- (for the steam), or nil once there's no water left round it.
+local function boilGrid(c, r, amount)
+  local water, cols = grid.water, grid.cols
+  local cells = {}
+  for dr = -BOIL_REACH_CELLS - 2, BOIL_REACH_CELLS do
+    for dc = -BOIL_REACH_CELLS, BOIL_REACH_CELLS do
+      local nc, nr = c + dc, r + dr
+      if inGrid(nc, nr) then
+        local i = nr * cols + nc + 1
+        if water[i] and (nr == 0 or not water[i - cols]) then cells[#cells + 1] = { i = i, c = nc, r = nr } end
+      end
+    end
+  end
+  if #cells == 0 then return nil end
+  local share = amount / #cells
+  for _, cell in ipairs(cells) do
+    local w = water[cell.i] - share
+    if w < DRY then water[cell.i] = nil else water[cell.i] = w end
+  end
+  local pick = cells[math.random(#cells)]
+  return grid.x0 + (pick.c + math.random()) * CELL, surfaceAt(pick.c, pick.r) or (grid.y0 + (pick.r + 1) * CELL)
+end
+
+-- Whether fireball `f` has hit water this frame (anywhere along the path
+-- it's just moved, so a fast one can't skip over a thin pool). If it has,
+-- it goes out: a burst of steam, BOIL_ON_HIT boiled off at once, and a
+-- hot spot left there (see WaterSystem.update). The caller removes it.
+function WaterSystem.quenchFireball(f)
+  local ts = state.timeScale or 1
+
+  -- A planet's water layer (see addToOcean).
+  for p, o in pairs(oceans) do
+    local outer = p.radius + oceanDepth(p.radius, o.volume)
+    local dx, dy = f.pos.x - p.pos.x, f.pos.y - p.pos.y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d < outer then
+      local nx, ny = 0, -1
+      if d > 1e-6 then nx, ny = dx / d, dy / d end
+      o.volume = math.max(0, o.volume - BOIL_ON_HIT)
+      local sx, sy = p.pos.x + nx * outer, p.pos.y + ny * outer
+      for _ = 1, STEAM_BURST do spawnSteam(sx, sy, nx, ny, 1.0) end
+      hotSpots[#hotSpots + 1] = { planet = p, nx = nx, ny = ny, life = HOT_SECONDS, steamBudget = 0 }
+      return true
+    end
+  end
+
+  -- The pools and streams on the level.
+  if grid then
+    local x1, y1 = f.pos.x, f.pos.y
+    local x0, y0 = x1 - f.vel.x * ts, y1 - f.vel.y * ts
+    local dist = math.sqrt((x1 - x0) ^ 2 + (y1 - y0) ^ 2)
+    local steps = math.max(1, math.ceil(dist / (CELL * 0.5)))
+    for s = 0, steps do
+      local x, y = x0 + (x1 - x0) * s / steps, y0 + (y1 - y0) * s / steps
+      local c, r = cellOf(x, y)
+      if inGrid(c, r) and (grid.water[r * grid.cols + c + 1] or 0) >= QUENCH_AT then
+        local surface = surfaceAt(c, r) or y
+        boilGrid(c, r, BOIL_ON_HIT)
+        for _ = 1, STEAM_BURST do spawnSteam(x, surface, 0, -1, 1.0) end
+        hotSpots[#hotSpots + 1] = { c = c, r = r, life = HOT_SECONDS, steamBudget = 0 }
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Hot spots boiling water off (and steaming), tailing off as they cool;
+-- the steam rising and fading.
+local function updateSteam(dt)
+  local ts = state.timeScale or 1
+  local gameDt = ts / 60 -- (timeScale is in 60fps ticks)
+
+  for i = #hotSpots, 1, -1 do
+    local h = hotSpots[i]
+    local heat = h.life / HOT_SECONDS
+    local amount = BOIL_PER_SECOND * heat * gameDt
+    local sx, sy, upX, upY
+    local o = h.planet and oceans[h.planet]
+    if h.planet then
+      if o then
+        o.volume = math.max(0, o.volume - amount)
+        local outer = h.planet.radius + oceanDepth(h.planet.radius, o.volume)
+        -- (Spread a little round the spot.)
+        local a = math.atan2(h.ny, h.nx) + (math.random() * 2 - 1) * 0.15
+        upX, upY = math.cos(a), math.sin(a)
+        sx, sy = h.planet.pos.x + upX * outer, h.planet.pos.y + upY * outer
+      end
+    elseif grid then
+      sx, sy = boilGrid(h.c, h.r, amount)
+      upX, upY = 0, -1
+    end
+    h.steamBudget = h.steamBudget + STEAM_PER_SECOND * heat * gameDt
+    while h.steamBudget >= 1 do
+      h.steamBudget = h.steamBudget - 1
+      if sx then spawnSteam(sx, sy, upX, upY, 0.4) end
+    end
+    h.life = h.life - gameDt
+    if h.life <= 0 or not sx then table.remove(hotSpots, i) end
+  end
+
+  for i = #steam, 1, -1 do
+    local s = steam[i]
+    s.life = s.life - gameDt
+    if s.life <= 0 then
+      table.remove(steam, i)
+    else
+      s.vx = s.vx + (math.random() - 0.5) * 0.06 * ts -- (drifting a little)
+      s.x, s.y = s.x + s.vx * ts, s.y + s.vy * ts
+    end
+  end
+end
+
+local function drawSteam()
+  for _, s in ipairs(steam) do
+    local t = 1 - s.life / s.maxLife
+    local alpha = STEAM_ALPHA * (1 - t) * math.min(1, t * 6)
+    love.graphics.setColor(COLOR_STEAM[1], COLOR_STEAM[2], COLOR_STEAM[3], alpha)
+    love.graphics.circle("fill", s.x, s.y, STEAM_SIZE + STEAM_GROWTH * t)
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 function WaterSystem.update(dt)
   age = age + dt
   local ts = state.timeScale or 1
@@ -715,6 +889,8 @@ function WaterSystem.update(dt)
   for i = #droplets, 1, -1 do
     if updateDroplet(droplets[i], ts, dt) then table.remove(droplets, i) end
   end
+  updateSteam(dt)
+
   -- Waterfalls splashing where they land (found while drawing last frame).
   if state.particles then
     local up = Vector2.new(0, -1)
@@ -1221,6 +1397,7 @@ end
 function WaterSystem.draw()
   if grid then drawPools() end
   drawOceans()
+  drawSteam()
 
   love.graphics.setLineWidth(2.5)
   for _, d in ipairs(droplets) do
