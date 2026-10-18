@@ -72,6 +72,8 @@ end
 local state = require("lua.state")
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
+local PortalGun = require("lua.systems.PortalGun")
+local WeaponModes = require("lua.systems.WeaponModes")
 
 -- Shared by the Enter key handler and the mousedown handler below —
 -- same role and same logic as the original. levelSetup is required
@@ -124,6 +126,14 @@ local function attachInputHandlers()
     if state.titleScreen then return end -- no shooting/pulling on the title screen
     if PauseMenu.isOpen() then return end -- ...or while paused
     if tryRestartOrAdvance() then return end  -- same early-return as the original
+    if state.portalMode then
+      if button == 1 then PortalGun.fire(state.player, "red")
+      elseif button == 2 then PortalGun.fire(state.player, "blue") end
+      return
+    end
+    -- Water mode: spraying is held, so it's read each frame instead
+    -- (see WaterSystem.update); the left button does nothing for now.
+    if state.waterMode then return end
     if button == 1 then
       state.mouseDown = true
       if state.player then state.player:shootFireball() end
@@ -294,6 +304,12 @@ local function attachInputHandlers()
 
     if key == 'r' and not isrepeat then
       state.showInfluenceRings = not state.showInfluenceRings
+    end
+
+    -- Cycles what the blaster's buttons do: Blaster (fire + pull beam),
+    -- Portal, Water (see lua/systems/WeaponModes.lua).
+    if key == 'p' and not isrepeat then
+      WeaponModes.cycle(1)
     end
   end
 

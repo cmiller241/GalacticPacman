@@ -20,6 +20,7 @@ local Splash = require("lua.effects.Splash")
 local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
 local TargetLock = require("lua.systems.TargetLock")
+local WaterSystem = require("lua.systems.WaterSystem")
 
 local Player = {}
 Player.__index = Player
@@ -736,6 +737,9 @@ end
 -- would snap between upright and tilted every time the player crossed a
 -- short slope segment, which reads as a glitch rather than motion.
 function Player:visualDownDirection(planet)
+  -- Held while going through a portal, and eased back after coming out
+  -- (see lua/systems/PortalGun.lua).
+  if self.portalDown then return self.portalDown:clone() end
   if not planet then return Vector2.new(0, 1) end
   if planet.isRoundedRect then
     if planet.forceUprightJump then return Vector2.new(0, 1) end
@@ -904,6 +908,12 @@ function Player:tryGroundPound()
   -- Not as a ball, or while curling into/out of one — the pound is his
   -- own move, on his feet.
   if self.isBall or self.morphState then return end
+  -- Not in water either — there, jump is how he swims (see :jump). That
+  -- includes being only partway in, near a pool's surface: his feet in
+  -- the water count too (see WaterSystem.wetAt).
+  if self.submergedIn then return end
+  local down = self:visualDownDirection(self.lastInfluencePlanet)
+  if WaterSystem.wetAt(self.pos.x + down.x * self.radius, self.pos.y + down.y * self.radius) then return end
   if not state.gravitySystem or not state.gravitySystem:findDominantPlanet(self.pos) then return end
   self.isGroundPounding = true
 end
@@ -1421,6 +1431,10 @@ function Player:update()
         break
       end
     end
+  end
+  -- ...or in a pool of sprayed water (see lua/systems/WaterSystem.lua).
+  if not self.submergedIn and not self.inPinball then
+    self.submergedIn = WaterSystem.submergedAt(self)
   end
 
   -- Splash the instant submergedIn actually flips (either direction) —
@@ -2748,6 +2762,8 @@ end
 function Player:respawn()
   local point = self.deathZoneRespawn or state.respawnPoint
   self.deathZoneRespawn = nil
+  -- Any trip through a portal is called off (see lua/systems/PortalGun.lua).
+  self.portalTransit, self.portalDown = nil, nil
   if point then
     self.pos.x, self.pos.y = point.x, point.y
     if point.planet then

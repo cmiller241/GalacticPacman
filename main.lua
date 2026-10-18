@@ -54,6 +54,9 @@ local VatsCursor = require("lua.effects.VatsCursor")
 local Lava = require("lua.world.Lava")
 local WaterPlanet = require("lua.world.WaterPlanet")
 local Fish = require("lua.entities.Fish")
+local PortalGun = require("lua.systems.PortalGun")
+local WaterSystem = require("lua.systems.WaterSystem")
+local WeaponModes = require("lua.systems.WeaponModes")
 
 local collisionSystem
 
@@ -77,6 +80,18 @@ local INFLUENCE_RING_FADE_DISTANCE = 700
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
+
+-- Camera glide after a trip through a portal (see the camera pass in
+-- love.update). How fast it closes the gap depends on how far apart the
+-- two portals are: a very slow, gentle ease between portals close
+-- together, quicker between far-apart ones (so he isn't off screen for
+-- long). The rate scales evenly from MIN (portals touching) to MAX
+-- (FAR_DISTANCE apart or more). Rough feel: 1 covers 90% of the gap in
+-- ~2.3s, 2 in ~1.2s, 8 in ~0.3s. SETTLED: how close counts as caught up.
+local PORTAL_CAMERA_GLIDE_RATE_MIN = 1
+local PORTAL_CAMERA_GLIDE_RATE_MAX = 8
+local PORTAL_CAMERA_GLIDE_FAR_DISTANCE = 2500
+local PORTAL_CAMERA_SETTLED = 1
 
 local HOME_CELL_COL = 13
 local HOME_CELL_ROW = 9
@@ -110,6 +125,10 @@ local function resetWorldState()
   state.beltLandingPlanet = nil
   state.miningPlanet, state.prisms = nil, nil
   state.elementPieces = {}
+  state.portals, state.portalTracers = nil, nil
+  WeaponModes.set("blaster")
+  WaterSystem.reset()
+  state.portalCameraGlide = nil
 
   -- Whatever was in progress.
   state.camera = nil
@@ -601,6 +620,8 @@ function love.load()
       table.insert(state.planetoids, shape)
     end
     state.tiledLevels = { terrainLevel }
+    -- The grid sprayed water flows and pools on (see WaterSystem.lua).
+    WaterSystem.init(terrainLevel)
     state.lavas = terrainLevel.lavas
 
     -- Ooombas are placed explicitly via Tiled's own Object Layer now
@@ -997,7 +1018,7 @@ function love.load()
   -- TEMPORARY, for testing the pinball table: the game starts him on
   -- its plunger, already a ball (and so does every respawn — see
   -- Player:respawn's own point.pinball). Set to false to go back.
-  local TEMP_START_IN_PINBALL = true
+  local TEMP_START_IN_PINBALL = false
   if TEMP_START_IN_PINBALL and state.pinballPlanet then
     local portal = state.pinballPlanet.interior:getPortalPosition()
     state.respawnPoint = { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
@@ -1315,8 +1336,11 @@ function love.update(dt)
   end
 
   if state.ooombas then
-    for _, o in ipairs(state.ooombas) do
+    for i = #state.ooombas, 1, -1 do
+      local o = state.ooombas[i]
       o:update()
+      -- Flung off through a portal and never came down (see Ooomba:updateAirborne).
+      if o.lost then table.remove(state.ooombas, i) end
     end
   end
 
@@ -1453,108 +1477,118 @@ function love.update(dt)
   -- pinball only ever responding to flippers/plunger/gravity.
   -- On the title screen he's driven by its own autopilot instead (see
   -- TitleScreen.lua) — the real keys never reach him there at all.
-  if state.titleScreen then
-    state.player:move(TitleScreen.getKeys())
+  -- Going through a portal: he follows the portal path instead of all
+  -- the normal movement/gravity/collision below (see lua/systems/PortalGun.lua).
+  if state.player.portalTransit then
+    PortalGun.updateTransit(state.player, state.timeScale)
   else
-    -- (No walking in V.A.T.S. either — see the V.A.T.S. rules near the
-    -- top of this function.)
-    state.player:move((state.introLocked or state.player.inPinball or state.vatsActive) and {} or state.keys)
-  end
-
-  -- PinballInterior:updateBall entirely REPLACES normal gravity and
-  -- planet collision while he's inside it (see Player.lua's own
-  -- inPinball comment) — state.player:update() still runs normally
-  -- either way, since it's what actually advances teleport/ball-morph/
-  -- invincibility, none of which should pause just because he's now
-  -- inside the table.
-  if state.player.inPinball then
-    local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
-    state.player.inPinball:updateBall(state.player, state.timeScale, jumpHeld)
-  elseif state.player.pullTarget then
-    state.player:applyPullForce()
-  else
-    state.gravitySystem:applyTo(state.player)
-  end
-
-  state.player:update()
-
-  if not state.player.inPinball then
-    collisionSystem:handlePlayerPlanetCollisions(state.player)
-  end
-
-  -- Gamepad R2 fire: a continuous-hold flag (see GamePadInput.lua),
-  -- not an edge-triggered press — called every frame while held, same
-  -- as the mouse-click path (love.mousepressed -> shootFireball in
-  -- InputHandlers.lua). shootFireball()'s own fireCooldown/lastShotTime
-  -- check is what actually throttles the real fire rate; this is what
-  -- was missing before — GamePadInput.lua already set
-  -- state.gamepadFireHeld every frame from the trigger's analog value,
-  -- but nothing ever read it, so R2 silently did nothing.
-  if state.gamepadFireHeld and state.player then
-    state.player:shootFireball()
-  end
-
-  -- Reset once per frame, before re-checking walls AND Spikeys below —
-  -- neither handlePlayerWallCollisions nor handlePlayerSpikeyCollisions
-  -- ever CLEARS this, only sets it on actual contact, so without this
-  -- the flag would latch true forever after the first touch instead of
-  -- reflecting only THIS frame's contact (see Player:jump's wall-jump
-  -- branch, which is also what lets him "jump off" a Spikey — see
-  -- CollisionSystem:handlePlayerSpikeyCollisions's own comment).
-  state.player.touchingWall = nil
-  state.player.wallContactNormal = nil
-
-  if state.tiledLevels then
-    for _, level in ipairs(state.tiledLevels) do
-      collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
+    if state.titleScreen then
+      state.player:move(TitleScreen.getKeys())
+    else
+      -- (No walking in V.A.T.S. either — see the V.A.T.S. rules near the
+      -- top of this function.)
+      state.player:move((state.introLocked or state.player.inPinball or state.vatsActive) and {} or state.keys)
     end
-  end
 
-  collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
+    -- PinballInterior:updateBall entirely REPLACES normal gravity and
+    -- planet collision while he's inside it (see Player.lua's own
+    -- inPinball comment) — state.player:update() still runs normally
+    -- either way, since it's what actually advances teleport/ball-morph/
+    -- invincibility, none of which should pause just because he's now
+    -- inside the table.
+    if state.player.inPinball then
+      local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
+      state.player.inPinball:updateBall(state.player, state.timeScale, jumpHeld)
+    elseif state.player.pullTarget then
+      state.player:applyPullForce()
+    else
+      state.gravitySystem:applyTo(state.player)
+    end
 
-  -- Ooombas: lethal to touch, unless landed on from above — see
-  -- CollisionSystem:handlePlayerOoombaCollisions. Anything it returns
-  -- has just finished being squashed flat: gone, with a burst under the
-  -- player's feet (or where it stood, if he's no longer on top of it)
-  -- and a small hop for him off the top of it.
-  --
-  -- "Under his feet", "the ground" and "a hop" are all along the
-  -- Ooomba's own up direction (Ooomba.up) — straight up the screen on
-  -- terrain, straight out from the center on a round planetoid — and
-  -- the hop is relative to whatever it was standing on, which for a
-  -- belt planetoid is itself moving.
-  --
-  -- Skipped entirely on the title screen: Bob's autopilot keeps clear
-  -- of Ooombas there (see TitleScreen.lua), and if he ever does brush
-  -- one anyway, nothing happens — he can't die before the game starts.
-  if state.ooombas and #state.ooombas > 0 and not state.titleScreen then
-    local flattened = collisionSystem:handlePlayerOoombaCollisions(state.player, state.ooombas)
-    for _, o in ipairs(flattened) do
-      local player = state.player
-      local up = o.up
-      local groundX, groundY = o.pos.x - up.x * o.halfHeight, o.pos.y - up.y * o.halfHeight
-      if o.squashPressed then
-        -- The point on the ground directly beneath him.
-        local sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x
-        StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up)
-        if not player.onSurface then
-          local groundVelX, groundVelY = o:groundVelocity()
-          local rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y
-          player.vel.x = player.vel.x + up.x * (OOOMBA_STOMP_BOUNCE - rising)
-          player.vel.y = player.vel.y + up.y * (OOOMBA_STOMP_BOUNCE - rising)
-          player.isGroundPounding = false
+    state.player:update()
+
+    -- Into a portal? Checked before collision, so landing on a floor
+    -- portal doesn't stop his fall first (see PortalGun.tryEnter).
+    PortalGun.tryEnter(state.player)
+
+    if not state.player.inPinball then
+      collisionSystem:handlePlayerPlanetCollisions(state.player)
+    end
+
+    -- Gamepad R2 fire: a continuous-hold flag (see GamePadInput.lua),
+    -- not an edge-triggered press — called every frame while held, same
+    -- as the mouse-click path (love.mousepressed -> shootFireball in
+    -- InputHandlers.lua). shootFireball()'s own fireCooldown/lastShotTime
+    -- check is what actually throttles the real fire rate; this is what
+    -- was missing before — GamePadInput.lua already set
+    -- state.gamepadFireHeld every frame from the trigger's analog value,
+    -- but nothing ever read it, so R2 silently did nothing.
+    if state.gamepadFireHeld and state.player then
+      state.player:shootFireball()
+    end
+
+    -- Reset once per frame, before re-checking walls AND Spikeys below —
+    -- neither handlePlayerWallCollisions nor handlePlayerSpikeyCollisions
+    -- ever CLEARS this, only sets it on actual contact, so without this
+    -- the flag would latch true forever after the first touch instead of
+    -- reflecting only THIS frame's contact (see Player:jump's wall-jump
+    -- branch, which is also what lets him "jump off" a Spikey — see
+    -- CollisionSystem:handlePlayerSpikeyCollisions's own comment).
+    state.player.touchingWall = nil
+    state.player.wallContactNormal = nil
+
+    if state.tiledLevels then
+      for _, level in ipairs(state.tiledLevels) do
+        collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
+      end
+    end
+
+    collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
+
+    -- Ooombas: lethal to touch, unless landed on from above — see
+    -- CollisionSystem:handlePlayerOoombaCollisions. Anything it returns
+    -- has just finished being squashed flat: gone, with a burst under the
+    -- player's feet (or where it stood, if he's no longer on top of it)
+    -- and a small hop for him off the top of it.
+    --
+    -- "Under his feet", "the ground" and "a hop" are all along the
+    -- Ooomba's own up direction (Ooomba.up) — straight up the screen on
+    -- terrain, straight out from the center on a round planetoid — and
+    -- the hop is relative to whatever it was standing on, which for a
+    -- belt planetoid is itself moving.
+    --
+    -- Skipped entirely on the title screen: Bob's autopilot keeps clear
+    -- of Ooombas there (see TitleScreen.lua), and if he ever does brush
+    -- one anyway, nothing happens — he can't die before the game starts.
+    if state.ooombas and #state.ooombas > 0 and not state.titleScreen then
+      local flattened = collisionSystem:handlePlayerOoombaCollisions(state.player, state.ooombas)
+      for _, o in ipairs(flattened) do
+        local player = state.player
+        local up = o.up
+        local groundX, groundY = o.pos.x - up.x * o.halfHeight, o.pos.y - up.y * o.halfHeight
+        if o.squashPressed then
+          -- The point on the ground directly beneath him.
+          local sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x
+          StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up)
+          if not player.onSurface then
+            local groundVelX, groundVelY = o:groundVelocity()
+            local rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y
+            player.vel.x = player.vel.x + up.x * (OOOMBA_STOMP_BOUNCE - rising)
+            player.vel.y = player.vel.y + up.y * (OOOMBA_STOMP_BOUNCE - rising)
+            player.isGroundPounding = false
+          end
+        else
+          StompBurst.spawn(groundX, groundY, up)
         end
-      else
-        StompBurst.spawn(groundX, groundY, up)
-      end
-      if state.audioManager then state.audioManager:playGoombaStomp() end
-      for i = #state.ooombas, 1, -1 do
-        if state.ooombas[i] == o then table.remove(state.ooombas, i) end
+        if state.audioManager then state.audioManager:playGoombaStomp() end
+        for i = #state.ooombas, 1, -1 do
+          if state.ooombas[i] == o then table.remove(state.ooombas, i) end
+        end
       end
     end
-  end
 
-  collisionSystem:handlePlayerSkyDomeContainment(state.player, state.skyDomePlanet)
+    collisionSystem:handlePlayerSkyDomeContainment(state.player, state.skyDomePlanet)
+  end
 
   -- Belt planetoids alone can number in the hundreds
   -- (worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500), and almost all of them
@@ -1640,6 +1674,12 @@ function love.update(dt)
     collisionSystem:handleCoinCollisions(state.player, state.coins)
   end
 
+  -- Portals follow whatever they're stuck to (moved above) and emit
+  -- their particles; the shot streaks fade (see lua/systems/PortalGun.lua).
+  PortalGun.update(dt)
+  -- Spraying, droplets, and water flowing/pooling/evaporating.
+  WaterSystem.update(dt)
+
   if state.fireballs then
     for i = #state.fireballs, 1, -1 do
       local f = state.fireballs[i]
@@ -1648,6 +1688,10 @@ function love.update(dt)
         table.remove(state.fireballs, i)
       end
     end
+
+    -- Through a portal, before anything below can see one hit the
+    -- portal's own surface (see PortalGun.passFireballs).
+    PortalGun.passFireballs(state.fireballs, state.timeScale)
 
     if #state.fireballs > 0 then
       -- Mirrors get first look: a reflected fireball just had its
@@ -1887,9 +1931,43 @@ function love.update(dt)
     local zoom = state.zoom
     local visibleWidth = love.graphics.getWidth() / zoom
     local visibleHeight = love.graphics.getHeight() / zoom
+    -- Mid-portal, whichever side most of him is on (see PortalGun.updateTransit).
+    local transit = state.player.portalTransit
+    local focusX = transit and transit.cameraX or state.player.pos.x
+    local focusY = transit and transit.cameraY or state.player.pos.y
+    -- A trip through a portal glides the camera over to him instead of
+    -- cutting: from where it was when he went in, it closes a fixed share
+    -- of the remaining gap each moment (quick at first, settling in at
+    -- the end — how quick depends on how far apart the portals are, see
+    -- PORTAL_CAMERA_GLIDE_RATE_MIN/MAX), then hands back to following him
+    -- exactly once it's caught up.
+    if transit and not state.portalCameraGlide then
+      local prev = state.camera
+      state.portalCameraGlide = prev
+        and { x = prev.x + visibleWidth / 2, y = prev.y + visibleHeight / 2 }
+        or { x = focusX, y = focusY }
+    end
+    local glide = state.portalCameraGlide
+    if glide and transit then
+      -- Paced by how far apart the portals of this trip are.
+      local apart = math.sqrt((transit.to.x - transit.from.x) ^ 2 + (transit.to.y - transit.from.y) ^ 2)
+      local t = math.min(1, apart / PORTAL_CAMERA_GLIDE_FAR_DISTANCE)
+      glide.rate = PORTAL_CAMERA_GLIDE_RATE_MIN + (PORTAL_CAMERA_GLIDE_RATE_MAX - PORTAL_CAMERA_GLIDE_RATE_MIN) * t
+    end
+    if glide then
+      -- (Frame time capped, so one slow frame can't turn into a jump.)
+      local catchUp = 1 - math.exp(-(glide.rate or PORTAL_CAMERA_GLIDE_RATE_MAX) * math.min(dt, 1 / 30))
+      glide.x = glide.x + (focusX - glide.x) * catchUp
+      glide.y = glide.y + (focusY - glide.y) * catchUp
+      if not transit and (focusX - glide.x) ^ 2 + (focusY - glide.y) ^ 2 < PORTAL_CAMERA_SETTLED ^ 2 then
+        state.portalCameraGlide = nil
+      else
+        focusX, focusY = glide.x, glide.y
+      end
+    end
     local camera = {
-      x = state.player.pos.x - visibleWidth / 2,
-      y = state.player.pos.y - visibleHeight / 2,
+      x = focusX - visibleWidth / 2,
+      y = focusY - visibleHeight / 2,
     }
     local maxCameraX = state.sceneWidth - visibleWidth
     local maxCameraY = state.sceneHeight - visibleHeight
@@ -2221,8 +2299,10 @@ function love.draw()
 
   if state.ooombas then
     for _, o in ipairs(state.ooombas) do
-      if utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
-        o:draw()
+      -- (Mid-portal it's split across both portals, either of which may
+      -- be the one on screen — see PortalGun.drawOoomba.)
+      if o.portalTransit or utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
+        PortalGun.drawOoomba(o)
       end
     end
   end
@@ -2278,7 +2358,15 @@ function love.draw()
     end
   end
 
-  state.player:draw()
+  -- Portals and their shot streaks: over the surfaces they're on,
+  -- behind the player.
+  PortalGun.draw()
+
+  -- (Split across the two portals while he's going through one.)
+  PortalGun.drawPlayer(state.player)
+
+  -- Water and spray, over him, so he looks like he's in it when swimming.
+  WaterSystem.draw()
 
   -- Debug: the player's own actual collision shape (toggle with 'C',
   -- state.showCollisionDebug — same flag/key the TiledTerrain wall/shape
@@ -2512,7 +2600,14 @@ function love.draw()
     state.fireBars and #state.fireBars or 0
   ), 20, 100)
   love.graphics.print(string.format("Rubinium: %d  Asteroidium: %d", state.elements.rubinium, state.elements.asteroidium), 20, 120)
-  love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 140)
+  love.graphics.print(string.format("Mode: %s (P / D-pad left-right to switch)", WeaponModes.label()), 20, 140)
+  if state.portalMode then
+    love.graphics.print("Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump", 20, 160)
+  elseif state.waterMode then
+    love.graphics.print("Right-click / R2: spray water, Space to jump (or swim)", 20, 160)
+  else
+    love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
+  end
 
   PauseMenu.draw()
 
