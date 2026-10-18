@@ -48,6 +48,11 @@ local BAR_THICKNESS = 4
 function Gate.new(x, topY, bottomY, halfWidth)
   local self = setmetatable({}, Gate)
 
+  -- Lets things sharing the walls list tell a Gate apart from an
+  -- ordinary wall tile (which has isWall) — portal shots and Ooombas
+  -- treat a closed gate as solid (see PortalGun.lua, Ooomba.lua).
+  self.isGate = true
+
   self.topY = topY
   self.bottomYClosed = bottomY
   self.halfWidth = halfWidth

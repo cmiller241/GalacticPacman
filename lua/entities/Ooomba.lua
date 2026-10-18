@@ -27,6 +27,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local DustPuff = require("lua.effects.DustPuff")
+local PortalGun = require("lua.systems.PortalGun")
 
 local Ooomba = {}
 Ooomba.__index = Ooomba
@@ -109,6 +110,10 @@ function Ooomba.new(homeShape, startArcPos, options)
   self.speed = options.speed or 1.4       -- arc-length units per frame — deliberately a bit slower than the player's own walk speed
   self.direction = options.direction or -1 -- -1 = toward arc position 0, 1 = toward the far end; the art faces left by default, so -1 needs no flip
 
+  -- Only really used once it's gone through a portal and is flying (see
+  -- :updateAirborne); while walking it's just this frame's step.
+  self.vel = Vector2.new(0, 0)
+
   self.surfaceArcPos = startArcPos or 0
   local startSurface = homeShape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
   self.pos = startSurface.point
@@ -140,8 +145,15 @@ end
 -- Ooomba.new — the same size by default as one on terrain.
 function Ooomba.newOnPlanet(planet, startAngle, options)
   options = options or {}
+  local self = Ooomba.new(Ooomba.planetPath(planet), (startAngle or 0) % (2 * math.pi) * planet.radius, options)
+  self.planet = planet
+  return self
+end
 
-  local path = {
+-- A round planet's circumference as a walkable loop, in the same shape
+-- as a TerrainShape path (see newOnPlanet, and landing in :tryLand).
+function Ooomba.planetPath(planet)
+  return {
     planet = planet,
     isLoop = true,
     getPerimeter = function()
@@ -156,10 +168,6 @@ function Ooomba.newOnPlanet(planet, startAngle, options)
       }
     end,
   }
-
-  local self = Ooomba.new(path, (startAngle or 0) % (2 * math.pi) * planet.radius, options)
-  self.planet = planet
-  return self
 end
 
 -- Velocity of whatever it's standing on — a belt planetoid is moving
@@ -233,6 +241,21 @@ function Ooomba:update()
   if self.isSquashing then return end
 
   local timeScale = state.timeScale or 1
+
+  -- Going through a portal, then flying out of it until it lands (see
+  -- lua/systems/PortalGun.lua and :updateAirborne).
+  if self.portalTransit then
+    if PortalGun.updateOoombaTrip(self, timeScale) then
+      self.airborne, self.airTime = true, 0
+    end
+    return
+  end
+  if self.airborne then
+    self:updateAirborne(timeScale)
+    return
+  end
+
+  local prevX, prevY = self.pos.x, self.pos.y
   local shape = self.homeShape
   local perimeter = shape:getPerimeter()
 
@@ -249,9 +272,10 @@ function Ooomba:update()
   -- Measured before any wrap below, so a lap boundary doesn't read as
   -- one enormous step.
   local actualDs = desiredArcPos - prevArcPos
-  if shape.isLoop then
-    -- A round planetoid (see Ooomba.newOnPlanet) has no ends to turn
-    -- around at — it just keeps walking laps.
+  if shape.isLoop or (shape.isRoundedRect and not shape.isOpenPath and not shape.isSkyDome) then
+    -- A round planetoid (see Ooomba.newOnPlanet) — or a rounded-rect
+    -- one it's landed on after a portal — has no ends to turn around
+    -- at: it just keeps walking laps.
     self.surfaceArcPos = desiredArcPos % perimeter
   elseif desiredArcPos < self.halfWidth or desiredArcPos > perimeter - self.halfWidth then
     self.direction = -self.direction -- reached the end — turn around instead of falling off
@@ -261,6 +285,13 @@ function Ooomba:update()
   end
 
   local surface = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
+  -- A closed gate in the way turns it around, same as the end of a ledge.
+  if actualDs ~= 0 and self:gateBlocks(prevX, prevY, surface.point.x, surface.point.y) then
+    self.surfaceArcPos = prevArcPos
+    self.direction = -self.direction
+    actualDs = 0
+    surface = shape:worldPointAtArcPosition(self.surfaceArcPos, self.halfHeight)
+  end
   self.pos = surface.point
   if not shape.forceUprightJump then self.up = surface.normal:clone() end
 
@@ -283,6 +314,138 @@ function Ooomba:update()
     local sideDir = Vector2.new(-downDir.y, downDir.x)
     DustPuff.spawn(feetPos, downDir, sideDir, 2 + math.floor(math.random() * 2), 2.5, 0.2, 0.6)
   end
+
+  -- Walking onto a floor portal drops it in.
+  if timeScale > 0 then
+    self.vel = Vector2.new((self.pos.x - prevX) / timeScale, (self.pos.y - prevY) / timeScale)
+  end
+  PortalGun.tryEnterOoomba(self, true)
+end
+
+-- Whether stepping from (fromX, fromY) to (x, y) walks it into a closed
+-- Gate (see lua/world/Gate.lua): its body would overlap the gate's bar
+-- there, and the step is toward it. (Only toward, so one a gate closed on
+-- top of can still walk out.) A gate raised clear above its head lets it
+-- through.
+function Ooomba:gateBlocks(fromX, fromY, x, y)
+  for _, gate in ipairs(state.gates or {}) do
+    if gate.halfHeight > 1
+        and math.abs(x - gate.pos.x) < self.halfWidth * 0.8 + gate.halfWidth
+        and math.abs(y - gate.pos.y) < self.halfHeight + gate.halfHeight
+        and math.abs(x - gate.pos.x) < math.abs(fromX - gate.pos.x) then
+      return true
+    end
+  end
+  return false
+end
+
+-- Flying, after coming out of a portal: gravity pulls it the same way it
+-- pulls Bob in the air, it turns upright as it falls, and it lands on
+-- (and starts patrolling) whatever floor it comes down on. Walls and
+-- ceilings just stop it. One that never lands (flung off into space) is
+-- given up on after a while (self.lost — main.lua removes it).
+local AIRBORNE_GIVE_UP_TICKS = 60 * 20
+local AIR_UPRIGHT_RATE = 0.12 -- fraction of the way back to upright it turns each frame
+local LANDING_SLACK = 2
+
+-- Which way is "up" where it is: away from whatever gravity has hold of it.
+local function upAgainstGravity(o)
+  local planet = o.lastInfluencePlanet
+  if not planet then return Vector2.new(0, -1) end
+  if planet.isRoundedRect then
+    if planet.forceUprightJump or planet.isSkyDome then return Vector2.new(0, -1) end
+    return planet:nearestSurfacePoint(o.pos.x, o.pos.y).normal:clone()
+  end
+  return o.pos:subtract(planet.pos):normalize()
+end
+
+function Ooomba:updateAirborne(ts)
+  self.airTime = self.airTime + ts
+  if self.airTime > AIRBORNE_GIVE_UP_TICKS then
+    self.lost = true
+    return
+  end
+
+  if state.gravitySystem then state.gravitySystem:applyTo(self) end
+  self.pos = Vector2.new(self.pos.x + self.vel.x * ts, self.pos.y + self.vel.y * ts)
+
+  local a = math.atan2(self.up.y, self.up.x)
+  local want = upAgainstGravity(self)
+  local diff = (math.atan2(want.y, want.x) - a + math.pi) % (2 * math.pi) - math.pi
+  a = a + diff * math.min(1, AIR_UPRIGHT_RATE * ts)
+  self.up = Vector2.new(math.cos(a), math.sin(a))
+
+  if PortalGun.tryEnterOoomba(self, false) then return end
+  self:tryLand(ts)
+end
+
+function Ooomba:tryLand(ts)
+  local feetX = self.pos.x - self.up.x * self.halfHeight
+  local feetY = self.pos.y - self.up.y * self.halfHeight
+  local gravityUp = upAgainstGravity(self)
+  local speed = math.sqrt(self.vel.x * self.vel.x + self.vel.y * self.vel.y)
+  local reach = speed * ts + LANDING_SLACK
+
+  for _, p in ipairs(state.planetoids or {}) do
+    if not p.isWaterPlanet then
+      local cx, cy = p.pos.x, p.pos.y
+      local bound = p.isSkyDome and math.max(p.domeRadiusX or 0, p.halfWidth or 0)
+        or (p.halfWidth and math.sqrt(p.halfWidth ^ 2 + p.halfHeight ^ 2)) or p.radius or 0
+      if (feetX - cx) ^ 2 + (feetY - cy) ^ 2 <= (bound + reach + self.drawHeight) ^ 2 then
+        local dist, sx, sy, nx, ny = PortalGun.surfaceOf(p, feetX, feetY)
+        local into = self.vel.x * nx + self.vel.y * ny
+        -- One-way ledges only from their walkable side.
+        local onWalkableSide = not p.isOpenPath or (feetX - sx) * nx + (feetY - sy) * ny > -reach
+        if dist <= reach and into < 0 and onWalkableSide then
+          if nx * gravityUp.x + ny * gravityUp.y > 0.5 then
+            self:landOn(p, sx, sy)
+            return
+          end
+          -- A wall or ceiling: it stops against it and keeps falling.
+          self.vel = Vector2.new(self.vel.x - nx * into, self.vel.y - ny * into)
+        end
+      end
+    end
+  end
+
+  for _, level in ipairs(state.tiledLevels or {}) do
+    for _, w in ipairs(level.walls or {}) do
+      if w.isWall or (w.isGate and w.halfHeight > 1) then -- (closed gates too)
+        local dist, sx, sy, nx, ny = PortalGun.wallSurfaceOf(w, self.pos.x, self.pos.y)
+        local body = math.min(self.halfWidth, self.halfHeight)
+        if dist < body then
+          -- Pushed back out, and stopped going into it.
+          self.pos = Vector2.new(sx + nx * body, sy + ny * body)
+          local into = self.vel.x * nx + self.vel.y * ny
+          if into < 0 then self.vel = Vector2.new(self.vel.x - nx * into, self.vel.y - ny * into) end
+        end
+      end
+    end
+  end
+end
+
+function Ooomba:landOn(p, x, y)
+  local shape, arc
+  if p.isRoundedRect or p.isSkyDome then
+    shape = p
+    arc = p:arcPositionForWorldPoint(x, y)
+    self.planet = nil
+  else
+    shape = Ooomba.planetPath(p)
+    arc = (math.atan2(y - p.pos.y, x - p.pos.x) % (2 * math.pi)) * p.radius
+    self.planet = p
+  end
+  local perimeter = shape:getPerimeter()
+  if not shape.isLoop and not (shape.isRoundedRect and not shape.isOpenPath and not shape.isSkyDome) then
+    arc = math.max(self.halfWidth, math.min(perimeter - self.halfWidth, arc))
+  end
+  self.homeShape = shape
+  self.surfaceArcPos = arc
+  self.airborne = false
+  self.vel = Vector2.new(0, 0)
+  local surface = shape:worldPointAtArcPosition(arc, self.halfHeight)
+  self.pos = surface.point
+  self.up = shape.forceUprightJump and Vector2.new(0, -1) or surface.normal:clone()
 end
 
 function Ooomba:draw()

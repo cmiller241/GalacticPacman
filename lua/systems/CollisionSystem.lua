@@ -705,7 +705,8 @@ function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
   if not ooombas then return flattened end
 
   for _, o in ipairs(ooombas) do
-    if not o.isSquashing and not player.isDying then
+    -- (Not while it's partway through a portal — see PortalGun.tryEnterOoomba.)
+    if not o.isSquashing and not player.isDying and not o.portalTransit then
       local dx, dy = player.pos.x - o.pos.x, player.pos.y - o.pos.y
       local r = player.radius + o.hitRadius
       if dx * dx + dy * dy <= r * r then

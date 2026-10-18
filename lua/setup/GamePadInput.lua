@@ -62,6 +62,8 @@ local inputHandlers = require("lua.setup.InputHandlers")
 local tryRestartOrAdvance = inputHandlers.tryRestartOrAdvance
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
+local PortalGun = require("lua.systems.PortalGun")
+local WeaponModes = require("lua.systems.WeaponModes")
 
 -- Positional mapping — see this file's own header comment for why
 -- these specific names correspond to these specific PS buttons.
@@ -73,6 +75,8 @@ local BUTTON_R1 = "rightshoulder"
 local BUTTON_L1 = "leftshoulder"
 local BUTTON_DPAD_UP = "dpup"
 local BUTTON_DPAD_DOWN = "dpdown"
+local BUTTON_DPAD_LEFT = "dpleft"
+local BUTTON_DPAD_RIGHT = "dpright"
 -- "start" is the pad's right-hand menu button: Options on a PS5/PS4
 -- controller, Start on older ones, Menu on an Xbox pad.
 local BUTTON_START = "start"
@@ -103,6 +107,8 @@ end
 -- variable-per-button structure as the original.
 local lastXPressed = false
 local lastL2Pressed = false
+local lastR2Pressed = false
+local lastDpadLeftPressed, lastDpadRightPressed = false, false
 local lastR1Pressed = false
 local lastL1Pressed = false
 local lastCirclePressed = false
@@ -149,6 +155,7 @@ local function pollGamepad(dt)
   if not gp then
     state.gamepadAimActive = false
     state.gamepadFireHeld = false
+    state.gamepadSprayHeld = false
     state.gamepadRunHeld = isShiftHeld()
     state.gamepadIsActiveDevice = false
     state.gamepadPullHeld = false
@@ -196,6 +203,7 @@ local function pollGamepad(dt)
 
     state.gamepadAimActive = false
     state.gamepadFireHeld = false
+    state.gamepadSprayHeld = false
     state.gamepadRunHeld = false
     if xPressed or circlePressed or startPressed or menuUp or menuDown then
       state.lastGamepadInputTime = love.timer.getTime()
@@ -221,6 +229,7 @@ local function pollGamepad(dt)
 
     state.gamepadAimActive = false
     state.gamepadFireHeld = false
+    state.gamepadSprayHeld = false
     state.gamepadRunHeld = false
     local stickX, stickY = gp:getGamepadAxis("leftx") or 0, gp:getGamepadAxis("lefty") or 0
     if gp:isGamepadDown(ALL_FACE_AND_SHOULDER_BUTTONS)
@@ -268,6 +277,14 @@ local function pollGamepad(dt)
     gamepadHeldZoomOut = false
   end
 
+  -- --- D-pad left/right: cycle weapon mode (Blaster / Portal / Water —
+  -- same as P on the keyboard; see WeaponModes.lua) ---
+  local dpadLeftPressed = gp:isGamepadDown(BUTTON_DPAD_LEFT)
+  local dpadRightPressed = gp:isGamepadDown(BUTTON_DPAD_RIGHT)
+  if dpadRightPressed and not lastDpadRightPressed then WeaponModes.cycle(1) end
+  if dpadLeftPressed and not lastDpadLeftPressed then WeaponModes.cycle(-1) end
+  lastDpadLeftPressed, lastDpadRightPressed = dpadLeftPressed, dpadRightPressed
+
   -- --- X (Cross): jump / wall jump / swim stroke / ground pound —
   -- or, while inside the pinball planet (state.player.inPinball), the
   -- plunger/flippers instead (see PinballInterior:triggerJumpAction) ---
@@ -291,7 +308,20 @@ local function pollGamepad(dt)
 
   -- --- R2: fire ---
   -- Analog trigger, thresholded — see this file's own header comment.
-  state.gamepadFireHeld = (gp:getGamepadAxis("triggerright") or 0) > TRIGGER_PRESS_THRESHOLD
+  local r2Pressed = (gp:getGamepadAxis("triggerright") or 0) > TRIGGER_PRESS_THRESHOLD
+  state.gamepadSprayHeld = false
+  if state.portalMode then
+    -- Portal mode: one blue portal per press, no fireballs.
+    if r2Pressed and not lastR2Pressed then PortalGun.fire(state.player, "blue") end
+    state.gamepadFireHeld = false
+  elseif state.waterMode then
+    -- Water mode: sprays while held (see WaterSystem.update), no fireballs.
+    state.gamepadFireHeld = false
+    state.gamepadSprayHeld = r2Pressed
+  else
+    state.gamepadFireHeld = r2Pressed
+  end
+  lastR2Pressed = r2Pressed
 
   -- --- Triangle: toggle V.A.T.S. while in space, otherwise toggle ball
   -- mode (Player:enterBallMode/exitBallMode — same pair the keyboard's
@@ -406,7 +436,12 @@ local function pollGamepad(dt)
   -- --- L2: pull beam ---
   -- Analog trigger, thresholded — same reasoning as R2 above.
   local l2Pressed = (gp:getGamepadAxis("triggerleft") or 0) > TRIGGER_PRESS_THRESHOLD
-  if state.player then
+  if state.portalMode then
+    -- Portal mode: one red portal per press, no pull beam.
+    if l2Pressed and not lastL2Pressed then PortalGun.fire(state.player, "red") end
+  elseif state.waterMode then
+    -- Water mode: L2 does nothing for now (R2 sprays).
+  elseif state.player then
     if l2Pressed and not lastL2Pressed then
       state.player:trySelectPullTarget(state.player.lockedTarget or state.player.aimTargetObject)
     elseif not l2Pressed and lastL2Pressed and not state.vatsActive then
@@ -418,7 +453,7 @@ local function pollGamepad(dt)
     end
   end
   lastL2Pressed = l2Pressed
-  state.gamepadPullHeld = l2Pressed
+  state.gamepadPullHeld = l2Pressed and not state.portalMode and not state.waterMode
 
   -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
   -- own on-screen cursor instead — see that file) ---
