@@ -74,6 +74,7 @@ local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
 local PortalGun = require("lua.systems.PortalGun")
 local WeaponModes = require("lua.systems.WeaponModes")
+local Recall = require("lua.systems.Recall")
 
 -- Shared by the Enter key handler and the mousedown handler below —
 -- same role and same logic as the original. levelSetup is required
@@ -134,6 +135,12 @@ local function attachInputHandlers()
     -- Water mode: spraying is held, so it's read each frame instead
     -- (see WaterSystem.update); the left button does nothing for now.
     if state.waterMode then return end
+    -- Recall mode: the right button rewinds the planetoid under the
+    -- cursor (see lua/systems/Recall.lua); the left does nothing for now.
+    if state.recallMode then
+      if button == 2 then Recall.activate(state.player) end
+      return
+    end
     if button == 1 then
       state.mouseDown = true
       if state.player then state.player:shootFireball() end

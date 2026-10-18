@@ -56,6 +56,7 @@ local WaterPlanet = require("lua.world.WaterPlanet")
 local Fish = require("lua.entities.Fish")
 local PortalGun = require("lua.systems.PortalGun")
 local WaterSystem = require("lua.systems.WaterSystem")
+local Recall = require("lua.systems.Recall")
 local WeaponModes = require("lua.systems.WeaponModes")
 
 local collisionSystem
@@ -128,6 +129,7 @@ local function resetWorldState()
   state.portals, state.portalTracers = nil, nil
   WeaponModes.set("blaster")
   WaterSystem.reset()
+  Recall.reset()
   state.portalCameraGlide = nil
 
   -- Whatever was in progress.
@@ -1197,7 +1199,9 @@ end
 
 local function updatePlanetoidsPhysics()
   for _, p in ipairs(state.planetoids) do
-    if p.isImmovable then
+    if p.recalling then
+      -- Rewinding: Recall.update moves it (see lua/systems/Recall.lua).
+    elseif p.isImmovable then
       p.vel.x, p.vel.y = 0, 0
     else
       p.pos:addScaled(p.vel, state.timeScale)
@@ -1305,7 +1309,7 @@ function love.update(dt)
   -- Player:move below, which is what places him on the planetoid he's
   -- being carried round by.
   for _, p in ipairs(state.planetoids) do
-    if p.updateRotation then p:updateRotation(state.timeScale) end
+    if p.updateRotation and not p.recalling then p:updateRotation(state.timeScale) end
   end
 
   -- TEMPORARY (goes with TEMP_START_ON_MINING_PLANET in love.load):
@@ -1320,8 +1324,14 @@ function love.update(dt)
   -- own, driving self.pos directly along its fixed patrol path — every
   -- other planetoid type is left untouched here, same as always.
   for _, p in ipairs(state.planetoids) do
-    if p.update then p:update() end
+    if p.update and not p.recalling then p:update() end
   end
+
+  -- Recall: rewinding planetoids moved back along their recorded paths
+  -- (shoving whatever's in the way), and every planetoid's path recorded
+  -- — after their own movement above, before the player's below, so he's
+  -- carried along on one that's rewinding. See lua/systems/Recall.lua.
+  Recall.update(dt)
 
   if state.asteroids then
     for _, a in ipairs(state.asteroids) do
@@ -1692,6 +1702,14 @@ function love.update(dt)
     -- Through a portal, before anything below can see one hit the
     -- portal's own surface (see PortalGun.passFireballs).
     PortalGun.passFireballs(state.fireballs, state.timeScale)
+
+    -- Into water: it goes out in a burst of steam, boiling some of the
+    -- water off (see WaterSystem.quenchFireball).
+    for i = #state.fireballs, 1, -1 do
+      if WaterSystem.quenchFireball(state.fireballs[i]) then
+        table.remove(state.fireballs, i)
+      end
+    end
 
     if #state.fireballs > 0 then
       -- Mirrors get first look: a reflected fireball just had its
@@ -2137,6 +2155,9 @@ function love.draw()
       end
     end
   end
+
+  -- Recall's yellow overlay on rewinding planetoids (and the aim ring).
+  Recall.draw()
 
   -- Spikey (lua/world/Spikey.lua) isn't in state.planetoids anymore (see
   -- its own header comment on why — it's deliberately not a planet),
@@ -2606,6 +2627,10 @@ function love.draw()
   elseif state.waterMode then
     love.graphics.print(string.format("Right-click / R2: spray water (%d / %d), Space to jump (or swim)",
       math.floor(WaterSystem.totalWater() + 0.5), WaterSystem.waterCap()), 20, 160)
+  elseif state.recallMode then
+    love.graphics.print("Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
+  elseif state.recallMode then
+    love.graphics.print("Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
   else
     love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
   end
