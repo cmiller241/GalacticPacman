@@ -119,6 +119,12 @@ function SilhouetteGlow.draw(worldX, worldY, boundWorldRadius, glowWorldRadius, 
   -- restores that camera transform afterward for everything that
   -- follows, this function's own pass 2 included.
   local prevCanvas = love.graphics.getCanvas()
+  -- Any stencil clipping the caller has on (e.g. a portal cutting the
+  -- subject off — see PortalGun.lua) can't apply inside this canvas, which
+  -- has no stencil buffer of its own: off while drawing into it, and back
+  -- on for pass 2 below, so the GLOW gets clipped the same way instead.
+  local stencilMode, stencilValue = love.graphics.getStencilTest()
+  love.graphics.setStencilTest()
   love.graphics.push()
   love.graphics.setCanvas(maskCanvas)
   love.graphics.clear(0, 0, 0, 0)
@@ -129,6 +135,7 @@ function SilhouetteGlow.draw(worldX, worldY, boundWorldRadius, glowWorldRadius, 
   drawFn()
   love.graphics.setCanvas(prevCanvas)
   love.graphics.pop()
+  if stencilMode ~= "always" then love.graphics.setStencilTest(stencilMode, stencilValue) end
 
   -- Pass 2: composite that canvas back at the subject's own current
   -- screen position through the dilate/fade shader above — also at
