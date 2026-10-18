@@ -6,21 +6,23 @@
 --   portal  — left click / L2 red portal, right click / R2 blue portal
 --             (see lua/systems/PortalGun.lua)
 --   water   — right click / R2 sprays water (see lua/systems/WaterSystem.lua)
+--   recall  — right click / R2 on a planetoid rewinds it (see lua/systems/Recall.lua)
 --
--- state.weaponMode holds the current one; state.portalMode/state.waterMode
+-- state.weaponMode holds the current one; state.portalMode/waterMode/recallMode
 -- are the same thing as plain flags, for the input code's checks.
 
 local state = require("lua.state")
 
 local WeaponModes = {}
 
-WeaponModes.ORDER = { "blaster", "portal", "water" }
-WeaponModes.LABELS = { blaster = "Blaster", portal = "Portal", water = "Water" }
+WeaponModes.ORDER = { "blaster", "portal", "water", "recall" }
+WeaponModes.LABELS = { blaster = "Blaster", portal = "Portal", water = "Water", recall = "Recall" }
 
 function WeaponModes.set(mode)
   state.weaponMode = mode
   state.portalMode = mode == "portal"
   state.waterMode = mode == "water"
+  state.recallMode = mode == "recall"
   -- A pull beam in progress is let go once its button does something else.
   if mode ~= "blaster" and state.player and state.player.pullTarget then
     state.player:clearPullTarget()

@@ -64,6 +64,7 @@ local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
 local PortalGun = require("lua.systems.PortalGun")
 local WeaponModes = require("lua.systems.WeaponModes")
+local Recall = require("lua.systems.Recall")
 
 -- Positional mapping — see this file's own header comment for why
 -- these specific names correspond to these specific PS buttons.
@@ -318,6 +319,11 @@ local function pollGamepad(dt)
     -- Water mode: sprays while held (see WaterSystem.update), no fireballs.
     state.gamepadFireHeld = false
     state.gamepadSprayHeld = r2Pressed
+  elseif state.recallMode then
+    -- Recall mode: one recall per press, on the locked target or whatever
+    -- he's aiming at (see lua/systems/Recall.lua), no fireballs.
+    if r2Pressed and not lastR2Pressed then Recall.activate(state.player) end
+    state.gamepadFireHeld = false
   else
     state.gamepadFireHeld = r2Pressed
   end
@@ -439,8 +445,8 @@ local function pollGamepad(dt)
   if state.portalMode then
     -- Portal mode: one red portal per press, no pull beam.
     if l2Pressed and not lastL2Pressed then PortalGun.fire(state.player, "red") end
-  elseif state.waterMode then
-    -- Water mode: L2 does nothing for now (R2 sprays).
+  elseif state.waterMode or state.recallMode then
+    -- Water and Recall modes: L2 does nothing for now (R2 sprays/recalls).
   elseif state.player then
     if l2Pressed and not lastL2Pressed then
       state.player:trySelectPullTarget(state.player.lockedTarget or state.player.aimTargetObject)
@@ -453,7 +459,7 @@ local function pollGamepad(dt)
     end
   end
   lastL2Pressed = l2Pressed
-  state.gamepadPullHeld = l2Pressed and not state.portalMode and not state.waterMode
+  state.gamepadPullHeld = l2Pressed and not state.portalMode and not state.waterMode and not state.recallMode
 
   -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
   -- own on-screen cursor instead — see that file) ---
