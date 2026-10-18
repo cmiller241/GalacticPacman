@@ -35,24 +35,33 @@ local SPLASH_COLOR_LIGHT = { 0.85, 0.97, 1.0 }
 -- every direction, since a real splash sprays away from the surface,
 -- not back into the water.
 -- count: optional, defaults to SPLASH_PARTICLE_COUNT.
-function Splash.spawn(pos, outwardDir, count)
+-- opts: optional tweaks for a different kind of splash (all default to
+-- the burst above): coneAngle, speedScale, lifeScale, radiusScale, and
+-- lightMin (0-1: how far toward SPLASH_COLOR_LIGHT the darkest droplet
+-- is — 0 the full range, 1 all foam-white). See WaterSystem.lua's
+-- waterfall splashes.
+function Splash.spawn(pos, outwardDir, count, opts)
   count = count or SPLASH_PARTICLE_COUNT
+  opts = opts or {}
+  local cone = opts.coneAngle or SPLASH_CONE_ANGLE
+  local speedScale, lifeScale = opts.speedScale or 1, opts.lifeScale or 1
+  local radiusScale, lightMin = opts.radiusScale or 1, opts.lightMin or 0
   local baseAngle = math.atan2(outwardDir.y, outwardDir.x)
 
   for _ = 1, count do
-    local angle = baseAngle + (math.random() - 0.5) * SPLASH_CONE_ANGLE
-    local speed = SPLASH_SPEED_MIN + math.random() * (SPLASH_SPEED_MAX - SPLASH_SPEED_MIN)
+    local angle = baseAngle + (math.random() - 0.5) * cone
+    local speed = (SPLASH_SPEED_MIN + math.random() * (SPLASH_SPEED_MAX - SPLASH_SPEED_MIN)) * speedScale
     local vel = Vector2.new(math.cos(angle) * speed, math.sin(angle) * speed)
-    local life = SPLASH_LIFE_MIN + math.random() * (SPLASH_LIFE_MAX - SPLASH_LIFE_MIN)
+    local life = (SPLASH_LIFE_MIN + math.random() * (SPLASH_LIFE_MAX - SPLASH_LIFE_MIN)) * lifeScale
 
     local particle = Particle.new(pos, vel, life)
-    local mixT = math.random()
+    local mixT = lightMin + math.random() * (1 - lightMin)
     particle.color = {
       SPLASH_COLOR_DEEP[1] + (SPLASH_COLOR_LIGHT[1] - SPLASH_COLOR_DEEP[1]) * mixT,
       SPLASH_COLOR_DEEP[2] + (SPLASH_COLOR_LIGHT[2] - SPLASH_COLOR_DEEP[2]) * mixT,
       SPLASH_COLOR_DEEP[3] + (SPLASH_COLOR_LIGHT[3] - SPLASH_COLOR_DEEP[3]) * mixT,
     }
-    particle.radius = SPLASH_RADIUS_MIN + math.random() * (SPLASH_RADIUS_MAX - SPLASH_RADIUS_MIN)
+    particle.radius = (SPLASH_RADIUS_MIN + math.random() * (SPLASH_RADIUS_MAX - SPLASH_RADIUS_MIN)) * radiusScale
     particle.drag = SPLASH_DRAG
     table.insert(state.particles, particle)
   end
