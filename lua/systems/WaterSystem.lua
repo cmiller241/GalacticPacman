@@ -57,6 +57,12 @@ local HITS_POOL = 0.5             -- a droplet flying into a cell at least this 
 -- as a jet of bigger droplets.
 local PORTAL_FLOW_PER_SECOND = 12 -- cells' worth of water one portal can take in per second
 local PORTAL_JET_VOLUME = 0.25    -- water in each droplet of the jet
+-- A planetoid's water flowing through a portal (see drainOceansIntoPortals):
+-- cells' worth a second per world unit deeper it is over this portal
+-- than over the other (up to PORTAL_FLOW_PER_SECOND), stopping once
+-- they're within OCEAN_LEVEL_SLACK of level.
+local OCEAN_LEVEL_RATE = 0.6
+local OCEAN_LEVEL_SLACK = 0.5
 local PORTAL_JET_SPEED, PORTAL_JET_SPEED_RANGE = 4, 2 -- world units/frame out of the exit portal
 local PORTAL_JET_SPREAD = 0.15    -- radians either side
 
@@ -71,6 +77,7 @@ local SPUTTER_FRACTION = 0.15     -- share of the usual spray rate it dribbles a
 -- Water on round planetoids (see addToOcean): an even layer all the way
 -- round, drawn as a ring this many segments around.
 local OCEAN_SEGMENTS = 72
+local OCEAN_MAX_SEGMENTS = 720     -- (more for a bigger one, up to this — see drawOceans)
 
 local SPLASH_BITS = 4
 local SPLASH_SECONDS = 0.35
@@ -101,11 +108,12 @@ local BOIL_ON_HIT = 0.6
 local BOIL_PER_SECOND = 1.2
 local HOT_SECONDS = 2.5
 local BOIL_REACH_CELLS = 3        -- how far round the spot it boils water off
-local STEAM_BURST = 26            -- puffs in the burst when it hits
+local STEAM_BURST = 50            -- puffs in the burst when it hits
 local STEAM_PER_SECOND = 22       -- puffs a second off a hot spot, at first
-local STEAM_SECONDS = 1.4         -- how long a puff lasts
+local STEAM_SECONDS = 5         -- how long a puff lasts
 local STEAM_RISE = 1.1            -- how fast a puff rises (per 60fps tick)
-local STEAM_SIZE = 5              -- a puff's starting radius...
+local STEAM_START_DEPTH = 12      -- how far below the surface a puff starts (up to), rising out of the water
+local STEAM_SIZE = 2              -- a puff's starting radius...
 local STEAM_GROWTH = 14           -- ...and how much it grows over its life
 local STEAM_ALPHA = 0.32
 local COLOR_STEAM = { 0.92, 0.95, 1.00 }
@@ -127,7 +135,31 @@ local LIP_THICKNESS = 6           -- world units thick: the water pouring over a
 local SURFACE_SLICES = 4          -- strips each cell's surface is drawn in (for a smooth curve)
 local SURFACE_GLOW = 16           -- how far the glow under the surface reaches
 local COLOR_CAUSTIC = { 0.75, 0.92, 1.00 }
-local CAUSTIC_SCALE = 34          -- world units across one caustic cell
+local CAUSTIC_SCALE = 34          -- world units across one caustic cell...
+local CAUSTIC_GROW_FROM_DEPTH = 60 -- ...in a planetoid's water layer up to this deep; deeper ones' cells grow (see causticScaleFor)...
+local CAUSTIC_GROW_POWER = 0.5    -- ...with the square root of how many times deeper it is...
+local CAUSTIC_MAX_GROWTH = 5      -- ...up to this many times bigger
+-- A planetoid's water layer is shaded as a sphere lit by the sun instead
+-- of by depth (see the shader's sphereShading) — the water planets' old
+-- look: lit side to shaded side, a little deeper toward the middle, a
+-- bright rim on the sun side's edge, a reflected highlight on the edge
+-- furthest from the sun.
+local SPHERE_COLOR_SHALLOW = { 0.30, 0.66, 0.85 }   -- the lit side
+local SPHERE_COLOR_DEEP = { 0.05, 0.24, 0.52 }      -- toward the middle
+local SPHERE_COLOR_SHADE = { 0.02, 0.05, 0.20 }     -- the side away from the sun
+local SPHERE_SHADE_STRENGTH = 0.9                   -- 0 = no lit/shaded difference, 1 = the full range
+local SPHERE_COLOR_RIM = { 0.55, 0.88, 0.98 }
+local SPHERE_RIM_STRENGTH = 0.5
+local SPHERE_COLOR_REFLECTED = { 0.20, 0.38, 0.60 }
+local SPHERE_REFLECTED_STRENGTH = 0.8
+-- The planetoid under a water layer: overlaid with the water (its color
+-- and caustics) more strongly the deeper the water is over it — none at
+-- all under CORE_OVERLAY_FROM_DEPTH, rising to CORE_OVERLAY_MAX (a
+-- fraction of the water's own opacity there) by CORE_OVERLAY_FULL_DEPTH.
+local CORE_OVERLAY_FROM_DEPTH = 20
+local CORE_OVERLAY_FULL_DEPTH = 400
+local CORE_OVERLAY_MAX = 0.85 -- (about what the old water planets showed through)
+local CAUSTIC_BULGE = 1.0        -- how much a planetoid's water's caustics bulge like a globe's (0 = flat, 1 = full)
 local CAUSTIC_SPEED = 0.6
 local CAUSTIC_STRENGTH = 0.3
 local COLOR_DROPLET = { 0.70, 0.88, 1.00, 0.95 }
@@ -199,6 +231,23 @@ local function addToOcean(p, amount)
     oceans[p] = o
   end
   o.volume = o.volume + amount
+end
+
+-- A planetoid that starts out under water (see WaterPlanet.lua): a layer
+-- of water round core planetoid `core` out to `outerRadius`, the same as
+-- any other planetoid's water from then on — swum in, drained through
+-- portals, boiled by fireballs, leveled with other planetoids' — except
+-- that it doesn't evaporate away on its own, and as much of it as it
+-- started with doesn't count against WATER_CAP (it isn't sprayed water).
+-- `marker`, if given, has its .radius kept at the water's surface (the
+-- water body the fish swim in — see Fish.lua).
+function WaterSystem.addNaturalOcean(core, outerRadius, marker)
+  local volume = math.pi * (outerRadius * outerRadius - core.radius * core.radius) / (CELL * CELL)
+  addToOcean(core, volume)
+  local o = oceans[core]
+  o.natural = (o.natural or 0) + volume
+  o.marker = marker
+  if marker then marker.radius = outerRadius end
 end
 
 -- Drops oceans whose planetoid has been culled (no longer in the world).
@@ -530,6 +579,11 @@ local function spray(player, dt)
   sprayBudget = sprayBudget + SPRAY_PER_SECOND * (empty and SPUTTER_FRACTION or 1) * dt
   local ox, oy = player:getMuzzlePosition()
   local aim = (player.aimWorldAngle or 0) + (player.blasterAngleOffset or 0)
+  -- What the spray falls toward: what he's on, or what's pulling him —
+  -- for a water planet's water body (see WaterPlanet.lua), the planetoid
+  -- under the water, so it joins that water.
+  local sprayPlanet = player.onSurface and player.currentPlanet or player.lastInfluencePlanet
+  if sprayPlanet and sprayPlanet.isWaterPlanet and sprayPlanet.core then sprayPlanet = sprayPlanet.core end
   while sprayBudget >= 1 do
     sprayBudget = sprayBudget - 1
     -- (Checked per droplet too, so one long frame can't spray past it.)
@@ -542,7 +596,7 @@ local function spray(player, dt)
         vx = math.cos(a) * speed + player.vel.x, vy = math.sin(a) * speed + player.vel.y,
         life = DROPLET_SECONDS,
         volume = empty and 0 or DROPLET_VOLUME,
-        planet = player.onSurface and player.currentPlanet or player.lastInfluencePlanet,
+        planet = sprayPlanet,
       })
       if not empty then totalWater = totalWater + DROPLET_VOLUME end
     end
@@ -688,13 +742,72 @@ local function drainIntoPortals(dt)
         local speed = PORTAL_JET_SPEED + math.random() * PORTAL_JET_SPEED_RANGE
         local x, y, vx, vy, to = PortalGun.throughPortal(p, at.x, at.y, math.cos(a) * speed, math.sin(a) * speed, 4)
         if x then
+          -- Out onto a round planetoid: straight into its water (see
+          -- drainOceansIntoPortals), the jet just for show.
+          local intoOcean = isRoundPlanet(to.obj)
+          if intoOcean then addToOcean(to.obj, PORTAL_JET_VOLUME) end
           table.insert(droplets, {
-            x = x, y = y, vx = vx, vy = vy, life = DROPLET_SECONDS, volume = PORTAL_JET_VOLUME,
+            x = x, y = y, vx = vx, vy = vy, life = DROPLET_SECONDS,
+            volume = intoOcean and 0 or PORTAL_JET_VOLUME,
             planet = not (to.obj.isWall or to.obj.isGate) and to.obj or nil,
           })
         end
       end
       if #wet == 0 then portalDrained[color] = 0 end
+    end
+  end
+end
+
+-- A planetoid's water layer (see addToOcean) flowing into a portal under
+-- it, and out of the other portal as a jet — which joins whatever's over
+-- there: the other planetoid's water, a pool on the level, ... It flows
+-- faster the deeper the water over this portal is than over the other
+-- one (none over there: zero), so two planetoids' water linked by
+-- portals levels out, each at the same depth over its portal; a deeper
+-- far side flows back this way instead (on its own turn).
+local oceanDrained = {}
+local function drainOceansIntoPortals(dt)
+  local portals = state.portals
+  if not (portals and portals.red and portals.blue) then return end
+  for _, color in ipairs({ "red", "blue" }) do
+    local p = portals[color]
+    local other = portals[color == "red" and "blue" or "red"]
+    local o = oceans[p.obj]
+    if o and p.x then
+      local here = oceanDepth(p.obj.radius, o.volume)
+      local there = 0
+      local far = oceans[other.obj]
+      if far then there = oceanDepth(other.obj.radius, far.volume) end
+      local diff = here - there
+      if diff > OCEAN_LEVEL_SLACK then
+        local f = math.min(PORTAL_FLOW_PER_SECOND, diff * OCEAN_LEVEL_RATE) * dt
+        f = math.min(f, o.volume)
+        o.volume = o.volume - f
+        -- Onto another round planetoid: straight into its water (a jet
+        -- out of the portal on top of one would only fall back into it).
+        local intoOcean = isRoundPlanet(other.obj)
+        if intoOcean then addToOcean(other.obj, f) end
+        oceanDrained[color] = (oceanDrained[color] or 0) + f
+
+        -- Out of the other portal, a droplet per PORTAL_JET_VOLUME taken
+        -- in (into this one along the mouth, straight out of the other) —
+        -- just for show if the water's already gone into a planetoid's.
+        while oceanDrained[color] >= PORTAL_JET_VOLUME and #droplets < MAX_DROPLETS do
+          oceanDrained[color] = oceanDrained[color] - PORTAL_JET_VOLUME
+          local m = p.mouth and p.mouth[math.random(#p.mouth)] or { x = p.x, y = p.y, nx = p.nx, ny = p.ny }
+          local a = math.atan2(-m.ny, -m.nx) + (math.random() * 2 - 1) * PORTAL_JET_SPREAD
+          local speed = PORTAL_JET_SPEED + math.random() * PORTAL_JET_SPEED_RANGE
+          local x, y, vx, vy, to = PortalGun.throughPortal(p, m.x + m.nx * 2, m.y + m.ny * 2,
+            math.cos(a) * speed, math.sin(a) * speed, 4)
+          if x then
+            table.insert(droplets, {
+              x = x, y = y, vx = vx, vy = vy, life = DROPLET_SECONDS,
+              volume = intoOcean and 0 or PORTAL_JET_VOLUME,
+              planet = not (to.obj.isWall or to.obj.isGate) and to.obj or nil,
+            })
+          end
+        end
+      end
     end
   end
 end
@@ -708,12 +821,15 @@ end
 -- Fireballs and steam
 ----------------------------------------------------------------------
 
--- A puff of steam at (x, y), rising away from the water (up: which way
--- that is), within `spread` radians of it.
+-- A puff of steam off the surface at (x, y), rising away from the water
+-- (up: which way that is), within `spread` radians of it. It starts a
+-- little below the surface, so it's seen coming up out of the water.
 local function spawnSteam(x, y, upX, upY, spread)
   local a = math.atan2(upY, upX) + (math.random() * 2 - 1) * (spread or 0.6)
   local speed = STEAM_RISE * (0.5 + math.random())
   local life = STEAM_SECONDS * (0.7 + math.random() * 0.6)
+  local depth = STEAM_START_DEPTH * (0.3 + math.random() * 0.7)
+  x, y = x - upX * depth, y - upY * depth
   steam[#steam + 1] = {
     x = x + (math.random() * 2 - 1) * 6, y = y + (math.random() * 2 - 1) * 3,
     vx = math.cos(a) * speed, vy = math.sin(a) * speed, life = life, maxLife = life,
@@ -850,7 +966,7 @@ end
 local function drawSteam()
   for _, s in ipairs(steam) do
     local t = 1 - s.life / s.maxLife
-    local alpha = STEAM_ALPHA * (1 - t) * math.min(1, t * 6)
+    local alpha = STEAM_ALPHA * (1 - t) * math.min(1, 0.5 + t * 6) -- (seen from the start, still under the water)
     love.graphics.setColor(COLOR_STEAM[1], COLOR_STEAM[2], COLOR_STEAM[3], alpha)
     love.graphics.circle("fill", s.x, s.y, STEAM_SIZE + STEAM_GROWTH * t)
   end
@@ -868,14 +984,20 @@ function WaterSystem.update(dt)
   forgetCulledOceans()
   for p, o in pairs(oceans) do
     local outer = p.radius + oceanDepth(p.radius, o.volume)
-    o.volume = o.volume - EVAPORATE_PER_SECOND * (2 * math.pi * outer / CELL) * dt * ts
-    if o.volume <= 0.05 then oceans[p] = nil end
+    if not o.natural then
+      o.volume = o.volume - EVAPORATE_PER_SECOND * (2 * math.pi * outer / CELL) * dt * ts
+    end
+    if o.volume <= 0.05 then
+      oceans[p] = nil
+      if o.marker then o.marker.radius = p.radius end
+    end
   end
 
   -- All the water there is right now (see WATER_CAP).
   totalWater = 0
   if grid then for _, w in pairs(grid.water) do totalWater = totalWater + w end end
-  for _, o in pairs(oceans) do totalWater = totalWater + o.volume end
+  -- (Less the water planets' own water — see addNaturalOcean.)
+  for _, o in pairs(oceans) do totalWater = totalWater + o.volume - (o.natural or 0) end
   for _, d in ipairs(droplets) do totalWater = totalWater + (d.volume or DROPLET_VOLUME) end
 
   local sprayHeld = state.waterMode and (love.mouse.isDown(2) or state.gamepadSprayHeld)
@@ -925,6 +1047,12 @@ function WaterSystem.update(dt)
     if stepClock > STEP_SECONDS then stepClock = 0 end
     drainIntoPortals(dt * ts)
   end
+  drainOceansIntoPortals(dt * ts)
+
+  -- Water bodies following their water's surface (see addNaturalOcean).
+  for p, o in pairs(oceans) do
+    if o.marker then o.marker.radius = p.radius + oceanDepth(p.radius, o.volume) end
+  end
 end
 
 -- The pool shader. Each vertex carries, in its texture coordinates, how
@@ -960,6 +1088,19 @@ local function getWaterShader()
     extern number causticScale;
     extern number causticSpeed;
     extern number causticStrength;
+    extern vec2 bulgeCenter;      // a planetoid's water layer: its planetoid's center...
+    extern number bulgeRadius;    // ...and the water's outer radius...
+    extern number causticBulge;   // ...and how much its caustics bulge like a globe's (0 for pools)
+    extern number sphereShading;  // 1: lit as a sphere by the sun (a planetoid's water), 0: the depth gradient (pools)
+    extern vec2 sunDir;           // unit vector from the planetoid toward the sun
+    extern vec3 sphereShallow;
+    extern vec3 sphereDeep;
+    extern vec3 sphereShade;
+    extern number sphereShadeStrength;
+    extern vec3 sphereRim;
+    extern number sphereRimStrength;
+    extern vec3 sphereReflected;
+    extern number sphereReflectedStrength;
 
     // Pseudo-random 2D hash (no built-in noise in LOVE's shader dialect).
     vec2 hash2(vec2 p) {
@@ -1002,9 +1143,47 @@ local function getWaterShader()
       vec3 c = mix(colorShallow, colorDeep, t);
       float a = mix(alphaShallow, alphaDeep, t);
 
+      // A planetoid's water, instead: shaded as a sphere lit by the sun
+      // (as the water planets were) — each point's normal on a sphere
+      // the size of the water bulging toward the viewer, bright facing
+      // the sun and falling off into shade away from it, a little deeper
+      // toward the middle, a bright rim along the sun side's edge, and a
+      // dimmer reflected highlight along the edge furthest from the sun
+      // (light bouncing back onto the dark side, the way a shaded ball
+      // never goes flat black there).
+      if (sphereShading > 0.0) {
+        vec2 fromCenter = worldPos - bulgeCenter;
+        float dist = length(fromCenter);
+        float nxy = clamp(dist / bulgeRadius, 0.0, 1.0);
+        vec2 inPlane = dist > 0.0001 ? fromCenter / dist : vec2(0.0);
+        vec3 normal = vec3(inPlane * nxy, sqrt(max(0.0, 1.0 - nxy * nxy)));
+        float facing = dot(normal, normalize(vec3(sunDir, 0.5)));
+        float lightT = smoothstep(-0.3, 0.7, facing);
+        vec3 s = mix(sphereShade, sphereShallow, mix(1.0 - sphereShadeStrength, 1.0, lightT));
+        s = mix(sphereDeep, s, mix(0.55, 1.0, nxy));
+        float rimT = smoothstep(0.6, 1.0, nxy) * clamp(facing, 0.0, 1.0);
+        s = mix(s, sphereRim, rimT * sphereRimStrength);
+        float reflectedT = smoothstep(0.65, 1.0, nxy) * (1.0 - lightT);
+        s = mix(s, sphereReflected, reflectedT * sphereReflectedStrength);
+        c = mix(c, s, sphereShading);
+      }
+
       // The caustic net: gently warped so its threads wobble, strongest
       // near the surface and fading away with depth.
-      vec2 p = worldPos / causticScale;
+      // On a planetoid's water: sampled as if painted on a globe bulging
+      // toward the viewer — distance from the center re-mapped from r to
+      // radius * asin(r / radius), so the cells read bigger and rounder
+      // in the middle and crowd together toward the rim. (The asin input
+      // is held just shy of 1, where the cells would get infinitely
+      // dense right on the silhouette.)
+      vec2 cp = worldPos;
+      if (causticBulge > 0.0) {
+        vec2 fromCenter = worldPos - bulgeCenter;
+        float dist = length(fromCenter);
+        float onGlobe = bulgeRadius * asin(clamp(dist / bulgeRadius, 0.0, 0.98));
+        if (dist > 0.0001) cp = bulgeCenter + fromCenter / dist * mix(dist, onGlobe, causticBulge);
+      }
+      vec2 p = cp / causticScale;
       p += 0.25 * vec2(sin(p.y * 1.7 + time * 0.9), cos(p.x * 1.3 - time * 0.7));
       vec2 v = voronoi(p, time * causticSpeed);
       float thread = 1.0 - smoothstep(0.0, 0.06, v.y - v.x);
@@ -1334,39 +1513,65 @@ useWaterShader = function()
   shader:send("surfaceGlow", SURFACE_GLOW)
   shader:send("colorCaustic", COLOR_CAUSTIC)
   shader:send("causticScale", CAUSTIC_SCALE)
+  shader:send("bulgeCenter", { 0, 0 })
+  shader:send("bulgeRadius", 1)
+  shader:send("causticBulge", 0) -- (flat, for the pools — see drawOceans)
+  shader:send("sphereShading", 0) -- (likewise)
+  shader:send("sunDir", { 1, 0 })
+  shader:send("sphereShallow", SPHERE_COLOR_SHALLOW)
+  shader:send("sphereDeep", SPHERE_COLOR_DEEP)
+  shader:send("sphereShade", SPHERE_COLOR_SHADE)
+  shader:send("sphereShadeStrength", SPHERE_SHADE_STRENGTH)
+  shader:send("sphereRim", SPHERE_COLOR_RIM)
+  shader:send("sphereRimStrength", SPHERE_RIM_STRENGTH)
+  shader:send("sphereReflected", SPHERE_COLOR_REFLECTED)
+  shader:send("sphereReflectedStrength", SPHERE_REFLECTED_STRENGTH)
   shader:send("causticSpeed", CAUSTIC_SPEED)
   shader:send("causticStrength", CAUSTIC_STRENGTH)
   love.graphics.setShader(shader)
 end
 
+-- How big the caustic net's cells are in a layer of water this deep:
+-- CAUSTIC_SCALE for a sprayed layer (up to CAUSTIC_GROW_FROM_DEPTH deep),
+-- growing for deeper ones — a water planet's are several times bigger.
+local function causticScaleFor(depth)
+  local grow = math.max(1, depth / CAUSTIC_GROW_FROM_DEPTH) ^ CAUSTIC_GROW_POWER
+  return CAUSTIC_SCALE * math.min(CAUSTIC_MAX_GROWTH, grow)
+end
+
 -- The water layers round planetoids (see addToOcean), through the same
 -- shader as the pools: a ring from the planetoid's surface out to the
 -- water's rippling surface (depth measured in from there), plus a thin
--- feathered strip just outside it for a soft edge.
+-- feathered strip just outside it for a soft edge. Each drawn on its own,
+-- with caustics sized for how deep it is (see causticScaleFor).
 local oceanMesh, oceanMeshSize = nil, 0
 local function drawOceans()
   local cam = state.camera
   if not cam or not next(oceans) then return end
   local vx0, vy0 = cam.x, cam.y
   local vx1, vy1 = cam.x + (state.visibleWidth or 0), cam.y + (state.visibleHeight or 0)
-  local verts = {}
-  local function vert(x, y, depth) verts[#verts + 1] = { x, y, depth, 0, 1, 1, 1, 1 } end
+  local shaderOn = false
   for p, o in pairs(oceans) do
     local R = p.radius
     local depth = oceanDepth(R, o.volume)
     local outer = R + depth
     local reach = outer + SURFACE_FEATHER + 6
     if p.pos.x + reach > vx0 and p.pos.x - reach < vx1 and p.pos.y + reach > vy0 and p.pos.y - reach < vy1 then
+      local verts = {}
+      local function vert(x, y, d, alpha) verts[#verts + 1] = { x, y, d, 0, 1, 1, 1, alpha or 1 } end
       local cx, cy = p.pos.x, p.pos.y
+      -- Enough segments for the ripple round a big one too (a water
+      -- planet's is thousands of units round).
+      local segments = math.max(OCEAN_SEGMENTS, math.min(OCEAN_MAX_SEGMENTS, math.floor(2 * math.pi * outer / 10)))
       local function ring(k)
-        local a = k / OCEAN_SEGMENTS * math.pi * 2
+        local a = k / segments * math.pi * 2
         local ca, sa = math.cos(a), math.sin(a)
         local s = a * outer -- along the surface, for the ripple
         local rip = math.sin(age * 2.2 + s * 0.045) * 1.3 + math.sin(age * 3.7 - s * 0.11) * 0.6
         local top = math.max(R + 1, outer + rip)
         return ca, sa, top
       end
-      for k = 0, OCEAN_SEGMENTS - 1 do
+      for k = 0, segments - 1 do
         local c0, s0, t0 = ring(k)
         local c1, s1, t1 = ring(k + 1)
         -- Body: planetoid surface (deepest) out to the water's surface.
@@ -1377,27 +1582,54 @@ local function drawOceans()
         vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * t1, cy + s1 * t1, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER)
         vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER); vert(cx + c0 * f0, cy + s0 * f0, -SURFACE_FEATHER)
       end
+
+      -- Over the planetoid itself: the water seen through to it, faded by
+      -- how deep the water is — not at all under a sliver, more and more
+      -- (color, caustics and all) as it deepens (see CORE_OVERLAY_*).
+      local overlay = math.min(1, math.max(0, (depth - CORE_OVERLAY_FROM_DEPTH)
+        / (CORE_OVERLAY_FULL_DEPTH - CORE_OVERLAY_FROM_DEPTH))) * CORE_OVERLAY_MAX
+      if overlay > 0 then
+        for k = 0, segments - 1 do
+          local a0, a1 = k / segments * math.pi * 2, (k + 1) / segments * math.pi * 2
+          vert(cx, cy, depth, overlay)
+          vert(cx + math.cos(a0) * R, cy + math.sin(a0) * R, depth, overlay)
+          vert(cx + math.cos(a1) * R, cy + math.sin(a1) * R, depth, overlay)
+        end
+      end
+
+      if not oceanMesh or oceanMeshSize < #verts then
+        oceanMeshSize = math.max(#verts, oceanMeshSize * 2, 600)
+        oceanMesh = love.graphics.newMesh(oceanMeshSize, "triangles", "stream")
+      end
+      oceanMesh:setVertices(verts)
+      oceanMesh:setDrawRange(1, #verts)
+      if not shaderOn then
+        useWaterShader()
+        love.graphics.setColor(1, 1, 1, 1)
+        shaderOn = true
+      end
+      local shader = getWaterShader()
+      shader:send("causticScale", causticScaleFor(depth))
+      shader:send("bulgeCenter", { cx, cy })
+      shader:send("bulgeRadius", outer)
+      shader:send("causticBulge", CAUSTIC_BULGE)
+      -- Lit as a sphere by the sun (the same "sun at the exact center of
+      -- the scene" convention the planetoids' own shading uses).
+      local sdx, sdy = (state.sceneWidth or 0) / 2 - cx, (state.sceneHeight or 0) / 2 - cy
+      local sd = math.sqrt(sdx * sdx + sdy * sdy)
+      if sd < 1 then sdx, sdy, sd = 1, 0, 1 end
+      shader:send("sphereShading", 1)
+      shader:send("sunDir", { sdx / sd, sdy / sd })
+      love.graphics.draw(oceanMesh)
     end
   end
-  if #verts == 0 then return end
-  if not oceanMesh or oceanMeshSize < #verts then
-    oceanMeshSize = math.max(#verts, oceanMeshSize * 2, 600)
-    oceanMesh = love.graphics.newMesh(oceanMeshSize, "triangles", "stream")
-  end
-  oceanMesh:setVertices(verts)
-  oceanMesh:setDrawRange(1, #verts)
-  useWaterShader()
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(oceanMesh)
-  love.graphics.setShader()
+  if shaderOn then love.graphics.setShader() end
 end
 
 -- In world space (inside the camera transform). Drawn after Bob, so
 -- he looks like he's in the water when he's swimming.
 function WaterSystem.draw()
   if grid then drawPools() end
-  drawOceans()
-  drawSteam()
 
   love.graphics.setLineWidth(2.5)
   for _, d in ipairs(droplets) do
@@ -1417,6 +1649,14 @@ function WaterSystem.draw()
 end
 
 -- Whether Bob's spraying right now (see Player:isUsingBlaster).
+-- The planetoids' water layers (see addToOcean), and steam over all the
+-- water. Drawn later than WaterSystem.draw — after the fish as well as
+-- Bob (see main.lua), so both read as under the water.
+function WaterSystem.drawOceans()
+  drawOceans()
+  drawSteam()
+end
+
 function WaterSystem.isSpraying()
   return isSpraying
 end
@@ -1424,7 +1664,7 @@ end
 -- All the water there is (on the level, on planets, in the air), as of
 -- this frame, and the most there can be — in cells' worth.
 function WaterSystem.totalWater()
-  return totalWater
+  return math.max(0, totalWater)
 end
 
 function WaterSystem.waterCap()

@@ -1,5 +1,11 @@
 -- lua/world/WaterPlanet.lua
 --
+-- NOW: a water planet is an ordinary planetoid with a layer of water
+-- round it, the same as the water spraying builds on any planetoid — see
+-- WaterPlanet.new at the bottom. Everything from here down to there
+-- (the shader-drawn wavy water body) is how it used to be drawn, kept
+-- but no longer used. The original description:
+--
 -- A landmark planetoid whose entire surface is meant to eventually be
 -- water (swimming comes later — see the player's own comment on this).
 -- For now it's a completely ordinary Planetoid (same gravity, landing,
@@ -23,6 +29,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local Planetoid = require("lua.world.Planetoid")
+local WaterSystem = require("lua.systems.WaterSystem")
 
 local WaterPlanet = {}
 
@@ -563,9 +570,24 @@ end
 -- Public API
 ----------------------------------------------------------------------
 
--- x, y: world position of the planet's center. radius: TRUE collision
--- radius (gravity/landing/walking) — same one the wavy edge wobbles
--- around visually.
+-- x, y: world position of the planet's center. radius: how far out its
+-- water reaches.
+--
+-- A water planet is an ordinary planetoid (the core — solid, landed and
+-- walked on like any other) with a layer of water round it out to
+-- `radius` — the very same kind of water layer spraying water on any
+-- round planetoid builds (see WaterSystem.addNaturalOcean): swum in,
+-- drained through a portal, boiled by a fireball, leveled with another
+-- planetoid's water, drawn by WaterSystem. (It used to be a shader-drawn
+-- water body of its own, which none of that worked on; the drawing code
+-- above is from then, and no longer used.)
+--
+-- Also returned: an invisible marker for the water body (isWaterPlanet,
+-- never solid, never drawn — see CollisionSystem:tryLandOnPlanet), which
+-- is what the fish swim in and jump between (Fish.lua), Bob swims in
+-- (Player.lua), and whose gravity holds both the way the old water body's
+-- did. WaterSystem keeps its radius at the water's actual surface, so a
+-- drained water planet shrinks for them too.
 function WaterPlanet.new(x, y, radius)
   local planet = Planetoid.new(x, y, radius, COLOR_SHALLOW)
 
@@ -577,45 +599,31 @@ function WaterPlanet.new(x, y, radius)
   planet.isPermanent = true
   planet.vel = Vector2.new(0, 0)
 
-  -- Marker CollisionSystem/Player.lua key off of: the water body is
-  -- never solid (see CollisionSystem:tryLandOnPlanet's own isWaterPlanet
-  -- check) — a player just sinks straight through it, with self.radius
-  -- here purely defining "where the wavy visual edge sits" and "how far
-  -- out counts as submerged," not a landing surface.
+  -- Marker CollisionSystem/Player.lua/Fish.lua key off of: the water body
+  -- is never solid (see CollisionSystem:tryLandOnPlanet's own
+  -- isWaterPlanet check) — a player just sinks straight through it, with
+  -- its radius purely "how far out counts as submerged," not a landing
+  -- surface. Its influenceRadius (gravity's reach, from Planetoid.new)
+  -- stays where it was set from the full radius, even as the water drains.
   planet.isWaterPlanet = true
-
-  -- Instance-level override: Lua's normal table lookup finds this
-  -- directly on `planet` before ever consulting Planetoid's own
-  -- __index, so every other Planetoid method (gravity/physics fields,
-  -- etc.) still works unchanged — only :draw() is different.
-  planet.draw = drawWater
-  -- Called separately, once, BEFORE the core/player/fish draw — see
-  -- drawWaterBackdrop's own comment for why this needs to be its own
-  -- draw call rather than folded into :draw() (which runs a second
-  -- time, AFTER them, for the translucent overlay).
-  planet.drawBackdrop = drawWaterBackdrop
+  planet.draw = function() end -- (WaterSystem draws the water)
 
   -- The hard core (see CORE_FRACTION's own comment above) is a
-  -- completely ordinary, unmodified Planetoid — no isWaterPlanet flag,
-  -- no draw/update overrides — so it lands/walks exactly like any other
-  -- planet in the game via the existing generic collision code, with no
-  -- new mechanics needed for "solid ground at the bottom of the water."
-  -- Drawn in the normal planetoid pass (not excluded like the water
-  -- shell), so the shell's own second, after-the-player draw pass
-  -- naturally paints translucent water on top of it — reads as a solid
-  -- seabed dimly visible through the water above it.
+  -- completely ordinary, unmodified Planetoid, so it lands/walks exactly
+  -- like any other planet in the game via the existing generic collision
+  -- code — and takes portals, and holds water, like any other.
   local core = Planetoid.new(x, y, radius * CORE_FRACTION, CORE_COLOR)
   core.isImmovable = true
   core.isPermanent = true
   core.vel = Vector2.new(0, 0)
 
-  -- Lets code that only holds a reference to the SHELL (e.g. a Fish
-  -- that lands in a water body other than the one it launched from,
-  -- see Fish.lua's own updateJump) find its matching core without
-  -- needing a separate lookup table — there's no other way to get from
-  -- one to the other otherwise, since core itself carries no
-  -- isWaterPlanet flag or back-reference of its own.
+  -- Lets code that only holds a reference to the water body (e.g. a Fish
+  -- that lands in a water body other than the one it launched from, see
+  -- Fish.lua's own updateJump; spraying while swimming, see
+  -- WaterSystem's spray) find its matching core.
   planet.core = core
+
+  WaterSystem.addNaturalOcean(core, radius, planet)
 
   return planet, core
 end
