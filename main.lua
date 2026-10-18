@@ -1017,6 +1017,22 @@ function love.load()
     state.spaceShelter.introDone = true
   end
 
+  -- TEMPORARY, for looking at the water planets: the game starts him
+  -- (and every respawn puts him) just above the fisherman's rounded-
+  -- rectangle planetoid, left of the fisherman, dropping onto it. No
+  -- planet is named, so he lands through the ordinary collision pass
+  -- rather than being placed on its surface. Set to false to go back.
+  local TEMP_START_ON_FISHERMAN_RECT = true
+  if TEMP_START_ON_FISHERMAN_RECT and state.roundedRectPlanet then
+    local rect = state.roundedRectPlanet
+    state.respawnPoint = {
+      x = rect.pos.x - rect.halfWidth * 0.4,
+      y = rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
+    }
+    state.spaceShelter.playerInFront = true
+    state.spaceShelter.introDone = true
+  end
+
   -- TEMPORARY, for testing the pinball table: the game starts him on
   -- its plunger, already a ball (and so does every respawn — see
   -- Player:respawn's own point.pinball). Set to false to go back.
@@ -2103,20 +2119,6 @@ function love.draw()
     end
   end
 
-  -- Every water body's own opaque BACKDROP (see WaterPlanet.lua's own
-  -- comment on drawWaterBackdrop) drawn first, so the core/player/fish
-  -- below layer normally on top of it, and the translucent shell's own
-  -- later redraw pass (after the player — see further down) blends its
-  -- shading/caustics over an already-solid base instead of raw
-  -- starfield. Without this, turning BODY_OPACITY down made the water
-  -- look "ghostly" — the background showed through evenly whether or
-  -- not something was actually standing in the water.
-  for _, p in ipairs(state.planetoids) do
-    if p.isWaterPlanet and p.drawBackdrop and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
-      p:drawBackdrop()
-    end
-  end
-
   -- Before the planetoids, so the one each stands on covers its sunken
   -- foot (see lua/world/Prism.lua).
   if state.prisms then
@@ -2508,17 +2510,12 @@ function love.draw()
     end
   end
 
-  -- Same reasoning as lava above — drawn again here (excluded from the
-  -- ordinary planetoid pass) so the water always renders on top of the
-  -- player whenever they overlap, reading as submerged rather than
-  -- floating in front of it. Every water body's shell gets this same
-  -- treatment, not just one named one — see the exclusion pass above's
-  -- own comment.
-  for _, p in ipairs(state.planetoids) do
-    if p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
-      p:draw()
-    end
-  end
+  -- Every planetoid's water layer — the water planets' included (see
+  -- WaterPlanet.lua) — and steam. Same reasoning as lava above: drawn
+  -- here, after the player and the fish, so the water renders on top of
+  -- them whenever they overlap, reading as submerged rather than
+  -- floating in front of it.
+  WaterSystem.drawOceans()
 
   -- Drawn after the water planet's own redraw above, so bubbles stay
   -- visible on top of the translucent fill rather than getting muddied
