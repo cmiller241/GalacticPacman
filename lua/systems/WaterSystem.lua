@@ -27,6 +27,7 @@ local state = require("lua.state")
 local constants = require("lua.constants")
 local Vector2 = require("lua.vector2")
 local PortalGun = require("lua.systems.PortalGun")
+local Splash = require("lua.effects.Splash")
 
 local WaterSystem = {}
 
@@ -42,12 +43,12 @@ local MIN_SPREAD = 0.02           -- thinner than this, it stays put as a damp p
 local EVAPORATE_PER_SECOND = 0.006 -- off each pool's surface; a pool one cell (16 units) deep lasts ~3 minutes
 local DRY = 0.002                 -- less than this left in a cell and it's dry
 
-local SPRAY_PER_SECOND = 80
+local SPRAY_PER_SECOND = 240
 local SPRAY_SPEED, SPRAY_SPEED_RANGE = 10, 3 -- world units/frame out of the muzzle
 local SPRAY_SPREAD = 0.08         -- radians either side of the aim
-local DROPLET_VOLUME = 0.1        -- how much of a cell each droplet fills
+local DROPLET_VOLUME = 0.1/3        -- how much of a cell each droplet fills
 local DROPLET_SECONDS = 3         -- one that hasn't landed by then just evaporates
-local MAX_DROPLETS = 400
+local MAX_DROPLETS = 1200
 local HITS_POOL = 0.5             -- a droplet flying into a cell at least this full lands in that pool
 
 -- Water and portals (see drainIntoPortals): water resting against a
@@ -59,8 +60,37 @@ local PORTAL_JET_VOLUME = 0.25    -- water in each droplet of the jet
 local PORTAL_JET_SPEED, PORTAL_JET_SPEED_RANGE = 4, 2 -- world units/frame out of the exit portal
 local PORTAL_JET_SPREAD = 0.15    -- radians either side
 
+-- All the water there can be at once — on the level, on planets, and
+-- still in the air — in cells' worth. At the cap the blaster just
+-- sputters (a thin dribble carrying no water) until some evaporates or
+-- runs off. Keeps things from getting out of hand, and the water
+-- simulation's cost bounded.
+local WATER_CAP = 1500
+local SPUTTER_FRACTION = 0.15     -- share of the usual spray rate it dribbles at, once at the cap
+
+-- Water on round planetoids (see addToOcean): an even layer all the way
+-- round, drawn as a ring this many segments around.
+local OCEAN_SEGMENTS = 72
+
 local SPLASH_BITS = 4
 local SPLASH_SECONDS = 0.35
+
+-- Where a waterfall lands (on the ground or a pool below): a steady spray
+-- of the same droplets Bob and the fish throw up leaving the water (see
+-- Splash.lua) — this many a second for a full-width fall, fewer for a
+-- thin trickle. Only for falls at least WATERFALL_SPLASH_MIN_FALL high.
+local WATERFALL_SPLASH_PER_SECOND = 220
+local WATERFALL_SPLASH_MIN_FALL = 24
+-- Its droplets, next to Bob's/the fish's (see Splash.spawn's opts):
+-- slower and shorter-lived (staying close round where it hits), in a
+-- narrower fan, smaller, and mostly foam-white.
+local WATERFALL_SPLASH = {
+  coneAngle = math.pi * 0.6,
+  speedScale = 0.35,
+  lifeScale = 0.6,
+  radiusScale = 0.35,
+  lightMin = 0.7,
+}
 
 -- The look (see getWaterShader): shallow water near the surface fading
 -- to deep water further down, a drifting caustic net of light (the same
@@ -75,6 +105,7 @@ local COLOR_SURFACE = { 0.82, 0.94, 1.00 }
 local SURFACE_LINE = 8            -- world units thick: a bright core, fading softly into the water
 local SURFACE_FEATHER = 2.5       -- world units above the surface the edge fades out over (no hard pixel edge)
 local STREAM_REACH_CELLS = 8      -- how far a falling stream is drawn down through dry space to meet what's below
+local LIP_THICKNESS = 6           -- world units thick: the water pouring over a ledge's edge into a waterfall
 local SURFACE_SLICES = 4          -- strips each cell's surface is drawn in (for a smooth curve)
 local SURFACE_GLOW = 16           -- how far the glow under the surface reaches
 local COLOR_CAUSTIC = { 0.75, 0.92, 1.00 }
@@ -90,7 +121,14 @@ local COLOR_DROPLET = { 0.70, 0.88, 1.00, 0.95 }
 local grid = nil          -- see WaterSystem.init
 local droplets = {}
 local splashes = {}
+local waterfallLandings = {} -- this frame's, from drawPools: { x, y, half, flow }
 local sprayBudget = 0
+local isSpraying = false
+local totalWater = 0      -- everywhere, as of this frame (see WATER_CAP)
+-- Water layers on round planetoids, keyed by the planetoid (weakly, so a
+-- culled planetoid takes its water with it): { volume = cells' worth,
+-- water = what it is to Bob swimming in it — see submergedAt }.
+local oceans = setmetatable({}, { __mode = "k" })
 local stepClock = 0
 local age = 0
 local mesh, meshSize = nil, 0
@@ -105,8 +143,51 @@ local poolWater = { isPool = true, pos = Vector2.new(0, 0), radius = 0 }
 
 function WaterSystem.reset()
   grid = nil
-  droplets, splashes = {}, {}
+  droplets, splashes, waterfallLandings = {}, {}, {}
   sprayBudget, stepClock = 0, 0
+  isSpraying = false
+  totalWater = 0
+  oceans = setmetatable({}, { __mode = "k" })
+end
+
+----------------------------------------------------------------------
+-- Water on round planetoids
+----------------------------------------------------------------------
+--
+-- Spray landing on a round planetoid (not a water planet — those already
+-- are water — nor the dome or a rounded-rect planet) adds to an even
+-- layer of water all the way round it, thickening as more lands. It
+-- moves with its planetoid, slowly evaporates from its outer surface
+-- like a pool does, and Bob can swim in it (like a little water planet).
+-- It's kept with the planetoid, so when that's culled, its water goes too.
+
+local function isRoundPlanet(p)
+  return p and p.radius and p.pos and not (p.isRoundedRect or p.isSkyDome or p.isWaterPlanet or p.isOpenPath)
+end
+
+-- How deep a layer `volume` (in cells' worth — CELL x CELL each) makes
+-- round a planet of radius R: the ring between R and R + depth holds it.
+local function oceanDepth(R, volume)
+  return math.sqrt(R * R + volume * CELL * CELL / math.pi) - R
+end
+
+local function addToOcean(p, amount)
+  local o = oceans[p]
+  if not o then
+    o = { volume = 0, water = { isPool = true, pos = p.pos, radius = p.radius } }
+    oceans[p] = o
+  end
+  o.volume = o.volume + amount
+end
+
+-- Drops oceans whose planetoid has been culled (no longer in the world).
+local function forgetCulledOceans()
+  if not next(oceans) then return end
+  local alive = {}
+  for _, p in ipairs(state.planetoids or {}) do alive[p] = true end
+  for p in pairs(oceans) do
+    if not alive[p] then oceans[p] = nil end
+  end
 end
 
 ----------------------------------------------------------------------
@@ -114,23 +195,25 @@ end
 ----------------------------------------------------------------------
 
 -- Lays the water grid over a Tiled level (see TiledTerrain.load). Water
--- follows the same collision Bob does — where he could walk, it can flow
--- (the level's dirt "fill" tiles are often just backdrop he walks in front
--- of, so they don't count). Solid cells, which water can't go into: wall
--- tiles, and a tile-thick layer behind every terrain surface he collides
--- with — floors (slopes as steps), the faces he runs up, and ceilings — on
--- its solid side, so water can't slip through a surface. Ledges stay one
--- tile thick with open space under them. The map's bottom edge sits on
--- the dome's floor, so below it is solid too; past its left and right
--- edges water just runs away.
+-- follows the tiles' roles the way Bob does:
+--   * "wall" tiles are solid on every side — every cell whose middle is
+--     inside one is solid.
+--   * Walkable surfaces ("top" tiles' tops, slopes included) are one-way,
+--     like they are for Bob: a one-cell-thick floor layer just under the
+--     surface that only stops water crossing it from its open side (from
+--     above, or into a slope from the side it faces). From the side or
+--     from below, water goes straight in — and on through the tile, which
+--     is open beneath its surface.
+--   * "fill" tiles (backdrop dirt) don't stop water at all.
+-- Steep faces and ceilings aren't floors, so they don't stop it either.
+-- The map's bottom edge sits on the dome's floor, so below it is solid
+-- too; past its left and right edges water just runs away.
 function WaterSystem.init(level)
   local width = (level.pos.x - level.anchorX) * 2
   local height = (level.pos.y - level.anchorY) * 2
   local cols, rows = math.ceil(width / CELL), math.ceil(height / CELL)
-  local g = { x0 = level.anchorX, y0 = level.anchorY, cols = cols, rows = rows, solid = {}, water = {} }
-  local function mark(c, r)
-    if c >= 0 and c < cols and r >= 0 and r < rows then g.solid[r * cols + c + 1] = true end
-  end
+  local g = { x0 = level.anchorX, y0 = level.anchorY, cols = cols, rows = rows, solid = {}, floor = {}, water = {} }
+  local function inside(c, r) return c >= 0 and c < cols and r >= 0 and r < rows end
 
   -- Wall tiles: every cell whose middle is inside one.
   for _, w in ipairs(level.walls or {}) do
@@ -139,30 +222,74 @@ function WaterSystem.init(level)
       local c1 = math.floor((w.pos.x + w.halfWidth - g.x0) / CELL - 0.5)
       local r0 = math.ceil((w.pos.y - w.halfHeight - g.y0) / CELL - 0.5)
       local r1 = math.floor((w.pos.y + w.halfHeight - g.y0) / CELL - 0.5)
-      for r = r0, r1 do for c = c0, c1 do mark(c, r) end end
+      for r = r0, r1 do for c = c0, c1 do
+        if inside(c, r) then g.solid[r * cols + c + 1] = true end
+      end end
     end
   end
 
-  -- Terrain surfaces: walked along in half-cell steps, marking the cell
-  -- each point is in and a tile's thickness of cells behind it (away
-  -- from the open side its normal points to). Sampled at the MIDDLE of
+  -- Floors: each walkable surface walked along in half-cell steps,
+  -- marking the cell just behind it (with the surface's normal, so we
+  -- know which side is open — see crossesFloor). Sampled at the MIDDLE of
   -- each step, never the segment's own ends: an end sitting exactly on a
   -- cell boundary (where a ledge's top meets a pit's wall, say) would
   -- otherwise mark the open cell on the far side of it.
-  local THICKNESS_CELLS = 4
   for _, shape in ipairs(level.shapes or {}) do
     for _, s in ipairs(shape.segments or {}) do
-      local len = math.sqrt((s.b.x - s.a.x) ^ 2 + (s.b.y - s.a.y) ^ 2)
-      local steps = math.max(1, math.ceil(len / (CELL * 0.5)))
-      for k = 0, steps - 1 do
-        local t = (k + 0.5) / steps
-        local x = s.a.x + (s.b.x - s.a.x) * t
-        local y = s.a.y + (s.b.y - s.a.y) * t
-        for d = 0, THICKNESS_CELLS - 1 do
-          -- Nudged a hair behind the surface first, so a surface lying
-          -- exactly on a cell boundary marks the cell behind it.
-          local px, py = x - s.normal.x * (0.5 + d * CELL), y - s.normal.y * (0.5 + d * CELL)
-          mark(math.floor((px - g.x0) / CELL), math.floor((py - g.y0) / CELL))
+      if s.normal.y < -0.3 and not s.isWallFace then
+        local len = math.sqrt((s.b.x - s.a.x) ^ 2 + (s.b.y - s.a.y) ^ 2)
+        local steps = math.max(1, math.ceil(len / (CELL * 0.5)))
+        for k = 0, steps - 1 do
+          local t = (k + 0.5) / steps
+          -- Nudged a hair behind the surface, so a surface lying exactly
+          -- on a cell boundary marks the cell under it.
+          local x = s.a.x + (s.b.x - s.a.x) * t - s.normal.x * 0.5
+          local y = s.a.y + (s.b.y - s.a.y) * t - s.normal.y * 0.5
+          local c, r = math.floor((x - g.x0) / CELL), math.floor((y - g.y0) / CELL)
+          if inside(c, r) then
+            local i = r * cols + c + 1
+            local list = g.floor[i]
+            if not list then list = {}; g.floor[i] = list end
+            local known = false
+            for _, n in ipairs(list) do if n == s.normal then known = true end end
+            if not known then list[#list + 1] = s.normal end
+          end
+        end
+      end
+    end
+  end
+
+  -- Slopes, for drawing (see drawPools): to the grid a slope is a
+  -- staircase of cells, so water running down one would be drawn as a
+  -- flat little sheet on each step. Each open cell sitting on a sloped
+  -- floor remembers that floor's actual line, so the water there can be
+  -- drawn lying along it instead.
+  g.slope = {}
+  local function taken(c, r)
+    local i = r * cols + c + 1
+    return g.solid[i] or g.floor[i]
+  end
+  for _, shape in ipairs(level.shapes or {}) do
+    for _, s in ipairs(shape.segments or {}) do
+      local dx = s.b.x - s.a.x
+      if s.normal.y < -0.3 and not s.isWallFace and math.abs(s.normal.x) > 0.05 and math.abs(dx) > 1 then
+        local line = {
+          ax = s.a.x, ay = s.a.y, k = (s.b.y - s.a.y) / dx,
+          xMin = math.min(s.a.x, s.b.x), xMax = math.max(s.a.x, s.b.x),
+        }
+        local c0 = math.floor((line.xMin - g.x0) / CELL)
+        local c1 = math.floor((line.xMax - g.x0) / CELL)
+        for c = c0, c1 do
+          local xc = math.max(line.xMin, math.min(line.xMax, g.x0 + (c + 0.5) * CELL))
+          local y = line.ay + (xc - line.ax) * line.k
+          -- From the cell the floor runs through, up to the first open one.
+          local r = math.floor((y + 0.5 - g.y0) / CELL)
+          for _ = 1, 3 do
+            if inside(c, r) and taken(c, r) then r = r - 1 end
+          end
+          if inside(c, r) and not taken(c, r) then
+            g.slope[r * cols + c + 1] = line
+          end
         end
       end
     end
@@ -197,8 +324,25 @@ local function isSolid(c, r)
   return grid.solid[r * grid.cols + c + 1] or gateCovers(c, r)
 end
 
+-- Whether water at (c, r) can't move (dc, dr) cells over: into something
+-- solid, or into a floor cell from the floor's open side — against its
+-- normal (down onto a ledge's top, or into a slope from the side it
+-- faces). Sideways into a flat floor, or up through one, it can.
+local function blocked(c, r, dc, dr)
+  local nc, nr = c + dc, r + dr
+  if isSolid(nc, nr) then return true end
+  if nc < 0 or nc >= grid.cols or nr < 0 then return false end
+  local floors = grid.floor[nr * grid.cols + nc + 1]
+  if floors then
+    for _, n in ipairs(floors) do
+      if n.x * dc + n.y * dr < -0.1 then return true end
+    end
+  end
+  return false
+end
+
 local function addWater(c, r, amount)
-  if not inGrid(c, r) then return end
+  if amount <= 0 or not inGrid(c, r) then return end
   local i = r * grid.cols + c + 1
   grid.water[i] = (grid.water[i] or 0) + amount
 end
@@ -219,13 +363,13 @@ local function stepWater(dt)
       local c = (i - 1) - r * cols
 
       -- Overfull (a droplet landed on a full cell): the extra goes up.
-      if w > 1 and r > 0 and not isSolid(c, r - 1) then
+      if w > 1 and r > 0 and not blocked(c, r, 0, -1) then
         water[i - cols] = (water[i - cols] or 0) + (w - 1)
         w = 1
       end
 
       -- Falls into the cell below, as much as fits.
-      if not isSolid(c, r + 1) then
+      if not blocked(c, r, 0, 1) then
         local below = water[i + cols] or 0
         local f = math.min(w, 1 - below)
         if f > 0 then
@@ -236,14 +380,14 @@ local function stepWater(dt)
 
       -- Spreads sideways along whatever it's resting on (ground, or full
       -- water) — toward lower neighbors, evening out into a flat surface.
-      local resting = isSolid(c, r + 1) or (water[i + cols] or 0) >= 0.99
+      local resting = blocked(c, r, 0, 1) or (water[i + cols] or 0) >= 0.99
       if resting and w > MIN_SPREAD then
         for k = 1, 2 do
           local dc = ((k == 1) == grid.flip) and -1 or 1
           local nc = c + dc
           if nc < 0 or nc >= cols then
             w = w - w * SPREAD -- off the map's edge: it runs away
-          elseif not isSolid(nc, r) then
+          elseif not blocked(c, r, dc, 0) then
             local n = i + dc
             local wn = water[n] or 0
             if wn < w then
@@ -282,9 +426,19 @@ function WaterSystem.wetAt(x, y)
 end
 
 -- The pool Bob's middle is under, if any (see Player.lua's submergedIn).
+-- That includes a round planetoid's water layer: it's like a little water
+-- planet — round, centered on the planetoid — so it's handed to his swim
+-- code the same way one is.
 function WaterSystem.submergedAt(player)
-  if not grid then return nil end
   local x, y = player.pos.x, player.pos.y
+  for p, o in pairs(oceans) do
+    local outer = p.radius + oceanDepth(p.radius, o.volume)
+    if (x - p.pos.x) ^ 2 + (y - p.pos.y) ^ 2 < outer * outer then
+      o.water.pos, o.water.radius = p.pos, outer
+      return o.water
+    end
+  end
+  if not grid then return nil end
   local c, r = cellOf(x, y)
   if not inGrid(c, r) then return nil end
   local i = r * grid.cols + c + 1
@@ -350,20 +504,26 @@ local function gravityOn(d)
 end
 
 local function spray(player, dt)
-  sprayBudget = sprayBudget + SPRAY_PER_SECOND * dt
+  -- At the cap: a thin dribble that carries no water.
+  local empty = totalWater >= WATER_CAP
+  sprayBudget = sprayBudget + SPRAY_PER_SECOND * (empty and SPUTTER_FRACTION or 1) * dt
   local ox, oy = player:getMuzzlePosition()
   local aim = (player.aimWorldAngle or 0) + (player.blasterAngleOffset or 0)
   while sprayBudget >= 1 do
     sprayBudget = sprayBudget - 1
+    -- (Checked per droplet too, so one long frame can't spray past it.)
+    empty = empty or totalWater >= WATER_CAP
     if #droplets < MAX_DROPLETS then
-      local a = aim + (math.random() * 2 - 1) * SPRAY_SPREAD
-      local speed = SPRAY_SPEED + math.random() * SPRAY_SPEED_RANGE
+      local a = aim + (math.random() * 2 - 1) * SPRAY_SPREAD * (empty and 2 or 1)
+      local speed = (SPRAY_SPEED + math.random() * SPRAY_SPEED_RANGE) * (empty and 0.4 or 1)
       table.insert(droplets, {
         x = ox, y = oy,
         vx = math.cos(a) * speed + player.vel.x, vy = math.sin(a) * speed + player.vel.y,
         life = DROPLET_SECONDS,
+        volume = empty and 0 or DROPLET_VOLUME,
         planet = player.onSurface and player.currentPlanet or player.lastInfluencePlanet,
       })
+      if not empty then totalWater = totalWater + DROPLET_VOLUME end
     end
   end
 end
@@ -395,12 +555,16 @@ local function updateDroplet(d, ts, dt)
     local dist = math.sqrt((d.x - px) ^ 2 + (d.y - py) ^ 2)
     local steps = math.max(1, math.ceil(dist / (CELL * 0.5)))
     local lastC, lastR = cellOf(px, py)
+    -- Below the level counts as its floor — except on the way to a round
+    -- planetoid out there.
+    local floorBelow = not isRoundPlanet(d.planet)
     for s = 1, steps do
       local x, y = px + (d.x - px) * s / steps, py + (d.y - py) * s / steps
       local c, r = cellOf(x, y)
-      if inGrid(c, r) or r >= grid.rows then
+      if inGrid(c, r) or (floorBelow and r >= grid.rows) then
         local speed = math.sqrt(d.vx * d.vx + d.vy * d.vy)
-        if isSolid(c, r) then
+        -- (A floor stops it only coming from its open side — see blocked.)
+        if isSolid(c, r) or ((c ~= lastC or r ~= lastR) and blocked(lastC, lastR, c - lastC, r - lastR)) then
           if not isSolid(lastC, lastR) then addWater(lastC, lastR, volume) end
           spawnSplash(x, y, -d.vx / speed, -d.vy / speed)
           return true
@@ -413,12 +577,32 @@ local function updateDroplet(d, ts, dt)
       end
       lastC, lastR = c, r
     end
-    local c, r = cellOf(d.x, d.y)
-    if inGrid(c, r) then return false end
   end
 
-  -- Off the level: it splashes on whatever it was sprayed near and is gone.
+  -- On a round planetoid (the grid's bounds can take in planetoids that
+  -- aren't part of the level): it joins the layer of water round it (see
+  -- addToOcean) — reaching that layer's surface, or the planetoid itself
+  -- if it has none yet.
   local p = d.planet
+  if grid then
+    local c, r = cellOf(d.x, d.y)
+    if inGrid(c, r) and not isRoundPlanet(p) then return false end
+  end
+  if isRoundPlanet(p) then
+    local o = oceans[p]
+    local outer = p.radius + (o and oceanDepth(p.radius, o.volume) or 0)
+    local dx, dy = d.x - p.pos.x, d.y - p.pos.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist < outer + 2 then
+      if volume > 0 then addToOcean(p, volume) end
+      if dist > 1e-6 then spawnSplash(d.x, d.y, dx / dist, dy / dist) end
+      return true
+    end
+    return false
+  end
+
+  -- Anywhere else off the level: it splashes on whatever it was sprayed
+  -- near and is gone.
   if p and not p.isSkyDome and not p.forceUprightJump then
     local dist
     if p.isRoundedRect then
@@ -504,8 +688,25 @@ function WaterSystem.update(dt)
   local ts = state.timeScale or 1
   local player = state.player
 
+  -- Planet water: forgotten with its culled planetoid, and evaporating
+  -- from its outer surface at the same rate per length of surface a pool
+  -- does (EVAPORATE_PER_SECOND per CELL of surface).
+  forgetCulledOceans()
+  for p, o in pairs(oceans) do
+    local outer = p.radius + oceanDepth(p.radius, o.volume)
+    o.volume = o.volume - EVAPORATE_PER_SECOND * (2 * math.pi * outer / CELL) * dt * ts
+    if o.volume <= 0.05 then oceans[p] = nil end
+  end
+
+  -- All the water there is right now (see WATER_CAP).
+  totalWater = 0
+  if grid then for _, w in pairs(grid.water) do totalWater = totalWater + w end end
+  for _, o in pairs(oceans) do totalWater = totalWater + o.volume end
+  for _, d in ipairs(droplets) do totalWater = totalWater + (d.volume or DROPLET_VOLUME) end
+
   local sprayHeld = state.waterMode and (love.mouse.isDown(2) or state.gamepadSprayHeld)
-  if sprayHeld and canSpray(player) then
+  isSpraying = sprayHeld and canSpray(player) or false
+  if isSpraying then
     spray(player, dt * ts)
   else
     sprayBudget = 0
@@ -514,6 +715,18 @@ function WaterSystem.update(dt)
   for i = #droplets, 1, -1 do
     if updateDroplet(droplets[i], ts, dt) then table.remove(droplets, i) end
   end
+  -- Waterfalls splashing where they land (found while drawing last frame).
+  if state.particles then
+    local up = Vector2.new(0, -1)
+    for _, l in ipairs(waterfallLandings) do
+      local expected = WATERFALL_SPLASH_PER_SECOND * l.flow * dt * ts
+      local n = math.floor(expected) + (math.random() < expected % 1 and 1 or 0)
+      for _ = 1, n do
+        Splash.spawn(Vector2.new(l.x + (math.random() * 2 - 1) * l.half, l.y), up, 1, WATERFALL_SPLASH)
+      end
+    end
+  end
+
   for i = #splashes, 1, -1 do
     local s = splashes[i]
     s.life = s.life - dt
@@ -648,6 +861,7 @@ end
 -- above: a block per resting wet cell (from its rippling top surface
 -- down, or full height deep in a pool), and a narrow stream down the
 -- middle of each cell where water is falling.
+local useWaterShader
 local function drawPools()
   local cam = state.camera
   if not cam then return end
@@ -655,6 +869,7 @@ local function drawPools()
   local vx1, vy1 = cam.x + (state.visibleWidth or 0) + CELL, cam.y + (state.visibleHeight or 0) + CELL
   local cols, water = grid.cols, grid.water
   local verts = {}
+  waterfallLandings = {}
 
   -- depth0/depth1: how far below the surface its top/bottom edges are
   -- (0 at the surface); stream: 1 for a falling stream.
@@ -671,23 +886,77 @@ local function drawPools()
     return math.sin(age * 2.2 + x * 0.045) * 1.3 + math.sin(age * 3.7 - x * 0.11) * 0.6
   end
 
-  local function isFalling(i, c, r)
-    return not isSolid(c, r + 1) and (water[i + cols] or 0) < 0.99
-  end
-  -- Where the surface of the pool a resting cell belongs to is: up its
-  -- column through full cells to the topmost one's water line.
-  local surfaceMemo = {}
-  local function surfaceY(i, r)
-    if surfaceMemo[i] then return surfaceMemo[i] end
-    local w = water[i]
-    local y
-    if w >= 0.99 and r > 0 and water[i - cols] and not isFalling(i - cols, (i - 1 - cols) % cols, r - 1) then
-      y = surfaceY(i - cols, r - 1)
-    else
-      y = grid.y0 + (r + 1) * CELL - math.max(2, math.min(1, w) * CELL)
+  -- The water resting in each column, drawn as one stack: everything in
+  -- it from its floor up, packed down — so a surface sloping gently
+  -- across the rows (water still flowing along, its edge a run of part-
+  -- full cells on top of full ones) is drawn at its real, smooth height
+  -- instead of stepping row to row, with no stray streams in it. A stack
+  -- takes in at most two part-full cells over its full ones, each holding
+  -- less than the one under it; anything above that is still falling
+  -- (a waterfall pouring into a pool, say), drawn as a stream.
+  -- stackSurface[i]: the stack's surface, for every cell in it;
+  -- stackTotal[i]: how many cells' worth it holds; stackFloor[i]: its
+  -- bottom cell, which draws the whole stack (in one piece, so its
+  -- surface can sit at any height without being cut off at a cell edge).
+  local stackSurface, stackTotal, stackFloor = {}, {}, {}
+  for i in pairs(water) do
+    local r = math.floor((i - 1) / cols)
+    local c = (i - 1) - r * cols
+    if blocked(c, r, 0, 1) then -- the bottom of a stack
+      local members, total, partials, below = {}, 0, 0, math.huge
+      local j, jr = i, r
+      while jr >= 0 and water[j] do
+        local w = math.min(1, water[j])
+        if w < 0.99 then
+          if partials == 2 or w >= below then break end
+          partials = partials + 1
+        end
+        members[#members + 1] = j
+        total = total + w
+        below = w
+        j, jr = j - cols, jr - 1
+      end
+      local surface = grid.y0 + (r + 1) * CELL - math.max(2, total * CELL)
+      for _, m in ipairs(members) do
+        stackSurface[m] = surface
+        stackTotal[m] = total
+        stackFloor[m] = i
+      end
     end
-    surfaceMemo[i] = y
-    return y
+  end
+
+  -- Not part of a stack: still falling.
+  local function isFalling(i)
+    return not stackSurface[i]
+  end
+
+  -- Slopes (see WaterSystem.init): the floor's actual height at x under a
+  -- cell on one, and how thick a sheet of water running down it is.
+  local slope = grid.slope
+  local function slopeY(line, x)
+    x = math.max(line.xMin, math.min(line.xMax, x))
+    return line.ay + (x - line.ax) * line.k
+  end
+  local function sheetThickness(w)
+    return math.max(3, math.min(1, w) * CELL)
+  end
+  -- The water in the next cell along the slope (beside, a row up or a row
+  -- down), if any — so neighboring bits of the sheet meet at one thickness.
+  local function slopeNeighbor(c, r, dc)
+    local nc = c + dc
+    if nc < 0 or nc >= cols then return nil end
+    for dr = -1, 1 do
+      local nr = r + dr
+      if nr >= 0 and nr < grid.rows then
+        local j = nr * cols + nc + 1
+        if slope[j] and stackTotal[j] then return stackTotal[j] end
+      end
+    end
+    return nil
+  end
+  -- The surface of the pool a resting cell belongs to.
+  local function surfaceY(i)
+    return stackSurface[i]
   end
 
   for i, w in pairs(water) do
@@ -695,10 +964,31 @@ local function drawPools()
     local c = (i - 1) - r * cols
     local x0 = grid.x0 + c * CELL
     local yTopCell = grid.y0 + r * CELL
-    if x0 < vx1 and x0 + CELL > vx0 and yTopCell < vy1 and yTopCell + CELL > vy0 then
+    -- (A stack's other cells are drawn along with its floor cell, which
+    -- reaches up to the stack's surface.)
+    local drawn = not stackFloor[i] or stackFloor[i] == i
+    local reachTop = stackSurface[i] and math.min(yTopCell, stackSurface[i] - CELL) or yTopCell
+    if drawn and x0 < vx1 and x0 + CELL > vx0 and reachTop < vy1 and yTopCell + CELL > vy0 then
       local x1 = x0 + CELL
       local bottom = yTopCell + CELL
-      if isFalling(i, c, r) then
+      -- A little water just settling onto a pool: landed (or got pushed
+      -- up) into the cell above the surface, with nothing falling above
+      -- it — it merges into the pool next step. Drawn as a stream it would
+      -- flash as a stray one-cell line sticking up out of the surface, so
+      -- it isn't drawn at all. (A real waterfall always has more falling
+      -- water above, so it still reaches down to the pool.)
+      local settling = isFalling(i, c, r)
+        and not water[i - cols] and not water[i - 2 * cols]
+        and water[i + cols] and not isFalling(i + cols, c, r + 1)
+      -- Stepping down a slope: water running off one of its stair-steps
+      -- onto the next, a cell or two down. The sheet drawn along the slope
+      -- already covers it, so it isn't drawn as a little waterfall. (A real
+      -- waterfall onto a slope has more falling water above.)
+      local stepping = isFalling(i, c, r) and not water[i - 2 * cols]
+        and (slope[i + cols] or slope[i + 2 * cols])
+      if settling or stepping then
+        -- (nothing)
+      elseif isFalling(i, c, r) then
         -- Falling (open space below, not yet resting on anything): a
         -- narrow, unbroken stream down the middle of the column — wider
         -- the more water is falling. A light trickle falls as separate
@@ -711,37 +1001,102 @@ local function drawPools()
         -- pool's surface, or more falling water — so it always reaches.
         local streamBottom = bottom
         local j, jr, gap = i + cols, r + 1, 0
-        while gap < STREAM_REACH_CELLS and jr < grid.rows and not water[j] and not isSolid(c, jr) do
+        while gap < STREAM_REACH_CELLS and jr < grid.rows and not water[j] and not blocked(c, jr - 1, 0, 1) do
           j, jr, gap = j + cols, jr + 1, gap + 1
           streamBottom = streamBottom + CELL
         end
         if water[j] and jr < grid.rows and not isFalling(j, c, jr) then
           streamBottom = math.max(streamBottom, surfaceY(j, jr)) -- into the pool's surface
         end
-        quad(mid - half, yTopCell, mid + half, yTopCell, streamBottom, streamBottom, 0, 0, 1)
+
+        -- Pouring over an edge: resting water right beside it (the sheet
+        -- on top of a ledge it's spilling off). The stream starts at that
+        -- water's surface, and a short lip of water runs from the ledge's
+        -- edge over to the stream — so the pour is one piece with the
+        -- water it comes from, not a separate stream beside it.
+        local streamTop = yTopCell
+        local function sourceSurface(dc)
+          local nc = c + dc
+          if nc < 0 or nc >= cols then return nil end
+          local n = i + dc
+          if water[n] and not isFalling(n, nc, r) then return surfaceY(n, r) end
+          if r > 0 and water[n - cols] and not isFalling(n - cols, nc, r - 1) then
+            return surfaceY(n - cols, r - 1)
+          end
+          return nil
+        end
+        local srcLeft, srcRight = sourceSurface(-1), sourceSurface(1)
+        local src, side = srcLeft, -1
+        if srcRight and (not srcLeft or srcRight < srcLeft) then src, side = srcRight, 1 end
+        if src then
+          streamTop = src -- (not its cell's top, which can stick up above a thin sheet)
+          local edgeX = side < 0 and x0 or x1
+          local lipTop = src + ripple(edgeX)
+          if side < 0 then
+            quad(edgeX, lipTop, mid, src + 2, lipTop + LIP_THICKNESS, src + 2 + LIP_THICKNESS, 0, 0, 1)
+          else
+            quad(mid, src + 2, edgeX, lipTop, src + 2 + LIP_THICKNESS, lipTop + LIP_THICKNESS, 0, 0, 1)
+          end
+        end
+        quad(mid - half, streamTop, mid + half, streamTop, streamBottom, streamBottom, 0, 0, 1)
+
+        -- The bottom of a waterfall, landing on the ground or a pool: it
+        -- splashes there (see WaterSystem.update), if it's fallen far
+        -- enough — up the column through the rest of the falling water.
+        if blocked(c, jr - 1, 0, 1) or (water[j] and not isFalling(j)) then
+          local fallTop, k = streamTop, i - cols
+          for _ = 1, 32 do
+            if not (water[k] and isFalling(k)) then break end
+            fallTop, k = fallTop - CELL, k - cols
+          end
+          if streamBottom - fallTop >= WATERFALL_SPLASH_MIN_FALL then
+            waterfallLandings[#waterfallLandings + 1] = { x = mid, y = streamBottom, half = half, flow = math.min(1, w * 4) }
+          end
+        end
       else
         local surface = surfaceY(i, r)
-        if surface < yTopCell - 0.5 then
-          -- Deep in a pool (more water on top): a full block.
-          quad(x0, yTopCell, x1, yTopCell, bottom, bottom, yTopCell - surface, bottom - surface, 0)
+        local line = slope[i]
+        -- Where its bottom is at x: the cell's bottom, or on a slope, the
+        -- slope itself (down into the stair-step under the cell).
+        local function bottomAt(x)
+          return line and math.max(bottom, slopeY(line, x)) or bottom
+        end
+        if line and stackTotal[i] < 0.99 then
+          -- A thin sheet on a slope: lying along it, at a thickness easing
+          -- into the next bits of the sheet up and down the slope.
+          local t = sheetThickness(stackTotal[i])
+          local wl, wr = slopeNeighbor(c, r, -1), slopeNeighbor(c, r, 1)
+          local tl = (t + (wl and sheetThickness(wl) or t * 0.5)) / 2
+          local tr = (t + (wr and sheetThickness(wr) or t * 0.5)) / 2
+          local function thicknessAt(f)
+            if f < 0.5 then return tl + (t - tl) * f * 2 end
+            return t + (tr - t) * (f - 0.5) * 2
+          end
+          for s = 0, SURFACE_SLICES - 1 do
+            local fa, fb = s / SURFACE_SLICES, (s + 1) / SURFACE_SLICES
+            local xa, xb = x0 + CELL * fa, x0 + CELL * fb
+            local ba, bb = slopeY(line, xa), slopeY(line, xb)
+            local tha, thb = thicknessAt(fa), thicknessAt(fb)
+            local ta = ba - tha + ripple(xa) * 0.3
+            local tb = bb - thb + ripple(xb) * 0.3
+            quad(xa, ta, xb, tb, ba, bb, 0, (tha + thb) / 2, 0)
+            quad(xa, ta - SURFACE_FEATHER, xb, tb - SURFACE_FEATHER, ta, tb, -SURFACE_FEATHER, 0, 0)
+          end
         else
-          -- The pool's top: from the rippling surface down, in thin
-          -- slices whose height eases toward the neighboring cells' water
-          -- line (so the surface curves smoothly instead of stepping cell
-          -- to cell).
-          -- The neighbor's water line: in the cell beside this one, or —
-          -- where the surface slopes across a row boundary — the one
-          -- beside and below it. (Its surface may also sit a row up, if
-          -- the cell beside is full.) Nothing there: stay level.
+          -- The stack: from its rippling surface down to its floor, in thin
+          -- slices whose height eases toward the neighboring columns'
+          -- water line (so the surface curves smoothly instead of stepping
+          -- column to column).
+          -- The neighbor's water line: the stack in the column beside this
+          -- one, found by its cell beside this one or — where the surface
+          -- slopes across a row boundary — the one beside and below or
+          -- above it. Nothing there: stay level.
           local function neighborSurface(dc)
             local nc = c + dc
             if nc < 0 or nc >= cols then return surface end
             local j = i + dc
-            local jr = r
-            if not water[j] and r + 1 < grid.rows and water[j + cols] then j, jr = j + cols, r + 1 end
-            if not water[j] or isFalling(j, nc, jr) then return surface end
-            local s = surfaceY(j, jr)
-            if math.abs(s - surface) > CELL * 1.5 then return surface end
+            local s = surfaceY(j) or surfaceY(j + cols) or surfaceY(j - cols)
+            if not s or math.abs(s - surface) > CELL * 1.5 then return surface end
             return s
           end
           local left, right = neighborSurface(-1), neighborSurface(1)
@@ -762,7 +1117,8 @@ local function drawPools()
             local ha, hb = heightAt(fa), heightAt(fb)
             local ta = math.min(ha + ripple(xa), bottom - 1)
             local tb = math.min(hb + ripple(xb), bottom - 1)
-            quad(xa, ta, xb, tb, bottom, bottom, 0, bottom - (ha + hb) / 2, 0)
+            local ba, bb = bottomAt(xa), bottomAt(xb)
+            quad(xa, ta, xb, tb, ba, bb, 0, (ba + bb) / 2 - (ha + hb) / 2, 0)
             -- A thin strip just above the surface (negative depth) that the
             -- shader fades out, so the top edge is soft rather than a hard
             -- pixel line.
@@ -780,7 +1136,15 @@ local function drawPools()
   end
   mesh:setVertices(verts)
   mesh:setDrawRange(1, #verts)
+  useWaterShader()
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(mesh)
+  love.graphics.setShader()
+end
 
+-- Turns on the water shader with every setting from the tunables above
+-- (shared by the pools and the planets' water layers).
+useWaterShader = function()
   local shader = getWaterShader()
   shader:send("time", age)
   shader:send("colorShallow", COLOR_SHALLOW)
@@ -797,8 +1161,58 @@ local function drawPools()
   shader:send("causticSpeed", CAUSTIC_SPEED)
   shader:send("causticStrength", CAUSTIC_STRENGTH)
   love.graphics.setShader(shader)
+end
+
+-- The water layers round planetoids (see addToOcean), through the same
+-- shader as the pools: a ring from the planetoid's surface out to the
+-- water's rippling surface (depth measured in from there), plus a thin
+-- feathered strip just outside it for a soft edge.
+local oceanMesh, oceanMeshSize = nil, 0
+local function drawOceans()
+  local cam = state.camera
+  if not cam or not next(oceans) then return end
+  local vx0, vy0 = cam.x, cam.y
+  local vx1, vy1 = cam.x + (state.visibleWidth or 0), cam.y + (state.visibleHeight or 0)
+  local verts = {}
+  local function vert(x, y, depth) verts[#verts + 1] = { x, y, depth, 0, 1, 1, 1, 1 } end
+  for p, o in pairs(oceans) do
+    local R = p.radius
+    local depth = oceanDepth(R, o.volume)
+    local outer = R + depth
+    local reach = outer + SURFACE_FEATHER + 6
+    if p.pos.x + reach > vx0 and p.pos.x - reach < vx1 and p.pos.y + reach > vy0 and p.pos.y - reach < vy1 then
+      local cx, cy = p.pos.x, p.pos.y
+      local function ring(k)
+        local a = k / OCEAN_SEGMENTS * math.pi * 2
+        local ca, sa = math.cos(a), math.sin(a)
+        local s = a * outer -- along the surface, for the ripple
+        local rip = math.sin(age * 2.2 + s * 0.045) * 1.3 + math.sin(age * 3.7 - s * 0.11) * 0.6
+        local top = math.max(R + 1, outer + rip)
+        return ca, sa, top
+      end
+      for k = 0, OCEAN_SEGMENTS - 1 do
+        local c0, s0, t0 = ring(k)
+        local c1, s1, t1 = ring(k + 1)
+        -- Body: planetoid surface (deepest) out to the water's surface.
+        vert(cx + c0 * R, cy + s0 * R, depth); vert(cx + c1 * R, cy + s1 * R, depth); vert(cx + c1 * t1, cy + s1 * t1, 0)
+        vert(cx + c0 * R, cy + s0 * R, depth); vert(cx + c1 * t1, cy + s1 * t1, 0); vert(cx + c0 * t0, cy + s0 * t0, 0)
+        -- Feathered edge just outside the surface.
+        local f0, f1 = t0 + SURFACE_FEATHER, t1 + SURFACE_FEATHER
+        vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * t1, cy + s1 * t1, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER)
+        vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER); vert(cx + c0 * f0, cy + s0 * f0, -SURFACE_FEATHER)
+      end
+    end
+  end
+  if #verts == 0 then return end
+  if not oceanMesh or oceanMeshSize < #verts then
+    oceanMeshSize = math.max(#verts, oceanMeshSize * 2, 600)
+    oceanMesh = love.graphics.newMesh(oceanMeshSize, "triangles", "stream")
+  end
+  oceanMesh:setVertices(verts)
+  oceanMesh:setDrawRange(1, #verts)
+  useWaterShader()
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(mesh)
+  love.graphics.draw(oceanMesh)
   love.graphics.setShader()
 end
 
@@ -806,6 +1220,7 @@ end
 -- he looks like he's in the water when he's swimming.
 function WaterSystem.draw()
   if grid then drawPools() end
+  drawOceans()
 
   love.graphics.setLineWidth(2.5)
   for _, d in ipairs(droplets) do
@@ -824,11 +1239,24 @@ function WaterSystem.draw()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
--- For debugging/tests: total water on the level, in cells' worth.
+-- Whether Bob's spraying right now (see Player:isUsingBlaster).
+function WaterSystem.isSpraying()
+  return isSpraying
+end
+
+-- All the water there is (on the level, on planets, in the air), as of
+-- this frame, and the most there can be — in cells' worth.
 function WaterSystem.totalWater()
-  local sum = 0
-  if grid then for _, w in pairs(grid.water) do sum = sum + w end end
-  return sum
+  return totalWater
+end
+
+function WaterSystem.waterCap()
+  return WATER_CAP
+end
+
+-- For debugging/tests: how much water is on planetoid `p`, if any.
+function WaterSystem.debugOcean(p)
+  return oceans[p] and oceans[p].volume or 0
 end
 
 -- For debugging/tests: the grid and its solid test (read-only use).

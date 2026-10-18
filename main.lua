@@ -2604,7 +2604,8 @@ function love.draw()
   if state.portalMode then
     love.graphics.print("Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump", 20, 160)
   elseif state.waterMode then
-    love.graphics.print("Right-click / R2: spray water, Space to jump (or swim)", 20, 160)
+    love.graphics.print(string.format("Right-click / R2: spray water (%d / %d), Space to jump (or swim)",
+      math.floor(WaterSystem.totalWater() + 0.5), WaterSystem.waterCap()), 20, 160)
   else
     love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
   end
