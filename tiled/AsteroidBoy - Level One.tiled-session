@@ -16,25 +16,39 @@
             "scaleInEditor": 1
         },
         "Level1.tmx": {
-            "scale": 1,
-            "selectedLayer": 0,
+            "scale": 4,
+            "selectedLayer": 3,
             "viewCenter": {
-                "x": 1549,
-                "y": 1356
+                "x": 1921,
+                "y": 1831
             }
         },
         "Level1.tmx#Grass Tiles": {
             "scaleInDock": 1
         },
         "Pinball-Level.tmx": {
+            "expandedObjectLayers": [
+                2
+            ],
             "scale": 0.25,
             "selectedLayer": 1,
             "viewCenter": {
-                "x": 564,
-                "y": 972
+                "x": 548,
+                "y": 956
             }
         },
         "Pinball-Level.tmx#Pinball": {
+            "scaleInDock": 1
+        },
+        "Pinball-Level2.tmx": {
+            "scale": 1,
+            "selectedLayer": 1,
+            "viewCenter": {
+                "x": 504,
+                "y": 597
+            }
+        },
+        "Pinball-Level2.tmx#Pinball": {
             "scaleInDock": 1
         }
     },
@@ -52,8 +66,8 @@
     ],
     "project": "AsteroidBoy - Level One.tiled-project",
     "recentFiles": [
-        "Grass Tiles.tsx",
-        "Level1.tmx"
+        "Level1.tmx",
+        "Grass Tiles.tsx"
     ],
     "tileset.lastUsedFilter": "Tiled tileset files (*.tsx *.xml)",
     "tileset.lastUsedFormat": "tsx"

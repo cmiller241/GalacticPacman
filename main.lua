@@ -57,6 +57,9 @@ local Fish = require("lua.entities.Fish")
 local PortalGun = require("lua.systems.PortalGun")
 local WaterSystem = require("lua.systems.WaterSystem")
 local Recall = require("lua.systems.Recall")
+local CharacterShadows = require("lua.effects.CharacterShadows")
+local TileGlow = require("lua.effects.TileGlow")
+local RopeRock = require("lua.world.RopeRock")
 local WeaponModes = require("lua.systems.WeaponModes")
 
 local collisionSystem
@@ -119,6 +122,7 @@ local function resetWorldState()
   -- Set only inside conditional blocks below — cleared so nothing from
   -- the last game survives if a block doesn't run.
   state.fish, state.beams, state.lavas, state.tiledLevels = nil, nil, nil, nil
+  state.ropeRocks, state.recallables = nil, nil
   state.ooombas, state.spikeys, state.mirrors, state.levers = nil, nil, nil, nil
   state.cranks, state.signs, state.gates = nil, nil, nil
   state.zoomWindows, state.deathZones = nil, nil
@@ -624,6 +628,24 @@ function love.load()
     state.tiledLevels = { terrainLevel }
     -- The grid sprayed water flows and pools on (see WaterSystem.lua).
     WaterSystem.init(terrainLevel)
+
+    -- Rocks hung on ropes: each Rope paired with the Rock its "holds"
+    -- property names (see lua/world/RopeRock.lua). After the water grid
+    -- (they move — a rock that's fallen mustn't leave its old place solid
+    -- to water); recallable (see lua/systems/Recall.lua).
+    state.ropeRocks = {}
+    state.recallables = state.ropeRocks
+    local rocksById = {}
+    for _, rock in ipairs(terrainLevel.rockSpawns or {}) do rocksById[rock.id] = rock end
+    for _, rope in ipairs(terrainLevel.ropeSpawns or {}) do
+      local rock = rope.holdsId and rocksById[rope.holdsId]
+      if rock then
+        table.insert(state.ropeRocks, RopeRock.new(rope, rock, terrainLevel, dome))
+      else
+        print(string.format("main.lua: Rope id %s holds nothing (its \"holds\" property names no Rock) — not spawned.",
+          tostring(rope.id)))
+      end
+    end
     state.lavas = terrainLevel.lavas
 
     -- Ooombas are placed explicitly via Tiled's own Object Layer now
@@ -1022,7 +1044,7 @@ function love.load()
   -- rectangle planetoid, left of the fisherman, dropping onto it. No
   -- planet is named, so he lands through the ordinary collision pass
   -- rather than being placed on its surface. Set to false to go back.
-  local TEMP_START_ON_FISHERMAN_RECT = true
+  local TEMP_START_ON_FISHERMAN_RECT = false
   if TEMP_START_ON_FISHERMAN_RECT and state.roundedRectPlanet then
     local rect = state.roundedRectPlanet
     state.respawnPoint = {
@@ -1348,6 +1370,12 @@ function love.update(dt)
   -- — after their own movement above, before the player's below, so he's
   -- carried along on one that's rewinding. See lua/systems/Recall.lua.
   Recall.update(dt)
+
+  -- Rocks swinging on ropes — before the player moves, so one standing on
+  -- a rock is carried along (see lua/world/RopeRock.lua).
+  if state.ropeRocks then
+    for _, rr in ipairs(state.ropeRocks) do rr:update(state.timeScale) end
+  end
 
   if state.asteroids then
     for _, a in ipairs(state.asteroids) do
@@ -2174,9 +2202,18 @@ function love.draw()
   end
 
   if state.tiledLevels then
+    -- Bob's and the Ooombas' shadows on the level's tiles (see
+    -- lua/effects/CharacterShadows.lua) — drawn over each level, before
+    -- they themselves are.
+    CharacterShadows.prepare()
+    -- ...and glowing things (fireballs, lava, portals, ...) lighting
+    -- them up (see lua/effects/TileGlow.lua).
+    TileGlow.prepare()
     for _, level in ipairs(state.tiledLevels) do
       if utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50) then
         level:draw()
+        CharacterShadows.drawOnto(level)
+        TileGlow.drawOnto(level)
         if state.showCollisionDebug then
           love.graphics.setLineWidth(4)
           -- Ordinary ground/ramp shapes (red) first, then the solid wall
@@ -2218,6 +2255,13 @@ function love.draw()
           love.graphics.setLineWidth(1)
         end
       end
+    end
+  end
+
+  -- Rocks swinging on ropes (see lua/world/RopeRock.lua).
+  if state.ropeRocks then
+    for _, rr in ipairs(state.ropeRocks) do
+      if utils.isOnScreen(rr.pos.x, rr.pos.y, rr.radius + rr.ropeLength, 50) then rr:draw() end
     end
   end
 
