@@ -111,6 +111,29 @@ end
 -- Choosing a planetoid
 ----------------------------------------------------------------------
 
+-- Everything Recall can rewind: the planetoids, and anything else that's
+-- asked to be (state.recallables — e.g. a rock let fall from its rope, see
+-- lua/world/RopeRock.lua: pos, vel, radius, and containsPoint for aiming).
+local targets = {}
+local function recallTargets()
+  local extra = state.recallables
+  if not extra or #extra == 0 then return state.planetoids or {} end
+  for i = #targets, 1, -1 do targets[i] = nil end
+  for _, p in ipairs(state.planetoids or {}) do targets[#targets + 1] = p end
+  for _, p in ipairs(extra) do targets[#targets + 1] = p end
+  return targets
+end
+
+-- Its outline, `pad` out — round, or a rectangle if it's one.
+local function outline(p, mode, pad)
+  if p.halfWidth and p.halfHeight and not p.isRoundedRect then
+    love.graphics.rectangle(mode, p.pos.x - p.halfWidth - pad, p.pos.y - p.halfHeight - pad,
+      (p.halfWidth + pad) * 2, (p.halfHeight + pad) * 2, 6, 6)
+  else
+    love.graphics.circle(mode, p.pos.x, p.pos.y, p.radius + pad)
+  end
+end
+
 local function isCandidate(p)
   return p and p.pos and p.radius and not p.isSkyDome and not p.isOpenPath
 end
@@ -126,7 +149,7 @@ local function aimedPlanetoid(player)
     local a = (player.aimWorldAngle or 0) + (player.blasterAngleOffset or 0)
     local dx, dy = math.cos(a), math.sin(a)
     local best, bestT = nil, GAMEPAD_AIM_REACH
-    for _, p in ipairs(state.planetoids or {}) do
+    for _, p in ipairs(recallTargets()) do
       if isCandidate(p) and p ~= player.currentPlanet then
         -- Where the aim ray first meets its circle, if it does.
         local fx, fy = p.pos.x - ox, p.pos.y - oy
@@ -150,7 +173,7 @@ local function aimedPlanetoid(player)
   -- (The smallest one the cursor's on, so a little planetoid in front of
   -- a big one can still be picked.)
   local best, bestR = nil, math.huge
-  for _, p in ipairs(state.planetoids or {}) do
+  for _, p in ipairs(recallTargets()) do
     if isCandidate(p) then
       local hit
       if p.containsPoint then
@@ -270,7 +293,7 @@ function Recall.update(dt)
   recordClock = recordClock + gameDt
   if recordClock >= RECORD_SECONDS then
     recordClock = recordClock % RECORD_SECONDS
-    for _, p in ipairs(state.planetoids or {}) do
+    for _, p in ipairs(recallTargets()) do
       if p.pos and not p.recalling then record(p) end
     end
   end
@@ -307,10 +330,10 @@ function Recall.draw()
 
     -- The blinking yellow overlay and ring.
     love.graphics.setColor(COLOR[1], COLOR[2], COLOR[3], OVERLAY_ALPHA_MIN + (OVERLAY_ALPHA_MAX - OVERLAY_ALPHA_MIN) * blink)
-    love.graphics.circle("fill", p.pos.x, p.pos.y, p.radius)
+    outline(p, "fill", 0)
     love.graphics.setLineWidth(RING_WIDTH)
     love.graphics.setColor(COLOR[1], COLOR[2], COLOR[3], 0.6 + 0.4 * blink)
-    love.graphics.circle("line", p.pos.x, p.pos.y, p.radius + RING_WIDTH / 2)
+    outline(p, "line", RING_WIDTH / 2)
   end
 
   -- In Recall mode: a thin ring round what's aimed at, if it can be recalled.
@@ -319,7 +342,7 @@ function Recall.draw()
     if p and Recall.canRecall(p) then
       love.graphics.setLineWidth(2)
       love.graphics.setColor(COLOR[1], COLOR[2], COLOR[3], 0.7)
-      love.graphics.circle("line", p.pos.x, p.pos.y, p.radius + 4)
+      outline(p, "line", 4)
     end
   end
 

@@ -281,7 +281,10 @@ function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
       local lenSq = dx * dx + dy * dy
       if lenSq > 1e-9 then
         local nx, ny = seg.normal.x, seg.normal.y
-        local prevSigned = (prevX - seg.a.x) * nx + (prevY - seg.a.y) * ny
+        -- (Where they were measured against where the surface was then —
+        -- the same thing, except for a moving one: see newMovingSurface.)
+        local pa, pn = seg.prevA or seg.a, seg.prevNormal or seg.normal
+        local prevSigned = (prevX - pa.x) * pn.x + (prevY - pa.y) * pn.y
         local curSigned = (curX - seg.a.x) * nx + (curY - seg.a.y) * ny
         if prevSigned >= 0 and curSigned <= prevSigned then
           local t = ((curX - seg.a.x) * dx + (curY - seg.a.y) * dy) / lenSq
@@ -709,6 +712,38 @@ local function newShape(segments)
   self.radius = math.max(1, radius)
 
   return self
+end
+
+-- A walkable surface that moves — one straight segment from a to b,
+-- walked on (left to right, its open side up) like any other ledge, put
+-- wherever it is each frame with :moveTo. E.g. the top of a rock swinging
+-- on a rope (see lua/world/RopeRock.lua). Anyone standing on it rides
+-- along, since a stood-on surface's position is read fresh every frame.
+function TiledTerrain.newMovingSurface(ax, ay, bx, by)
+  local seg = { a = Vector2.new(ax, ay), b = Vector2.new(bx, by), length = 0 }
+  local shape = newShape({ seg })
+  shape:moveTo(ax, ay, bx, by)
+  return shape
+end
+
+function TerrainShape:moveTo(ax, ay, bx, by)
+  local seg = self.segments[1]
+  -- (Where it was a moment ago, for findLandingCrossing: a surface rising
+  -- into someone falling onto it would otherwise already be past where
+  -- they were last frame, and they'd fall straight through it.)
+  seg.prevA = seg.prevA or Vector2.new(0, 0)
+  seg.prevA.x, seg.prevA.y = seg.a.x, seg.a.y
+  seg.prevNormal = seg.normal or Vector2.new(0, -1)
+  seg.a.x, seg.a.y, seg.b.x, seg.b.y = ax, ay, bx, by
+  local dx, dy = bx - ax, by - ay
+  local len = math.max(1e-6, math.sqrt(dx * dx + dy * dy))
+  seg.length = len
+  seg.tangent = Vector2.new(dx / len, dy / len)
+  seg.normal = Vector2.new(dy / len, -dx / len) -- (the tangent turned -90 degrees: up, for a left-to-right one)
+  self.totalLength = len
+  self.pos.x, self.pos.y = (ax + bx) / 2, (ay + by) / 2
+  self.halfHeight = math.max(1, math.abs(dy) / 2)
+  self.radius = math.max(1, len / 2)
 end
 
 ----------------------------------------------------------------------
@@ -1849,21 +1884,214 @@ function Level:draw()
 end
 
 ----------------------------------------------------------------------
+-- Depth shading — layers named Back and Middle set behind Front
+----------------------------------------------------------------------
+--
+-- Baked once, into the level's one canvas, back to front: a soft shadow
+-- of the layer in front cast onto each layer behind it — Middle's onto
+-- Back, then Front's onto both (offset down and a little sideways,
+-- blurred). Shadows are made at 1/SHADOW_DOWNSCALE size — they're blurred
+-- anyway — and the canvas only ever multiplied, so it costs no more
+-- memory than the plain bake did. And each layer darkening toward the
+-- bottom of the map (see GROUND_SHADE_ROWS).
+local SHADOWED_LAYERS = { back = true, middle = true } -- (by name, any capitals)
+local SHADOW_STRENGTH = 0.5        -- how dark the shadow of a layer in front is, at its darkest
+local SHADOW_OFFSET_X = 14         -- world units: the shadow lands this far right...
+local SHADOW_OFFSET_Y = 30         -- ...and this far down from what casts it
+-- (The same offset Bob's and the Ooombas' shadows use, so every shadow
+-- falls the same way — see lua/effects/CharacterShadows.lua.)
+TiledTerrain.SHADOW_OFFSET_X, TiledTerrain.SHADOW_OFFSET_Y = SHADOW_OFFSET_X, SHADOW_OFFSET_Y
+local SHADOW_BLUR = 3              -- blur passes (at the shadow's reduced size)
+local SHADOW_DOWNSCALE = 8
+-- Each layer's tiles darkening toward the bottom of the map, over its
+-- bottom this-many rows (by name, any capitals; any other: none) — darkest
+-- (GROUND_SHADE_DARKNESS) right at the bottom edge, none at the top of
+-- those rows. The further back the layer, the higher it reaches.
+local GROUND_SHADE_ROWS = { front = 1, middle = 3, back = 5 }
+local GROUND_SHADE_DARKNESS = 0.5  -- how much darker it gets at the very bottom (0 = none, 1 = black)
+
+-- Draws tiles darkened by how near the bottom of the map they are (see
+-- GROUND_SHADE_ROWS) — by their own pixels' height, so it's only ever the
+-- tiles' own art that darkens, never what shows through their clear parts.
+local groundShadeShader = nil
+local function getGroundShadeShader()
+  if groundShadeShader then return groundShadeShader end
+  groundShadeShader = love.graphics.newShader([[
+    varying float canvasY;
+    #ifdef VERTEX
+    vec4 position(mat4 transform_projection, vec4 vertex_position) {
+      canvasY = (TransformMatrix * vertex_position).y;
+      return transform_projection * vertex_position;
+    }
+    #endif
+    #ifdef PIXEL
+    extern number bottomY;   // the map's bottom edge, canvas pixels
+    extern number fadeHeight; // how far up from it the darkening reaches
+    extern number darkness;
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 c = Texel(tex, uv) * color;
+      float t = clamp((bottomY - canvasY) / fadeHeight, 0.0, 1.0); // 0 at the bottom, 1 at the top of the fade
+      c.rgb *= 1.0 - darkness * (1.0 - t);
+      return c;
+    }
+    #endif
+  ]])
+  return groundShadeShader
+end
+
+local blurShader = nil
+local function getBlurShader()
+  if blurShader then return blurShader end
+  blurShader = love.graphics.newShader([[
+    extern vec2 stepUV; // one texel along the blur's direction
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 sum = Texel(tex, uv) * 0.2270270;
+      sum += (Texel(tex, uv + stepUV * 1.3846154) + Texel(tex, uv - stepUV * 1.3846154)) * 0.3162162;
+      sum += (Texel(tex, uv + stepUV * 3.2307692) + Texel(tex, uv - stepUV * 3.2307692)) * 0.0702703;
+      return sum * color;
+    }
+  ]])
+  return blurShader
+end
+
+-- Bakes the tile layers into one canvas (see the comment above). Lava
+-- tiles are skipped: Lava.lua draws its own animated shader quad over
+-- that same area every frame instead — baking the sheet's own flat tile
+-- art underneath would just sit there uselessly (visible only through
+-- the shader's transparent-above-the-wave cutout, where it isn't wanted
+-- either).
+local function bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
+  local function drawLayerTiles(l, scale, ox, oy)
+    for row = 0, height - 1 do
+      for col = 0, width - 1 do
+        local gid = l.data[row * width + col + 1]
+        if gid ~= 0 and classifyGid(tileProps, gid) ~= "lava" then
+          local ts = findTileset(tilesets, gid)
+          if ts then
+            local quad = getTileQuadForLocalIndex(img, gid - ts.firstgid, ts.columns or DEFAULT_TILESET_COLUMNS)
+            love.graphics.draw(img, quad, ox + col * TILE_WORLD_SIZE * scale, oy + row * TILE_WORLD_SIZE * scale,
+              0, TILE_SCALE * scale, TILE_SCALE * scale)
+          end
+        end
+      end
+    end
+  end
+
+
+  -- A soft shadow of `casters` (layers in front) multiplied over everything
+  -- baked so far. Made small: white, with the casters' silhouettes laid
+  -- over it in black at SHADOW_STRENGTH (offset), blurred, then stretched
+  -- back up over the canvas.
+  local sw = math.ceil(width * TILE_WORLD_SIZE / SHADOW_DOWNSCALE)
+  local sh = math.ceil(height * TILE_WORLD_SIZE / SHADOW_DOWNSCALE)
+  local shadowA, shadowB = nil, nil
+  local function castShadow(casters, onto)
+    shadowA = shadowA or love.graphics.newCanvas(sw, sh)
+    shadowB = shadowB or love.graphics.newCanvas(sw, sh)
+    shadowA:setFilter("linear", "linear")
+    shadowB:setFilter("linear", "linear")
+    love.graphics.setCanvas(shadowA)
+    love.graphics.clear(1, 1, 1, 1)
+    love.graphics.setColor(0, 0, 0, SHADOW_STRENGTH)
+    local s = 1 / SHADOW_DOWNSCALE
+    for _, l in ipairs(casters) do
+      drawLayerTiles(l, s, SHADOW_OFFSET_X * s, SHADOW_OFFSET_Y * s)
+    end
+    local blur = getBlurShader()
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setShader(blur)
+    for _ = 1, SHADOW_BLUR do
+      love.graphics.setCanvas(shadowB)
+      blur:send("stepUV", { 1 / sw, 0 })
+      love.graphics.draw(shadowA)
+      love.graphics.setCanvas(shadowA)
+      blur:send("stepUV", { 0, 1 / sh })
+      love.graphics.draw(shadowB)
+    end
+    love.graphics.setShader()
+    love.graphics.setCanvas(onto)
+    love.graphics.setBlendMode("multiply", "premultiplied")
+    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE, SHADOW_DOWNSCALE)
+    love.graphics.setBlendMode("alpha")
+  end
+
+  local canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE)
+  love.graphics.push("all")
+  love.graphics.origin()
+  love.graphics.setCanvas(canvas)
+  love.graphics.clear(0, 0, 0, 0)
+  for i, l in ipairs(tileLayers) do
+    love.graphics.setColor(1, 1, 1, 1)
+    local shadeRows = GROUND_SHADE_ROWS[string.lower(l.name or "")]
+    if shadeRows and shadeRows > 0 then
+      local shade = getGroundShadeShader()
+      shade:send("bottomY", height * TILE_WORLD_SIZE)
+      shade:send("fadeHeight", shadeRows * TILE_WORLD_SIZE)
+      shade:send("darkness", GROUND_SHADE_DARKNESS)
+      love.graphics.setShader(shade)
+    end
+    drawLayerTiles(l, 1, 0, 0)
+    love.graphics.setShader()
+    if SHADOWED_LAYERS[string.lower(l.name or "")] then
+      -- The shadow of the next layer in front (only the next: one further
+      -- forward casts its own over this one too, when that one's done).
+      local nextLayer = tileLayers[i + 1]
+      if nextLayer then castShadow({ nextLayer }, canvas) end
+    end
+  end
+  love.graphics.pop()
+  love.graphics.setColor(1, 1, 1, 1)
+  if shadowA then shadowA:release(); shadowB:release() end
+  return canvas
+end
+
+----------------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------------
 
 -- mapData: the table returned by require()-ing a Tiled Lua export.
 -- anchorX/anchorY: world position of the map's own (0,0) (top-left) corner.
 function TiledTerrain.load(mapData, anchorX, anchorY)
-  local layer = nil
+  -- Tile layers, in drawing order (Tiled's own: first is furthest back).
+  -- A map can have several — ones named "Back" and "Middle" get the shadows
+  -- of the layers in front of them (see bakeLayers); any other name is drawn plain, like a
+  -- front layer.
+  local tileLayers = {}
   for _, l in ipairs(mapData.layers) do
-    if l.type == "tilelayer" then layer = l; break end
+    if l.type == "tilelayer" then table.insert(tileLayers, l) end
   end
-  assert(layer, "TiledTerrain.load: no tilelayer found in map data")
+  assert(#tileLayers > 0, "TiledTerrain.load: no tilelayer found in map data")
 
   local width, height = mapData.width, mapData.height
   local tilesets = mapData.tilesets
   local tileProps = buildTilePropertyLookup(tilesets)
+
+  -- Collision comes from every layer at once: one combined layer that,
+  -- cell by cell, takes the most solid tile any layer has there (a wall or
+  -- lava over a walkable top, a walkable top over plain fill; the front-
+  -- most of equals) — so a ledge collides the same whichever layer it was
+  -- drawn on, just as when the whole level was one layer.
+  local layer = tileLayers[1]
+  if #tileLayers > 1 then
+    local function solidity(gid)
+      if gid == 0 then return 0 end
+      local role = classifyGid(tileProps, gid)
+      if role == "wall" or role == "lava" then return 3 end
+      if role == "fill" then return 1 end
+      return 2 -- walkable: flat tops, slopes, ramps, crests, arches, ceilings
+    end
+    local data = {}
+    for i = 1, width * height do
+      local best, bestRank = 0, 0
+      for li = #tileLayers, 1, -1 do -- front first, so it wins ties
+        local gid = tileLayers[li].data[i] or 0
+        local rank = solidity(gid)
+        if rank > bestRank then best, bestRank = gid, rank end
+      end
+      data[i] = best
+    end
+    layer = { data = data }
+  end
 
   -- Ramp-to-wall climbs (rampRight/rampLeft) — built BEFORE the
   -- ordinary column scan below, so its own claimed cells (see
@@ -1997,6 +2225,11 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- points) — dying inside it respawns the player at that point instead
   -- of the Space Shelter door. See Player:startDeath/respawn.
   local deathZones = {}
+  -- "Rope" and "Rock" objects (rectangles): a rope hanging from its top,
+  -- holding whatever its "holds" property names — see lua/world/RopeRock.lua
+  -- (main.lua pairs them up). World space; ids kept for the pairing.
+  local ropeSpawns = {}
+  local rockSpawns = {}
 
   -- Scans column `col` outward from `startRow` in direction `dRow`
   -- (+1 = downward/floor search, -1 = upward/ceiling search) for the
@@ -2208,6 +2441,25 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
               "TiledTerrain: Zoom-Window object id %s has no numeric \"zoom\" property — ignored.",
               tostring(obj.id)))
           end
+        elseif obj.class == "Rope" or obj.class == "Rock" then
+          local props = obj.properties or {}
+          local spawn = {
+            id = obj.id,
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            width = obj.width * TILE_SCALE,
+            height = obj.height * TILE_SCALE,
+          }
+          if obj.class == "Rope" then
+            -- "holds": an object property (exported as { id = n }), or
+            -- the id typed in as a number/string, like Spikey-Orbit's "orbit".
+            local holds = props.holds
+            spawn.holdsId = tonumber(type(holds) == "table" and holds.id or holds)
+            table.insert(ropeSpawns, spawn)
+          else
+            spawn.solid = props.solid ~= false
+            table.insert(rockSpawns, spawn)
+          end
         elseif obj.class == "DeathZone" then
           local props = obj.properties or {}
           local respawnX, respawnY = tonumber(props.respawnX), tonumber(props.respawnY)
@@ -2230,40 +2482,13 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     end
   end
 
-  -- Rendering: bake the ENTIRE grid (fill tiles included — rendering
+  -- Rendering: bake EVERY tile layer (fill tiles included — rendering
   -- doesn't care about the walkable/fill/wall distinction, only collision
-  -- does) to one canvas, once. Lava tiles are the one exception: skipped
-  -- here entirely, since Lava.lua draws its own animated shader quad
-  -- over that same area every frame instead — baking the sheet's own
-  -- flat tile art underneath would just sit there uselessly (visible
-  -- only through the shader's transparent-above-the-wave cutout, where
-  -- it isn't wanted either).
+  -- does) to one canvas, once, with the depth shading (see bakeLayers).
   local canvas = nil
   local img = state.platformTexture
   if img then
-    canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE)
-    love.graphics.push()
-    love.graphics.origin()
-    love.graphics.setCanvas(canvas)
-    love.graphics.clear(0, 0, 0, 0)
-    love.graphics.setColor(1, 1, 1, 1)
-    for row = 0, height - 1 do
-      for col = 0, width - 1 do
-        local gid = layer.data[row * width + col + 1]
-        if gid ~= 0 and classifyGid(tileProps, gid) ~= "lava" then
-          local ts = findTileset(tilesets, gid)
-          if ts then
-            local localIndex = gid - ts.firstgid
-            local columns = ts.columns or DEFAULT_TILESET_COLUMNS
-            local quad = getTileQuadForLocalIndex(img, localIndex, columns)
-            love.graphics.draw(img, quad, col * TILE_WORLD_SIZE, row * TILE_WORLD_SIZE, 0, TILE_SCALE, TILE_SCALE)
-          end
-        end
-      end
-    end
-    love.graphics.setCanvas()
-    love.graphics.pop()
-    love.graphics.setColor(1, 1, 1, 1)
+    canvas = bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
   end
 
   local mapWorldWidth = width * TILE_WORLD_SIZE
@@ -2286,6 +2511,8 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     sphereMoveSpawns = sphereMoveSpawns,
     zoomWindows = zoomWindows,
     deathZones = deathZones,
+    ropeSpawns = ropeSpawns,
+    rockSpawns = rockSpawns,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,
