@@ -22,11 +22,25 @@
 --                                 Tiled pixels (default: sized from the
 --                                 opposite flipper at the same height so
 --                                 the tips leave a ball-sized gap)
+--   Drop                          drop target: point = where it stands
+--                                 against a wall; it lines itself up with
+--                                 that wall (on an incline, it leans with
+--                                 it). Knocked down by a solid hit; the
+--                                 whole bank down scores a bonus and they
+--                                 all pop back up. Optional "length",
+--                                 Tiled pixels.
+--   Rollover                      rollover: the ball rolls over it (it
+--                                 doesn't bounce off) and lights it; all
+--                                 of them lit scores a bonus and resets
+--                                 them.
+--
+-- Scoring goes to state.score (the HUD's), with a little "+points" pop-up.
 --
 -- Assumes the planet never rotates (main.lua sets rotationAngle = 0 and
 -- rotationSpeed = 0): everything here is plain world space anchored at the
 -- planet's own top-left corner.
 
+local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local CurveTiles = require("lua.world.PinballCurveTiles")
 local Planetoid = require("lua.world.Planetoid")
@@ -90,6 +104,39 @@ local BUMPER_BAKE_PADDING = 2     -- world units of transparent margin round the
 local BUMPER_SHADING_MIX = 0.55   -- how strongly the planetoid sun shading shows on bumpers (1 = full, like planetoids)
 local COLOR_FLIPPER = { 0.25, 0.45, 0.95, 1 }
 local COLOR_PLUNGER = { 0.55, 0.58, 0.65, 1 }
+
+-- Drop targets.
+local DROP_LENGTH_PX = 44         -- Tiled pixels, along the wall (when the object has no "length" property)
+local DROP_THICKNESS_PX = 10      -- Tiled pixels, out from the wall
+local DROP_WALL_REACH_PX = 48     -- how far (Tiled pixels) its point may be from the wall it lines up with
+local DROP_HIT_SPEED = 3          -- world units/tick the ball must be moving into it to knock it down
+local DROP_POINTS = 500
+local DROP_BANK_BONUS = 5000      -- the whole bank knocked down
+local DROP_RESET_TICKS = 90       -- how long a fully knocked-down bank stays down before popping back up
+local DROP_FLASH_TICKS = 18       -- how long a target flashes as it goes down
+local COLOR_DROP = { 0.98, 0.62, 0.12, 1 }
+local COLOR_DROP_STRIPE = { 1.00, 0.95, 0.80, 1 }
+local COLOR_DROP_EDGE = { 0.35, 0.16, 0.04, 1 }
+local COLOR_DROP_SLOT = { 0.03, 0.03, 0.05, 1 } -- the slot a knocked-down target has sunk into
+
+-- Rollovers.
+local ROLLOVER_REACH_PX = 22      -- Tiled pixels from its point the ball's center must come to roll over it
+local ROLLOVER_SLOT_WIDTH_PX = 12
+local ROLLOVER_SLOT_LENGTH_PX = 34
+local ROLLOVER_LIGHT_OFFSET_PX = 30 -- how far above the slot its light sits
+local ROLLOVER_LIGHT_RADIUS_PX = 8
+local ROLLOVER_POINTS = 250
+local ROLLOVER_ALL_BONUS = 2500   -- every rollover lit
+local ROLLOVER_CELEBRATE_TICKS = 70 -- how long they all flash once every one is lit, before resetting
+local COLOR_ROLLOVER_SLOT = { 0.03, 0.03, 0.05, 1 }
+local COLOR_ROLLOVER_WIRE = { 0.80, 0.82, 0.88, 1 }
+local COLOR_ROLLOVER_OFF = { 0.35, 0.22, 0.05, 1 }
+local COLOR_ROLLOVER_ON = { 1.00, 0.80, 0.20, 1 }
+
+-- Points pop-ups.
+local POPUP_TICKS = 50
+local POPUP_RISE = 1.2            -- world units/tick
+local COLOR_POPUP = { 1.00, 0.95, 0.55 }
 
 ----------------------------------------------------------------------
 -- Tile geometry -> collision polygons
@@ -312,22 +359,38 @@ function PinballInterior.new(planetoid, mapData)
   self.plungerLaunchSpeed = tonumber(mapProps.plungerSpeed) or PLUNGER_LAUNCH_SPEED
   self.maxBallSpeed = tonumber(mapProps.maxBallSpeed) or MAX_BALL_SPEED
 
-  local layer, tileset = nil, mapData.tilesets[1]
+  local layer = nil
   for _, l in ipairs(mapData.layers) do
     if l.type == "tilelayer" then layer = l; break end
   end
-  assert(layer and tileset, "PinballInterior: map needs a tile layer and a tileset")
+  assert(layer and mapData.tilesets[1], "PinballInterior: map needs a tile layer and a tileset")
 
-  self:buildTiles(layer, tileset)
+  self:buildTiles(layer, mapData.tilesets)
   self:buildObjects(mapData)
   return self
 end
 
-function PinballInterior:buildTiles(layer, tileset)
+-- tilesets: the map's. Every one of them is the same curve sheet — the
+-- map's own embedded copy (the one with the image) and any external .tsx
+-- reference to it (tiled/Pinball.tsx) — so a tile's place on the sheet is
+-- just its gid less its own tileset's firstgid, whichever one it's from.
+function PinballInterior:buildTiles(layer, tilesets)
   local W, H = self.mapWidth, self.mapHeight
   local S = TILE_SOURCE_SIZE
   local half = S / 2
+  local tileset = tilesets[1]
+  for _, ts in ipairs(tilesets) do
+    if ts.image then tileset = ts; break end
+  end
   local columns = tileset.columns or CurveTiles.columns
+  -- The tileset a gid belongs to: the one with the highest firstgid not past it.
+  local function firstgidOf(gid)
+    local best = tileset.firstgid
+    for _, ts in ipairs(tilesets) do
+      if ts.firstgid <= gid and ts.firstgid > best then best = ts.firstgid end
+    end
+    return best
+  end
   self.cellPolys = {}
 
   local image = love.graphics.newImage(resolveMapPath(tileset.image))
@@ -342,7 +405,7 @@ function PinballInterior:buildTiles(layer, tileset)
       local rawGid = layer.data[row * W + col + 1]
       if rawGid and rawGid ~= 0 then
         local gid, fh, fv, fd = splitGid(rawGid)
-        local id = gid - tileset.firstgid
+        local id = gid - firstgidOf(gid)
         local a, b, c, d = flipMatrix(fh, fv, fd)
         local tileX = self.anchorX + col * TILE_WORLD_SIZE
         local tileY = self.anchorY + row * TILE_WORLD_SIZE
@@ -382,6 +445,7 @@ end
 
 function PinballInterior:buildObjects(mapData)
   self.bumpers, self.flippers, self.plunger = {}, {}, nil
+  self.drops, self.rollovers, self.popups = {}, {}, {}
   local ax, ay = self.anchorX, self.anchorY
 
   for _, l in ipairs(mapData.layers) do
@@ -410,6 +474,13 @@ function PinballInterior:buildObjects(mapData)
             { wx - w / 2, wy }, { wx + w / 2, wy }, { wx + w / 2, wy + h }, { wx - w / 2, wy + h },
           }
           self.plunger = { x = wx, y = wy, width = w, height = h, poly = finishPolygon(points) }
+        elseif obj.class == "Drop" then
+          table.insert(self.drops, {
+            x = wx, y = wy, up = true,
+            length = (tonumber(props.length) or DROP_LENGTH_PX) * TILE_SCALE,
+          })
+        elseif obj.class == "Rollover" then
+          table.insert(self.rollovers, { x = wx, y = wy, lit = false })
         end
       end
     end
@@ -467,6 +538,57 @@ function PinballInterior:buildObjects(mapData)
   -- tips just end shorter (the gap between them widens accordingly).
   for _, f in ipairs(self.flippers) do
     f.length = f.length * FLIPPER_SIZE_SCALE
+  end
+
+  -- Each drop target stands with its back against the wall nearest its
+  -- point, its face along that wall — so against an incline it leans with
+  -- the incline instead of standing square. (No wall in reach: square,
+  -- facing up.)
+  local reach = DROP_WALL_REACH_PX * TILE_SCALE
+  local thick = DROP_THICKNESS_PX * TILE_SCALE
+  -- (Only a wall's open face counts: each tile's polygon also has edges
+  -- against its solid neighbors, with no open space in front of them.)
+  local function solidAt(x, y)
+    local col = math.floor((x - ax) / TILE_WORLD_SIZE)
+    local row = math.floor((y - ay) / TILE_WORLD_SIZE)
+    if col < 0 or row < 0 or col >= self.mapWidth or row >= self.mapHeight then return true end
+    local poly = self.cellPolys[row * self.mapWidth + col]
+    return poly ~= nil and pointInPolygon(poly.points, x, y)
+  end
+  for _, d in ipairs(self.drops) do
+    local bestDist, bx, by, bnx, bny = reach, d.x, d.y + thick / 2, 0, -1
+    for _, poly in pairs(self.cellPolys) do
+      if d.x + reach >= poly.minX and d.x - reach <= poly.maxX and d.y + reach >= poly.minY and d.y - reach <= poly.maxY then
+        local pts = poly.points
+        for i = 1, #pts do
+          local a, b = pts[i], pts[i % #pts + 1]
+          local abx, aby = b[1] - a[1], b[2] - a[2]
+          local len = math.sqrt(abx * abx + aby * aby)
+          if len > 1e-6 then
+            local nx, ny = (aby / len) * poly.orient, (-abx / len) * poly.orient
+            local mx, my = (a[1] + b[1]) / 2, (a[2] + b[2]) / 2
+            if not solidAt(mx + nx * 2, my + ny * 2) then
+              local t = math.max(0, math.min(1, ((d.x - a[1]) * abx + (d.y - a[2]) * aby) / (len * len)))
+              local ex, ey = a[1] + abx * t, a[2] + aby * t
+              local dist = math.sqrt((d.x - ex) ^ 2 + (d.y - ey) ^ 2)
+              if dist < bestDist then bestDist, bx, by, bnx, bny = dist, ex, ey, nx, ny end
+            end
+          end
+        end
+      end
+    end
+    -- Along the wall (tangent) and out from it (normal), and its corners.
+    local tx, ty = -bny, bnx
+    local hl = d.length / 2
+    d.nx, d.ny, d.tx, d.ty = bnx, bny, tx, ty
+    d.cx, d.cy = bx + bnx * thick / 2, by + bny * thick / 2
+    d.corners = {
+      { bx - tx * hl, by - ty * hl },
+      { bx + tx * hl, by + ty * hl },
+      { bx + tx * hl + bnx * thick, by + ty * hl + bny * thick },
+      { bx - tx * hl + bnx * thick, by - ty * hl + bny * thick },
+    }
+    d.poly = finishPolygon(d.corners)
   end
 end
 
@@ -746,6 +868,17 @@ function PinballInterior:updateBallInTable(player, ts, jumpHeld)
       local nx, ny = bounceOffFlipper(f, player)
       if nx then contactNX, contactNY = nx, ny end
     end
+    for _, d in ipairs(self.drops) do
+      if d.up then
+        local vx, vy = player.vel.x, player.vel.y
+        local nx, ny = bounceOffPolygon(d.poly, player)
+        if nx then
+          contactNX, contactNY = nx, ny
+          if -(vx * nx + vy * ny) >= DROP_HIT_SPEED then self:knockDown(d) end
+        end
+      end
+    end
+    self:checkRollovers(player)
 
     -- Rolling: while touching something he rolls without slipping
     -- (spin = speed along the surface / radius, clockwise when the
@@ -762,6 +895,94 @@ function PinballInterior:updateBallInTable(player, ts, jumpHeld)
   end
   if self.plunger and self.plunger.kickTimer then
     self.plunger.kickTimer = self.plunger.kickTimer > ts and self.plunger.kickTimer - ts or nil
+  end
+  self:updateTargets(player, ts)
+end
+
+----------------------------------------------------------------------
+-- Drop targets, rollovers, scoring
+----------------------------------------------------------------------
+
+-- Points to the HUD's score, with a pop-up where they were scored.
+function PinballInterior:score(points, x, y)
+  state.score = (state.score or 0) + points
+  table.insert(self.popups, { text = "+" .. points, x = x, y = y, life = POPUP_TICKS })
+end
+
+function PinballInterior:knockDown(d)
+  d.up = false
+  d.flashTimer = DROP_FLASH_TICKS
+  self:score(DROP_POINTS, d.cx, d.cy)
+  for _, other in ipairs(self.drops) do
+    if other.up then return end
+  end
+  -- The whole bank's down.
+  local first = self.drops[1]
+  self:score(DROP_BANK_BONUS, first.cx + first.nx * 60, first.cy + first.ny * 60)
+  self.dropResetTimer = DROP_RESET_TICKS
+end
+
+-- Rolling over one (coming within reach of it, not already over it) lights it.
+function PinballInterior:checkRollovers(player)
+  if self.rolloverCelebrate then return end
+  local reach = ROLLOVER_REACH_PX * TILE_SCALE
+  for _, ro in ipairs(self.rollovers) do
+    local over = (player.pos.x - ro.x) ^ 2 + (player.pos.y - ro.y) ^ 2 <= reach * reach
+    if over and not ro.ballOver then
+      ro.flashTimer = DROP_FLASH_TICKS
+      if not ro.lit then
+        ro.lit = true
+        self:score(ROLLOVER_POINTS, ro.x, ro.y)
+        local all = true
+        for _, other in ipairs(self.rollovers) do all = all and other.lit end
+        if all then
+          self:score(ROLLOVER_ALL_BONUS, ro.x, ro.y - 80)
+          self.rolloverCelebrate = ROLLOVER_CELEBRATE_TICKS
+        end
+      end
+    end
+    ro.ballOver = over
+  end
+end
+
+function PinballInterior:updateTargets(player, ts)
+  for _, d in ipairs(self.drops) do
+    if d.flashTimer then d.flashTimer = d.flashTimer > ts and d.flashTimer - ts or nil end
+  end
+  for _, ro in ipairs(self.rollovers) do
+    if ro.flashTimer then ro.flashTimer = ro.flashTimer > ts and ro.flashTimer - ts or nil end
+  end
+
+  -- A knocked-down bank pops back up — once the ball's clear of all of it.
+  if self.dropResetTimer then
+    self.dropResetTimer = self.dropResetTimer - ts
+    if self.dropResetTimer <= 0 then
+      local clear = true
+      for _, d in ipairs(self.drops) do
+        local ex, ey, dist = closestPointOnPolygon(d.poly, player.pos.x, player.pos.y)
+        if dist < player.radius + 4 or pointInPolygon(d.poly.points, player.pos.x, player.pos.y) then clear = false end
+      end
+      if clear then
+        for _, d in ipairs(self.drops) do d.up = true; d.flashTimer = DROP_FLASH_TICKS end
+        self.dropResetTimer = nil
+      end
+    end
+  end
+
+  -- Every rollover lit: they flash together a while, then all go out.
+  if self.rolloverCelebrate then
+    self.rolloverCelebrate = self.rolloverCelebrate - ts
+    if self.rolloverCelebrate <= 0 then
+      for _, ro in ipairs(self.rollovers) do ro.lit = false end
+      self.rolloverCelebrate = nil
+    end
+  end
+
+  for i = #self.popups, 1, -1 do
+    local p = self.popups[i]
+    p.life = p.life - ts
+    p.y = p.y - POPUP_RISE * ts
+    if p.life <= 0 then table.remove(self.popups, i) end
   end
 end
 
@@ -846,6 +1067,9 @@ function PinballInterior:draw()
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(self.batch)
 
+  self:drawRollovers()
+  self:drawDrops()
+
   for _, b in ipairs(self.bumpers) do
     -- The pop (slightly bigger) only for the first few ticks of a hit;
     -- the cap keeps blinking for the rest of BUMPER_FLASH_TICKS.
@@ -887,8 +1111,89 @@ function PinballInterior:draw()
     love.graphics.circle("fill", tipX, tipY, rt)
   end
 
+  self:drawPopups()
+
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.pop()
+end
+
+-- A slot with a wire across it where the ball rolls over, and a light
+-- above it: dim until rolled over, then lit; all of them flashing together
+-- once every one is lit.
+function PinballInterior:drawRollovers()
+  local w, l = ROLLOVER_SLOT_WIDTH_PX * TILE_SCALE, ROLLOVER_SLOT_LENGTH_PX * TILE_SCALE
+  local lightR = ROLLOVER_LIGHT_RADIUS_PX * TILE_SCALE
+  local blinkOn = self.rolloverCelebrate and math.floor(self.rolloverCelebrate / 6) % 2 == 0
+  for _, ro in ipairs(self.rollovers) do
+    love.graphics.setColor(COLOR_ROLLOVER_SLOT)
+    love.graphics.rectangle("fill", ro.x - w / 2, ro.y - l / 2, w, l, w / 2, w / 2)
+    love.graphics.setColor(COLOR_ROLLOVER_WIRE)
+    love.graphics.setLineWidth(3)
+    love.graphics.line(ro.x - w * 0.3, ro.y, ro.x + w * 0.3, ro.y)
+
+    local on = (ro.lit and not self.rolloverCelebrate) or blinkOn or ro.flashTimer
+    local lx, ly = ro.x, ro.y - l / 2 - ROLLOVER_LIGHT_OFFSET_PX * TILE_SCALE + lightR
+    if on then
+      love.graphics.setColor(COLOR_ROLLOVER_ON[1], COLOR_ROLLOVER_ON[2], COLOR_ROLLOVER_ON[3], 0.25)
+      love.graphics.circle("fill", lx, ly, lightR * 1.9)
+    end
+    love.graphics.setColor(on and COLOR_ROLLOVER_ON or COLOR_ROLLOVER_OFF)
+    love.graphics.circle("fill", lx, ly, lightR)
+    love.graphics.setColor(COLOR_ROLLOVER_SLOT)
+    love.graphics.setLineWidth(2)
+    love.graphics.circle("line", lx, ly, lightR)
+  end
+  love.graphics.setLineWidth(1)
+end
+
+-- Standing: an orange target lined up with its wall (leaning with an
+-- incline), with a light stripe along its face; flashing as it goes down
+-- or pops back up. Knocked down: just the dark slot it sank into.
+function PinballInterior:drawDrops()
+  for _, d in ipairs(self.drops) do
+    local c = d.corners
+    local flash = d.flashTimer and math.floor(d.flashTimer / 3) % 2 == 0
+    if d.up then
+      love.graphics.setColor(flash and COLOR_DROP_STRIPE or COLOR_DROP)
+      love.graphics.polygon("fill", c[1][1], c[1][2], c[2][1], c[2][2], c[3][1], c[3][2], c[4][1], c[4][2])
+      -- The stripe, along the face (the side away from the wall).
+      local inset = 0.3
+      local function along(p, q, t) return p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t end
+      local ax, ay = along(c[4], c[1], inset)
+      local bx, by = along(c[3], c[2], inset)
+      local s = 0.15
+      local ax2, ay2 = ax + (bx - ax) * s, ay + (by - ay) * s
+      local bx2, by2 = bx - (bx - ax) * s, by - (by - ay) * s
+      love.graphics.setColor(COLOR_DROP_STRIPE)
+      love.graphics.setLineWidth(3)
+      love.graphics.line(ax2, ay2, bx2, by2)
+      love.graphics.setColor(COLOR_DROP_EDGE)
+      love.graphics.setLineWidth(2)
+      love.graphics.polygon("line", c[1][1], c[1][2], c[2][1], c[2][2], c[3][1], c[3][2], c[4][1], c[4][2])
+    else
+      -- (A sliver of the target's footprint, against the wall.)
+      local t = 0.3
+      local function toward(p, q) return p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t end
+      local x3, y3 = toward(c[2], c[3])
+      local x4, y4 = toward(c[1], c[4])
+      love.graphics.setColor(flash and COLOR_DROP or COLOR_DROP_SLOT)
+      love.graphics.polygon("fill", c[1][1], c[1][2], c[2][1], c[2][2], x3, y3, x4, y4)
+    end
+  end
+  love.graphics.setLineWidth(1)
+end
+
+function PinballInterior:drawPopups()
+  local font = love.graphics.getFont()
+  local scale = 3
+  for _, p in ipairs(self.popups) do
+    local alpha = math.min(1, p.life / (POPUP_TICKS * 0.4))
+    local w = font:getWidth(p.text) * scale
+    love.graphics.setColor(0, 0, 0, alpha * 0.6)
+    love.graphics.print(p.text, p.x - w / 2 + 2, p.y + 2, 0, scale, scale)
+    love.graphics.setColor(COLOR_POPUP[1], COLOR_POPUP[2], COLOR_POPUP[3], alpha)
+    love.graphics.print(p.text, p.x - w / 2, p.y, 0, scale, scale)
+  end
 end
 
 return PinballInterior

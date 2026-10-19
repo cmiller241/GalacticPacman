@@ -204,24 +204,69 @@ function WaterSystem.reset()
 end
 
 ----------------------------------------------------------------------
--- Water on round planetoids
+-- Water on planetoids
 ----------------------------------------------------------------------
 --
--- Spray landing on a round planetoid (not a water planet — those already
--- are water — nor the dome or a rounded-rect planet) adds to an even
--- layer of water all the way round it, thickening as more lands. It
--- moves with its planetoid, slowly evaporates from its outer surface
--- like a pool does, and Bob can swim in it (like a little water planet).
--- It's kept with the planetoid, so when that's culled, its water goes too.
+-- Spray landing on a planetoid Bob can walk all the way round — a round
+-- one, or a rounded rectangle (RoundedRectPlanetoid.lua) — adds to an
+-- even layer of water all the way round it, thickening as more lands.
+-- (Not a water planet's water body — those are water already — nor the
+-- dome or the level's terrain.) It moves with its planetoid, slowly
+-- evaporates from its outer surface like a pool does, and Bob can swim in
+-- it (like a little water planet). It's kept with the planetoid, so when
+-- that's culled, its water goes too.
 
-local function isRoundPlanet(p)
-  return p and p.radius and p.pos and not (p.isRoundedRect or p.isSkyDome or p.isWaterPlanet or p.isOpenPath)
+-- Whether planetoid `p` can have a layer of water round it.
+local function holdsWater(p)
+  if not (p and p.pos) or p.isSkyDome or p.isWaterPlanet or p.isOpenPath or p.isWall or p.isGate then
+    return false
+  end
+  if p.isRoundedRect then return p.pointAtLocalArcPosition ~= nil and p.cornerRadius ~= nil end
+  return p.radius ~= nil
+end
+
+-- How far round planetoid p's own surface is.
+local function perimeterOf(p)
+  if p.isRoundedRect then return p:getPerimeter() end
+  return 2 * math.pi * p.radius
 end
 
 -- How deep a layer `volume` (in cells' worth — CELL x CELL each) makes
--- round a planet of radius R: the ring between R and R + depth holds it.
-local function oceanDepth(R, volume)
-  return math.sqrt(R * R + volume * CELL * CELL / math.pi) - R
+-- round planetoid p: an even layer `depth` thick round any convex outline
+-- of perimeter P holds P * depth + pi * depth^2 (the straight parts' strips
+-- plus the corners' wedges, which add up to a full circle) — solved for
+-- depth. (For a round one, the ring from radius R out to R + depth.)
+local function depthOf(p, volume)
+  local P = perimeterOf(p)
+  return (math.sqrt(P * P + 4 * math.pi * volume * CELL * CELL) - P) / (2 * math.pi)
+end
+
+-- How far (x, y) is from planetoid p's own surface — negative inside it —
+-- and the outward normal there.
+local function surfaceDistance(p, x, y)
+  if p.isRoundedRect then
+    -- (Its core rectangle, pushed out by the corner radius.)
+    local lx, ly = p:worldToLocal(x, y)
+    local cr = p.cornerRadius
+    local qx, qy = math.abs(lx) - (p.halfWidth - cr), math.abs(ly) - (p.halfHeight - cr)
+    local d, nx, ny
+    if qx > 0 and qy > 0 then
+      local len = math.sqrt(qx * qx + qy * qy)
+      d, nx, ny = len - cr, qx / len, qy / len
+    elseif qx > qy then
+      d, nx, ny = qx - cr, 1, 0
+    else
+      d, nx, ny = qy - cr, 0, 1
+    end
+    if lx < 0 then nx = -nx end
+    if ly < 0 then ny = -ny end
+    local n = p:localDirToWorld(nx, ny)
+    return d, n.x, n.y
+  end
+  local dx, dy = x - p.pos.x, y - p.pos.y
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist < 1e-6 then return -p.radius, 0, -1 end
+  return dist - p.radius, dx / dist, dy / dist
 end
 
 local function addToOcean(p, amount)
@@ -496,15 +541,25 @@ function WaterSystem.wetAt(x, y)
 end
 
 -- The pool Bob's middle is under, if any (see Player.lua's submergedIn).
--- That includes a round planetoid's water layer: it's like a little water
--- planet — round, centered on the planetoid — so it's handed to his swim
--- code the same way one is.
+-- That includes a planetoid's water layer: round, it's like a little water
+-- planet — centered on the planetoid — so it's handed to his swim code
+-- the same way one is. Round a rounded rectangle, it's handed over as a
+-- huge round one centered far down past the nearest bit of surface (the
+-- same trick as a pool, below), so its surface there is near enough flat.
 function WaterSystem.submergedAt(player)
   local x, y = player.pos.x, player.pos.y
   for p, o in pairs(oceans) do
-    local outer = p.radius + oceanDepth(p.radius, o.volume)
-    if (x - p.pos.x) ^ 2 + (y - p.pos.y) ^ 2 < outer * outer then
-      o.water.pos, o.water.radius = p.pos, outer
+    local depth = depthOf(p, o.volume)
+    local d, nx, ny = surfaceDistance(p, x, y)
+    if d < depth then
+      if p.isRoundedRect then
+        local far = 100000
+        o.farPos = o.farPos or Vector2.new(0, 0)
+        o.farPos.x, o.farPos.y = x - nx * (d + far), y - ny * (d + far)
+        o.water.pos, o.water.radius = o.farPos, far + depth
+      else
+        o.water.pos, o.water.radius = p.pos, p.radius + depth
+      end
       return o.water
     end
   end
@@ -632,7 +687,7 @@ local function updateDroplet(d, ts, dt)
     local lastC, lastR = cellOf(px, py)
     -- Below the level counts as its floor — except on the way to a round
     -- planetoid out there.
-    local floorBelow = not isRoundPlanet(d.planet)
+    local floorBelow = not holdsWater(d.planet)
     for s = 1, steps do
       local x, y = px + (d.x - px) * s / steps, py + (d.y - py) * s / steps
       local c, r = cellOf(x, y)
@@ -654,23 +709,22 @@ local function updateDroplet(d, ts, dt)
     end
   end
 
-  -- On a round planetoid (the grid's bounds can take in planetoids that
-  -- aren't part of the level): it joins the layer of water round it (see
-  -- addToOcean) — reaching that layer's surface, or the planetoid itself
-  -- if it has none yet.
+  -- On a planetoid that holds water (the grid's bounds can take in
+  -- planetoids that aren't part of the level): it joins the layer of
+  -- water round it (see addToOcean) — reaching that layer's surface, or
+  -- the planetoid itself if it has none yet.
   local p = d.planet
   if grid then
     local c, r = cellOf(d.x, d.y)
-    if inGrid(c, r) and not isRoundPlanet(p) then return false end
+    if inGrid(c, r) and not holdsWater(p) then return false end
   end
-  if isRoundPlanet(p) then
+  if holdsWater(p) then
     local o = oceans[p]
-    local outer = p.radius + (o and oceanDepth(p.radius, o.volume) or 0)
-    local dx, dy = d.x - p.pos.x, d.y - p.pos.y
-    local dist = math.sqrt(dx * dx + dy * dy)
-    if dist < outer + 2 then
+    local depth = o and depthOf(p, o.volume) or 0
+    local sd, nx, ny = surfaceDistance(p, d.x, d.y)
+    if sd < depth + 2 then
       if volume > 0 then addToOcean(p, volume) end
-      if dist > 1e-6 then spawnSplash(d.x, d.y, dx / dist, dy / dist) end
+      spawnSplash(d.x, d.y, nx, ny)
       return true
     end
     return false
@@ -744,7 +798,7 @@ local function drainIntoPortals(dt)
         if x then
           -- Out onto a round planetoid: straight into its water (see
           -- drainOceansIntoPortals), the jet just for show.
-          local intoOcean = isRoundPlanet(to.obj)
+          local intoOcean = holdsWater(to.obj)
           if intoOcean then addToOcean(to.obj, PORTAL_JET_VOLUME) end
           table.insert(droplets, {
             x = x, y = y, vx = vx, vy = vy, life = DROPLET_SECONDS,
@@ -774,10 +828,10 @@ local function drainOceansIntoPortals(dt)
     local other = portals[color == "red" and "blue" or "red"]
     local o = oceans[p.obj]
     if o and p.x then
-      local here = oceanDepth(p.obj.radius, o.volume)
+      local here = depthOf(p.obj, o.volume)
       local there = 0
       local far = oceans[other.obj]
-      if far then there = oceanDepth(other.obj.radius, far.volume) end
+      if far then there = depthOf(other.obj, far.volume) end
       local diff = here - there
       if diff > OCEAN_LEVEL_SLACK then
         local f = math.min(PORTAL_FLOW_PER_SECOND, diff * OCEAN_LEVEL_RATE) * dt
@@ -785,7 +839,7 @@ local function drainOceansIntoPortals(dt)
         o.volume = o.volume - f
         -- Onto another round planetoid: straight into its water (a jet
         -- out of the portal on top of one would only fall back into it).
-        local intoOcean = isRoundPlanet(other.obj)
+        local intoOcean = holdsWater(other.obj)
         if intoOcean then addToOcean(other.obj, f) end
         oceanDrained[color] = (oceanDrained[color] or 0) + f
 
@@ -882,16 +936,16 @@ function WaterSystem.quenchFireball(f)
 
   -- A planet's water layer (see addToOcean).
   for p, o in pairs(oceans) do
-    local outer = p.radius + oceanDepth(p.radius, o.volume)
-    local dx, dy = f.pos.x - p.pos.x, f.pos.y - p.pos.y
-    local d = math.sqrt(dx * dx + dy * dy)
-    if d < outer then
-      local nx, ny = 0, -1
-      if d > 1e-6 then nx, ny = dx / d, dy / d end
+    local depth = depthOf(p, o.volume)
+    local d, nx, ny = surfaceDistance(p, f.pos.x, f.pos.y)
+    if d < depth then
       o.volume = math.max(0, o.volume - BOIL_ON_HIT)
-      local sx, sy = p.pos.x + nx * outer, p.pos.y + ny * outer
+      -- (Where the water's surface is, out from where it went in.)
+      local sx, sy = f.pos.x + nx * (depth - d), f.pos.y + ny * (depth - d)
       for _ = 1, STEAM_BURST do spawnSteam(sx, sy, nx, ny, 1.0) end
-      hotSpots[#hotSpots + 1] = { planet = p, nx = nx, ny = ny, life = HOT_SECONDS, steamBudget = 0 }
+      hotSpots[#hotSpots + 1] = {
+        planet = p, ox = sx - p.pos.x, oy = sy - p.pos.y, life = HOT_SECONDS, steamBudget = 0,
+      }
       return true
     end
   end
@@ -932,11 +986,14 @@ local function updateSteam(dt)
     if h.planet then
       if o then
         o.volume = math.max(0, o.volume - amount)
-        local outer = h.planet.radius + oceanDepth(h.planet.radius, o.volume)
-        -- (Spread a little round the spot.)
-        local a = math.atan2(h.ny, h.nx) + (math.random() * 2 - 1) * 0.15
-        upX, upY = math.cos(a), math.sin(a)
-        sx, sy = h.planet.pos.x + upX * outer, h.planet.pos.y + upY * outer
+        local depth = depthOf(h.planet, o.volume)
+        -- The water's surface near the spot (spread a little round it;
+        -- the spot moves with the planetoid, and sinks as it boils off).
+        local qx = h.planet.pos.x + h.ox + (math.random() * 2 - 1) * 20
+        local qy = h.planet.pos.y + h.oy + (math.random() * 2 - 1) * 20
+        local d
+        d, upX, upY = surfaceDistance(h.planet, qx, qy)
+        sx, sy = qx + upX * (depth - d), qy + upY * (depth - d)
       end
     elseif grid then
       sx, sy = boilGrid(h.c, h.r, amount)
@@ -983,9 +1040,9 @@ function WaterSystem.update(dt)
   -- does (EVAPORATE_PER_SECOND per CELL of surface).
   forgetCulledOceans()
   for p, o in pairs(oceans) do
-    local outer = p.radius + oceanDepth(p.radius, o.volume)
+    local surfaceLength = perimeterOf(p) + 2 * math.pi * depthOf(p, o.volume) -- (round its outer surface)
     if not o.natural then
-      o.volume = o.volume - EVAPORATE_PER_SECOND * (2 * math.pi * outer / CELL) * dt * ts
+      o.volume = o.volume - EVAPORATE_PER_SECOND * (surfaceLength / CELL) * dt * ts
     end
     if o.volume <= 0.05 then
       oceans[p] = nil
@@ -1051,7 +1108,7 @@ function WaterSystem.update(dt)
 
   -- Water bodies following their water's surface (see addNaturalOcean).
   for p, o in pairs(oceans) do
-    if o.marker then o.marker.radius = p.radius + oceanDepth(p.radius, o.volume) end
+    if o.marker then o.marker.radius = p.radius + depthOf(p, o.volume) end
   end
 end
 
@@ -1539,11 +1596,61 @@ local function causticScaleFor(depth)
   return CAUSTIC_SCALE * math.min(CAUSTIC_MAX_GROWTH, grow)
 end
 
+-- Round planetoid p's own surface, as points (each with its outward
+-- normal and how far round it is, for the ripple) close enough together
+-- for the water's surface `depth` out from it to curve smoothly — a
+-- circle's, or a rounded rectangle's edges and corners (its corners'
+-- share more of them, since the water's surface round a corner is
+-- longer than the corner itself).
+local function outlineOf(p, depth)
+  local points = {}
+  if p.isRoundedRect then
+    local cr, along = p.cornerRadius, 0
+    local function add(lx, ly, nx, ny)
+      local w = p:localPointToWorld(lx, ly)
+      local n = p:localDirToWorld(nx, ny)
+      points[#points + 1] = { x = w.x, y = w.y, nx = n.x, ny = n.y, s = along }
+    end
+    for _, seg in ipairs(p._segments) do
+      if seg.type == "edge" then
+        local steps = math.max(1, math.ceil(seg.length / 10))
+        for k = 0, steps - 1 do
+          local t = seg.length * k / steps
+          add(seg.start.x + seg.dir.x * t, seg.start.y + seg.dir.y * t, seg.normal.x, seg.normal.y)
+          along = along + seg.length / steps
+        end
+      else
+        local arc = (cr + depth) * math.pi / 2
+        local steps = math.max(2, math.ceil(arc / 10))
+        for k = 0, steps - 1 do
+          local a = seg.startAngle + (math.pi / 2) * k / steps
+          local c, s = math.cos(a), math.sin(a)
+          add(seg.center.x + c * cr, seg.center.y + s * cr, c, s)
+          along = along + arc / steps
+        end
+      end
+      if #points > OCEAN_MAX_SEGMENTS then break end
+    end
+  else
+    local R, outer = p.radius, p.radius + depth
+    -- Enough for the ripple round a big one too (a water planet's is
+    -- thousands of units round).
+    local n = math.max(OCEAN_SEGMENTS, math.min(OCEAN_MAX_SEGMENTS, math.floor(2 * math.pi * outer / 10)))
+    for k = 0, n - 1 do
+      local a = k / n * math.pi * 2
+      local c, s = math.cos(a), math.sin(a)
+      points[#points + 1] = { x = p.pos.x + c * R, y = p.pos.y + s * R, nx = c, ny = s, s = a * outer }
+    end
+  end
+  return points
+end
+
 -- The water layers round planetoids (see addToOcean), through the same
--- shader as the pools: a ring from the planetoid's surface out to the
+-- shader as the pools: a band from the planetoid's surface out to the
 -- water's rippling surface (depth measured in from there), plus a thin
 -- feathered strip just outside it for a soft edge. Each drawn on its own,
--- with caustics sized for how deep it is (see causticScaleFor).
+-- with caustics sized for how deep it is (see causticScaleFor); a round
+-- one's lit as a sphere, with caustics bulging like a globe's.
 local oceanMesh, oceanMeshSize = nil, 0
 local function drawOceans()
   local cam = state.camera
@@ -1552,35 +1659,29 @@ local function drawOceans()
   local vx1, vy1 = cam.x + (state.visibleWidth or 0), cam.y + (state.visibleHeight or 0)
   local shaderOn = false
   for p, o in pairs(oceans) do
-    local R = p.radius
-    local depth = oceanDepth(R, o.volume)
-    local outer = R + depth
-    local reach = outer + SURFACE_FEATHER + 6
+    local depth = depthOf(p, o.volume)
+    local reach = p.radius + depth + SURFACE_FEATHER + 6
     if p.pos.x + reach > vx0 and p.pos.x - reach < vx1 and p.pos.y + reach > vy0 and p.pos.y - reach < vy1 then
       local verts = {}
       local function vert(x, y, d, alpha) verts[#verts + 1] = { x, y, d, 0, 1, 1, 1, alpha or 1 } end
       local cx, cy = p.pos.x, p.pos.y
-      -- Enough segments for the ripple round a big one too (a water
-      -- planet's is thousands of units round).
-      local segments = math.max(OCEAN_SEGMENTS, math.min(OCEAN_MAX_SEGMENTS, math.floor(2 * math.pi * outer / 10)))
-      local function ring(k)
-        local a = k / segments * math.pi * 2
-        local ca, sa = math.cos(a), math.sin(a)
-        local s = a * outer -- along the surface, for the ripple
-        local rip = math.sin(age * 2.2 + s * 0.045) * 1.3 + math.sin(age * 3.7 - s * 0.11) * 0.6
-        local top = math.max(R + 1, outer + rip)
-        return ca, sa, top
+      local outline = outlineOf(p, depth)
+      local n = #outline
+      local function top(q)
+        local rip = math.sin(age * 2.2 + q.s * 0.045) * 1.3 + math.sin(age * 3.7 - q.s * 0.11) * 0.6
+        local h = math.max(1, depth + rip)
+        return q.x + q.nx * h, q.y + q.ny * h, q.x + q.nx * (h + SURFACE_FEATHER), q.y + q.ny * (h + SURFACE_FEATHER)
       end
-      for k = 0, segments - 1 do
-        local c0, s0, t0 = ring(k)
-        local c1, s1, t1 = ring(k + 1)
+      for k = 1, n do
+        local a, b = outline[k], outline[k % n + 1]
+        local ax, ay, afx, afy = top(a)
+        local bx, by, bfx, bfy = top(b)
         -- Body: planetoid surface (deepest) out to the water's surface.
-        vert(cx + c0 * R, cy + s0 * R, depth); vert(cx + c1 * R, cy + s1 * R, depth); vert(cx + c1 * t1, cy + s1 * t1, 0)
-        vert(cx + c0 * R, cy + s0 * R, depth); vert(cx + c1 * t1, cy + s1 * t1, 0); vert(cx + c0 * t0, cy + s0 * t0, 0)
+        vert(a.x, a.y, depth); vert(b.x, b.y, depth); vert(bx, by, 0)
+        vert(a.x, a.y, depth); vert(bx, by, 0); vert(ax, ay, 0)
         -- Feathered edge just outside the surface.
-        local f0, f1 = t0 + SURFACE_FEATHER, t1 + SURFACE_FEATHER
-        vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * t1, cy + s1 * t1, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER)
-        vert(cx + c0 * t0, cy + s0 * t0, 0); vert(cx + c1 * f1, cy + s1 * f1, -SURFACE_FEATHER); vert(cx + c0 * f0, cy + s0 * f0, -SURFACE_FEATHER)
+        vert(ax, ay, 0); vert(bx, by, 0); vert(bfx, bfy, -SURFACE_FEATHER)
+        vert(ax, ay, 0); vert(bfx, bfy, -SURFACE_FEATHER); vert(afx, afy, -SURFACE_FEATHER)
       end
 
       -- Over the planetoid itself: the water seen through to it, faded by
@@ -1589,11 +1690,9 @@ local function drawOceans()
       local overlay = math.min(1, math.max(0, (depth - CORE_OVERLAY_FROM_DEPTH)
         / (CORE_OVERLAY_FULL_DEPTH - CORE_OVERLAY_FROM_DEPTH))) * CORE_OVERLAY_MAX
       if overlay > 0 then
-        for k = 0, segments - 1 do
-          local a0, a1 = k / segments * math.pi * 2, (k + 1) / segments * math.pi * 2
-          vert(cx, cy, depth, overlay)
-          vert(cx + math.cos(a0) * R, cy + math.sin(a0) * R, depth, overlay)
-          vert(cx + math.cos(a1) * R, cy + math.sin(a1) * R, depth, overlay)
+        for k = 1, n do
+          local a, b = outline[k], outline[k % n + 1]
+          vert(cx, cy, depth, overlay); vert(a.x, a.y, depth, overlay); vert(b.x, b.y, depth, overlay)
         end
       end
 
@@ -1610,16 +1709,22 @@ local function drawOceans()
       end
       local shader = getWaterShader()
       shader:send("causticScale", causticScaleFor(depth))
-      shader:send("bulgeCenter", { cx, cy })
-      shader:send("bulgeRadius", outer)
-      shader:send("causticBulge", CAUSTIC_BULGE)
-      -- Lit as a sphere by the sun (the same "sun at the exact center of
-      -- the scene" convention the planetoids' own shading uses).
-      local sdx, sdy = (state.sceneWidth or 0) / 2 - cx, (state.sceneHeight or 0) / 2 - cy
-      local sd = math.sqrt(sdx * sdx + sdy * sdy)
-      if sd < 1 then sdx, sdy, sd = 1, 0, 1 end
-      shader:send("sphereShading", 1)
-      shader:send("sunDir", { sdx / sd, sdy / sd })
+      if p.isRoundedRect then
+        -- (Not a sphere: the plain depth gradient, flat caustics.)
+        shader:send("causticBulge", 0)
+        shader:send("sphereShading", 0)
+      else
+        shader:send("bulgeCenter", { cx, cy })
+        shader:send("bulgeRadius", p.radius + depth)
+        shader:send("causticBulge", CAUSTIC_BULGE)
+        -- Lit as a sphere by the sun (the same "sun at the exact center
+        -- of the scene" convention the planetoids' own shading uses).
+        local sdx, sdy = (state.sceneWidth or 0) / 2 - cx, (state.sceneHeight or 0) / 2 - cy
+        local sd = math.sqrt(sdx * sdx + sdy * sdy)
+        if sd < 1 then sdx, sdy, sd = 1, 0, 1 end
+        shader:send("sphereShading", 1)
+        shader:send("sunDir", { sdx / sd, sdy / sd })
+      end
       love.graphics.draw(oceanMesh)
     end
   end

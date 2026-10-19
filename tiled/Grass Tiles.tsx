@@ -255,25 +255,37 @@
  </tile>
  <tile id="41">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="42">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="43">
   <properties>
-   <property name="role" value="fill"/>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
  <tile id="44">
   <properties>
    <property name="role" value="fill"/>
+   <property name="slope" value="flat"/>
+  </properties>
+ </tile>
+ <tile id="48">
+  <properties>
+   <property name="role" value="wall"/>
+   <property name="slope" value="flat"/>
+  </properties>
+ </tile>
+ <tile id="49">
+  <properties>
+   <property name="role" value="wall"/>
    <property name="slope" value="flat"/>
   </properties>
  </tile>
