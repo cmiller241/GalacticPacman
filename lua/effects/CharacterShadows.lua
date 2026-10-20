@@ -87,6 +87,7 @@ function CharacterShadows.prepare()
   anyCaster = false
   local player = state.player
   local drawPlayer = player and not player.isDying and not player.portalTransit and not player.inPinball
+    and not player.inCannon
   local hasOoombas = state.ooombas and #state.ooombas > 0
   if not (drawPlayer or hasOoombas) then return end
 

@@ -299,8 +299,9 @@ local function pollGamepad(dt)
     if state.player.inPinball then
       state.player.inPinball:triggerJumpAction(state.player)
     elseif state.player.mode ~= "maze" and not state.introLocked then
-      if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then state.player:jump()
-      else state.player:tryGroundPound() end
+      -- (Jump, coyote time, a buffered jump, or the ground pound — see
+      -- Player:pressJump.)
+      state.player:pressJump()
     end
   end
   lastXPressed = xPressed
