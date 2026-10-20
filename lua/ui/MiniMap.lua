@@ -30,6 +30,13 @@ function Minimap.new()
   self.specialGlowColor = { 1, 210/255, 63/255, 0.5 }
   self.specialRadius    = 3
 
+  -- The cannon planet, its target, and the route between them.
+  self.cannonColor           = { 0.45, 0.9, 1, 1 }
+  self.cannonGlowColor       = { 0.45, 0.9, 1, 0.45 }
+  self.cannonTargetColor     = { 1, 0.4, 0.85, 1 }
+  self.cannonTargetGlowColor = { 1, 0.4, 0.85, 0.5 }
+  self.cannonRouteColor      = { 1, 0.6, 0.9, 0.45 }
+
   self.sunColor     = { 1, 0.75, 0.2, 1 }
   self.sunGlowColor = { 1, 0.55, 0.1, 0.45 }
 
@@ -143,6 +150,49 @@ function Minimap:draw()
       local p = self:worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0)
       self:drawGlowDot(p.x, p.y, self.specialRadius, self.specialColor, self.specialGlowColor)
     end
+  end
+
+  -- The cannon planet, the planet it fires at (pulsing), and a faint
+  -- dashed line for the route between them, bending at each of its
+  -- rails (see lua/world/Cannon.lua).
+  if state.cannonPlanet and state.cannonTargetPlanet then
+    local a = self:worldToMapPoint(state.cannonPlanet.pos.x, state.cannonPlanet.pos.y, x0, y0)
+    local b = self:worldToMapPoint(state.cannonTargetPlanet.pos.x, state.cannonTargetPlanet.pos.y, x0, y0)
+    local route = state.cannonRoute or { { state.cannonPlanet.pos.x, state.cannonPlanet.pos.y },
+      { state.cannonTargetPlanet.pos.x, state.cannonTargetPlanet.pos.y } }
+    love.graphics.setColor(self.cannonRouteColor)
+    love.graphics.setLineWidth(1)
+    local dash = 4
+    for i = 1, #route - 1 do
+      local p = self:worldToMapPoint(route[i][1], route[i][2], x0, y0)
+      local q = self:worldToMapPoint(route[i + 1][1], route[i + 1][2], x0, y0)
+      local dx, dy = q.x - p.x, q.y - p.y
+      local len = math.sqrt(dx * dx + dy * dy)
+      if len > 0 then
+        for d = 0, len - dash, dash * 2 do
+          love.graphics.line(p.x + dx / len * d, p.y + dy / len * d,
+            p.x + dx / len * (d + dash), p.y + dy / len * (d + dash))
+        end
+      end
+    end
+    -- (Each loop-the-loop on the way, as a little ring.)
+    for _, rail in ipairs(state.cannonRails or {}) do
+      if (rail.loops or 0) > 0 then
+        local c = self:worldToMapPoint(rail.cx, rail.cy, x0, y0)
+        local r = math.max(2.5, rail.radius / (state.sceneWidth or 1) * self.size)
+        love.graphics.setColor(self.cannonColor)
+        love.graphics.circle("line", c.x, c.y, r)
+      end
+    end
+    -- (And each bumper on the way, as a little red dot.)
+    for _, b in ipairs(state.cannonBumpers or {}) do
+      local m = self:worldToMapPoint(b.x, b.y, x0, y0)
+      love.graphics.setColor(1, 0.3, 0.35, 1)
+      love.graphics.circle("fill", m.x, m.y, 2)
+    end
+    self:drawGlowDot(a.x, a.y, self.specialRadius, self.cannonColor, self.cannonGlowColor)
+    local pulse = 1 + 0.35 * math.sin(love.timer.getTime() * 4)
+    self:drawGlowDot(b.x, b.y, self.specialRadius * pulse, self.cannonTargetColor, self.cannonTargetGlowColor)
   end
 
   if state.player and state.player.pos then

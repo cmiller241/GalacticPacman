@@ -44,10 +44,10 @@ end
 function Ring:draw()
   local t = math.min((love.timer.getTime() - self.startTime) / RING_DURATION, 1)
   local eased = 1 - (1 - t) ^ 3 -- bursts out fast, settles as it reaches full size
-  local radius = RING_START_RADIUS + (RING_END_RADIUS - RING_START_RADIUS) * eased
+  local radius = (RING_START_RADIUS + (RING_END_RADIUS - RING_START_RADIUS) * eased) * self.scale
 
   love.graphics.setColor(RING_COLOR[1], RING_COLOR[2], RING_COLOR[3], RING_START_ALPHA * (1 - t))
-  love.graphics.setLineWidth(1 + (RING_START_WIDTH - 1) * (1 - t))
+  love.graphics.setLineWidth((1 + (RING_START_WIDTH - 1) * (1 - t)) * math.sqrt(self.scale))
   love.graphics.circle("line", self.x, self.y, radius)
 
   love.graphics.setLineWidth(1)
@@ -56,14 +56,18 @@ end
 
 -- x, y: the point of contact (where he hits the ground). up: unit
 -- vector pointing away from the ground there — straight up the screen
--- if omitted.
-function GroundPoundBurst.spawn(x, y, up)
+-- if omitted. scale (optional, default 1): how big — the ring's reach,
+-- and how much dust and how far it's thrown (a cannon crash landing is
+-- a bigger one — see lua/world/Cannon.lua).
+function GroundPoundBurst.spawn(x, y, up, scale)
   up = up or Vector2.new(0, -1)
+  scale = scale or 1
 
   state.explosions = state.explosions or {}
-  table.insert(state.explosions, setmetatable({ x = x, y = y, startTime = love.timer.getTime() }, Ring))
+  table.insert(state.explosions, setmetatable({ x = x, y = y, startTime = love.timer.getTime(), scale = scale }, Ring))
 
-  DustPuff.spawnRadial(Vector2.new(x, y), up, DUST_COUNT, DUST_SPEED[1], DUST_SPEED[2])
+  DustPuff.spawnRadial(Vector2.new(x, y), up, math.floor(DUST_COUNT * scale + 0.5),
+    DUST_SPEED[1] * scale, DUST_SPEED[2] * scale)
 end
 
 return GroundPoundBurst
