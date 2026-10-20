@@ -37,10 +37,84 @@ local ANGLE_ON = ANGLE_UP + ANGLE_SPREAD  -- angled right
 
 local HANDLE_SWING_SPEED = 0.12 -- radians per baseline (60fps) tick
 
-local COLOR_BASE = { 0.25, 0.26, 0.28 }
-local COLOR_BASE_RIM = { 0.45, 0.47, 0.5 }
+-- Metal, lit from above (see baseMesh): its top and bottom shades.
+local COLOR_BASE_TOP = { 0.44, 0.45, 0.48 }
+local COLOR_BASE_BOTTOM = { 0.16, 0.16, 0.18 }
+local COLOR_OUTLINE = { 0.07, 0.07, 0.08 }
+local COLOR_FOOT = { 0.22, 0.22, 0.24 }
+local COLOR_SLOT = { 0.05, 0.05, 0.06 }
+local COLOR_SHAFT = { 0.62, 0.64, 0.68 }
+local COLOR_SHAFT_SHADE = { 0.3, 0.31, 0.34 }
 local COLOR_HANDLE = { 0.75, 0.15, 0.12 }
 local COLOR_PIVOT = { 0.12, 0.12, 0.13 }
+local COLOR_LAMP_OFF = { 1, 0.2, 0.12 }  -- lit while the lever's off
+local COLOR_LAMP_ON = { 0.25, 1, 0.35 }  -- lit while it's on
+
+local SLOT_RADIUS = BASE_RADIUS * 0.62  -- the arc slot the handle rides in
+local LAMP_RADIUS = 4
+-- Where the lamps sit on the dome: low on either side, clear of the
+-- handle's whole swing.
+local LAMP_DIST = BASE_RADIUS * 0.76
+local LAMP_ANGLE_LEFT = math.pi + 0.32
+local LAMP_ANGLE_RIGHT = math.pi * 2 - 0.32
+
+-- The dome, as a fan (its centre on the ground line) coloured by height:
+-- a vertex colour that's linear in y interpolates to exactly linear in
+-- y across each triangle too, so this is an even top-lit gradient.
+local baseMesh = nil
+local function getBaseMesh()
+  if baseMesh then return baseMesh end
+  local function shade(t)
+    local r = COLOR_BASE_BOTTOM[1] + (COLOR_BASE_TOP[1] - COLOR_BASE_BOTTOM[1]) * t
+    local g = COLOR_BASE_BOTTOM[2] + (COLOR_BASE_TOP[2] - COLOR_BASE_BOTTOM[2]) * t
+    local b = COLOR_BASE_BOTTOM[3] + (COLOR_BASE_TOP[3] - COLOR_BASE_BOTTOM[3]) * t
+    return r, g, b
+  end
+  local r, g, b = shade(0)
+  local verts = { { 0, 0, 0, 0, r, g, b, 1 } }
+  local SEGMENTS = 32
+  for i = 0, SEGMENTS do
+    local a = math.pi + (i / SEGMENTS) * math.pi
+    local vy = math.sin(a) * BASE_RADIUS
+    r, g, b = shade(-vy / BASE_RADIUS)
+    verts[#verts + 1] = { math.cos(a) * BASE_RADIUS, vy, 0, 0, r, g, b, 1 }
+  end
+  baseMesh = love.graphics.newMesh(verts, "fan", "static")
+  return baseMesh
+end
+
+-- A red ball knob, shaded as if lit from the upper left.
+local function drawKnob(x, y, radius, color)
+  love.graphics.setColor(color[1] * 0.45, color[2] * 0.45, color[3] * 0.45, 1)
+  love.graphics.circle("fill", x, y, radius + 1)
+  love.graphics.setColor(color)
+  love.graphics.circle("fill", x - radius * 0.12, y - radius * 0.12, radius * 0.85)
+  love.graphics.setColor(math.min(1, color[1] + 0.25), color[2] + 0.2, color[3] + 0.15, 1)
+  love.graphics.circle("fill", x - radius * 0.28, y - radius * 0.28, radius * 0.45)
+  love.graphics.setColor(1, 1, 1, 0.85)
+  love.graphics.circle("fill", x - radius * 0.38, y - radius * 0.4, radius * 0.18)
+end
+
+-- A status lamp: lit (with a soft glow round it) or dark glass.
+local function drawLamp(x, y, color, lit)
+  love.graphics.setColor(COLOR_OUTLINE)
+  love.graphics.circle("fill", x, y, LAMP_RADIUS + 1.5)
+  if lit then
+    love.graphics.setBlendMode("add")
+    for i = 3, 1, -1 do
+      love.graphics.setColor(color[1], color[2], color[3], 0.12)
+      love.graphics.circle("fill", x, y, LAMP_RADIUS + i * 3)
+    end
+    love.graphics.setBlendMode("alpha")
+    love.graphics.setColor(color)
+    love.graphics.circle("fill", x, y, LAMP_RADIUS)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.circle("fill", x - 1, y - 1, LAMP_RADIUS * 0.4)
+  else
+    love.graphics.setColor(color[1] * 0.25, color[2] * 0.25, color[3] * 0.25, 1)
+    love.graphics.circle("fill", x, y, LAMP_RADIUS)
+  end
+end
 
 -- x, y: world position of the lever's own ground anchor (the flat
 -- base's own center) — same "sits exactly on the ground" convention
@@ -109,32 +183,73 @@ end
 
 function Lever:draw()
   local x, y = self.pos.x, self.pos.y
+  love.graphics.push("all")
 
-  -- Half-circle base plate, flat side down (resting on the ground) —
-  -- angle range pi..2*pi sweeps left -> straight up -> right. A 180
-  -- degree "pie" slice is identical to a plain half-disc here (its own
-  -- two straight edges lie flush along the flat diameter line), so the
-  -- default fill arctype needs no special-casing.
-  love.graphics.setColor(COLOR_BASE)
-  love.graphics.arc("fill", x, y, BASE_RADIUS, math.pi, math.pi * 2)
-  love.graphics.setColor(COLOR_BASE_RIM)
-  love.graphics.setLineWidth(2)
+  -- Half-dome base, flat side down (resting on the ground) — angle range
+  -- pi..2*pi sweeps left -> straight up -> right. Shaded metal, outlined,
+  -- with a highlight along its upper-left edge.
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(getBaseMesh(), x, y)
+  love.graphics.setLineWidth(1.5)
+  love.graphics.setColor(1, 1, 1, 0.22)
+  love.graphics.arc("line", "open", x, y, BASE_RADIUS - 3, math.pi * 1.08, math.pi * 1.45)
+  love.graphics.setLineWidth(2.5)
+  love.graphics.setColor(COLOR_OUTLINE)
   love.graphics.arc("line", "open", x, y, BASE_RADIUS, math.pi, math.pi * 2)
-  love.graphics.line(x - BASE_RADIUS, y, x + BASE_RADIUS, y)
 
-  -- Handle, pivoting at the base's own center.
-  local tipX = x + math.cos(self.handleAngle) * HANDLE_LENGTH
-  local tipY = y + math.sin(self.handleAngle) * HANDLE_LENGTH
-  love.graphics.setColor(COLOR_HANDLE)
+  -- Foot plate along the ground, bolted down at both ends.
+  local footW, footH = BASE_RADIUS + 8, 5
+  love.graphics.setColor(COLOR_FOOT)
+  love.graphics.rectangle("fill", x - footW, y - footH, footW * 2, footH, 2, 2)
+  love.graphics.setColor(COLOR_OUTLINE)
+  love.graphics.setLineWidth(1.5)
+  love.graphics.rectangle("line", x - footW, y - footH, footW * 2, footH, 2, 2)
+  for side = -1, 1, 2 do
+    local bx = x + side * (footW - 4)
+    love.graphics.setColor(0.55, 0.56, 0.58, 1)
+    love.graphics.circle("fill", bx, y - footH / 2, 1.8)
+  end
+
+  -- The slot the handle rides in, end to end of its swing.
+  love.graphics.setColor(COLOR_SLOT)
+  love.graphics.setLineWidth(6)
+  love.graphics.setLineStyle("smooth")
+  love.graphics.arc("line", "open", x, y, SLOT_RADIUS, ANGLE_OFF, ANGLE_ON, 16)
+  love.graphics.circle("fill", x + math.cos(ANGLE_OFF) * SLOT_RADIUS, y + math.sin(ANGLE_OFF) * SLOT_RADIUS, 3)
+  love.graphics.circle("fill", x + math.cos(ANGLE_ON) * SLOT_RADIUS, y + math.sin(ANGLE_ON) * SLOT_RADIUS, 3)
+
+  -- Status lamps: red while off, green while on.
+  drawLamp(x + math.cos(LAMP_ANGLE_LEFT) * LAMP_DIST, y + math.sin(LAMP_ANGLE_LEFT) * LAMP_DIST,
+    COLOR_LAMP_OFF, not self.isOn)
+  drawLamp(x + math.cos(LAMP_ANGLE_RIGHT) * LAMP_DIST, y + math.sin(LAMP_ANGLE_RIGHT) * LAMP_DIST,
+    COLOR_LAMP_ON, self.isOn)
+
+  -- Handle, pivoting at the base's own center: a steel shaft (shaded
+  -- along one side, lit along the other) ending in a red ball knob.
+  local cosA, sinA = math.cos(self.handleAngle), math.sin(self.handleAngle)
+  local tipX = x + cosA * HANDLE_LENGTH
+  local tipY = y + sinA * HANDLE_LENGTH
+  local nx, ny = -sinA, cosA  -- across the shaft
+  love.graphics.setColor(COLOR_OUTLINE)
   love.graphics.setLineWidth(8)
   love.graphics.line(x, y, tipX, tipY)
-  love.graphics.circle("fill", tipX, tipY, HANDLE_KNOB_RADIUS)
+  love.graphics.setColor(COLOR_SHAFT_SHADE)
+  love.graphics.setLineWidth(5)
+  love.graphics.line(x, y, tipX, tipY)
+  love.graphics.setColor(COLOR_SHAFT)
+  love.graphics.setLineWidth(2)
+  love.graphics.line(x - nx * 1.2, y - ny * 1.2, tipX - nx * 1.2, tipY - ny * 1.2)
+  drawKnob(tipX, tipY, HANDLE_KNOB_RADIUS, COLOR_HANDLE)
 
-  love.graphics.setColor(COLOR_PIVOT)
+  -- Pivot cap: a bolt head.
+  love.graphics.setColor(COLOR_OUTLINE)
+  love.graphics.circle("fill", x, y, 8)
+  love.graphics.setColor(0.5, 0.51, 0.54, 1)
   love.graphics.circle("fill", x, y, 6)
+  love.graphics.setColor(COLOR_PIVOT)
+  love.graphics.circle("fill", x, y, 2.5)
 
-  love.graphics.setLineWidth(1)
-  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.pop()
 end
 
 local TOOLTIP_GAP_ABOVE = 26

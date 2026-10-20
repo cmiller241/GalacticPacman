@@ -9,6 +9,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local utils = require("lua.utils")
+local Flame = require("lua.effects.Flame")
 
 ----------------------------------------------------------------------
 -- Ember (decorative only)
@@ -81,6 +82,10 @@ function FireBar.new(x, y, options)
   self.angle = options.startAngle or 0
   self.emberSpawnChance = options.emberSpawnChance or 0.15
   self.embers = {}
+  -- Seconds of flame animation (see draw), advanced by update with the
+  -- game's own time scale, so VATS slow-mo slows the fire too. Random
+  -- start so neighbouring bars don't flicker in step.
+  self.flameTime = math.random() * 100
 
   return self
 end
@@ -108,6 +113,7 @@ end
 function FireBar:update()
   local timeScale = state.timeScale or 1
   self.angle = self.angle + self.rotationSpeed * timeScale
+  self.flameTime = self.flameTime + timeScale / 60
 
   -- Ember spawning (getFireballPositions() plus a per-fireball roll,
   -- numFireballs*2 positions) is skipped entirely while this bar is
@@ -158,47 +164,117 @@ local function hslaApprox(hue, sat, light, alpha)
   return r, g, b, alpha
 end
 
+----------------------------------------------------------------------
+-- Drawing resources (built once, shared by every bar)
+----------------------------------------------------------------------
+
+-- A soft round white glow, fading to nothing at its edge — tinted and
+-- drawn additively for the hub's heat and the embers' halos.
+local glowImage = nil
+local function getGlow()
+  if glowImage then return glowImage end
+  local size = 64
+  local data = love.image.newImageData(size, size)
+  data:mapPixel(function(px, py)
+    local dx = (px + 0.5) / size * 2 - 1
+    local dy = (py + 0.5) / size * 2 - 1
+    local t = math.max(0, 1 - math.sqrt(dx * dx + dy * dy))
+    return 1, 1, 1, t * t
+  end)
+  glowImage = love.graphics.newImage(data)
+  -- (The game's default filter is "nearest", for its pixel art — this
+  -- one's scaled up a lot and needs to stay smooth.)
+  glowImage:setFilter("linear", "linear")
+  return glowImage
+end
+
+local function drawGlow(img, x, y, diameter)
+  local w = img:getWidth()
+  love.graphics.draw(img, x, y, 0, diameter / w, diameter / w, w / 2, w / 2)
+end
+
+-- The pivot block's face: lit from above, darker toward the bottom.
+local function makeBlockMesh(r)
+  return love.graphics.newMesh({
+    { -r, -r, 0, 0, 0.36, 0.35, 0.34, 1 },
+    {  r, -r, 1, 0, 0.30, 0.29, 0.28, 1 },
+    {  r,  r, 1, 1, 0.11, 0.10, 0.10, 1 },
+    { -r,  r, 0, 1, 0.15, 0.14, 0.13, 1 },
+  }, "fan", "static")
+end
+
+local MAX_TAIL = 2.0       -- extra tail length (in radii) at full swing speed
+local TAIL_SPEED = 12      -- swing speed (world units per frame) for that full tail
+
 function FireBar:draw()
   local x, y = self.pos.x, self.pos.y
   local r = self.blockRadius
+  local t = self.flameTime
+  local glow = getGlow()
 
-  -- Block first (fireballs pass in front)
-  love.graphics.setColor(43/255, 43/255, 43/255, 1)
-  love.graphics.rectangle("fill", x - r, y - r, r * 2, r * 2)
-  love.graphics.setColor(17/255, 17/255, 17/255, 1)
+  love.graphics.push("all")
+
+  -- Block first (fireballs pass in front): a riveted metal block with a
+  -- red-hot socket in the middle that the arms spin out of.
+  if not self.blockMesh then self.blockMesh = makeBlockMesh(r) end
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(self.blockMesh, x, y)
+  love.graphics.setLineWidth(1.5)
+  love.graphics.setColor(1, 1, 1, 0.14)
+  love.graphics.line(x - r + 3, y + r - 4, x - r + 3, y - r + 3, x + r - 4, y - r + 3)
   love.graphics.setLineWidth(3)
-  love.graphics.rectangle("line", x - r, y - r, r * 2, r * 2)
-
-  local now = love.timer.getTime()
-  local fireballs = self:getFireballPositions()
-  for i, f in ipairs(fireballs) do
-    local flicker = 0.85 + math.sin(now * 12 + i * 1.7) * 0.15
-    local radius = f.radius * flicker
-
-    -- Soft outer glow (layered circles; no Canvas gradient)
-    love.graphics.setColor(1, 140/255, 40/255, 0.18)
-    love.graphics.circle("fill", f.x, f.y, radius * 2.2)
-    love.graphics.setColor(1, 80/255, 20/255, 0.10)
-    love.graphics.circle("fill", f.x, f.y, radius * 1.6)
-
-    -- Flame body
-    love.graphics.setColor(1, 85/255, 34/255, 0.85)
-    love.graphics.circle("fill", f.x, f.y, radius)
-    love.graphics.setColor(1, 176/255, 46/255, 0.95)
-    love.graphics.circle("fill", f.x, f.y, radius * 0.62)
-    love.graphics.setColor(1, 242/255, 192/255, 1)
-    love.graphics.circle("fill", f.x, f.y, radius * 0.28)
+  love.graphics.setColor(0.07, 0.07, 0.07, 1)
+  love.graphics.rectangle("line", x - r, y - r, r * 2, r * 2, 3, 3)
+  for sy = -1, 1, 2 do
+    for sx = -1, 1, 2 do
+      local rx, ry = x + sx * r * 0.68, y + sy * r * 0.68
+      love.graphics.setColor(0.06, 0.06, 0.06, 1)
+      love.graphics.circle("fill", rx, ry + 0.8, r * 0.11)
+      love.graphics.setColor(0.45, 0.44, 0.42, 1)
+      love.graphics.circle("fill", rx, ry, r * 0.09)
+    end
   end
 
+  local pulse = 0.85 + 0.15 * math.sin(t * 5)
+  love.graphics.setColor(0.05, 0.03, 0.02, 1)
+  love.graphics.circle("fill", x, y, r * 0.5)
+  love.graphics.setBlendMode("add")
+  love.graphics.setColor(1, 0.4, 0.08, 0.6 * pulse)
+  drawGlow(glow, x, y, r * 2.6)
+  love.graphics.setColor(1, 0.7, 0.3, pulse)
+  love.graphics.circle("fill", x, y, r * 0.3)
+  love.graphics.setBlendMode("alpha")
+  -- The axle, turning with the arms.
+  local ax, ay = math.cos(self.angle) * r * 0.42, math.sin(self.angle) * r * 0.42
+  love.graphics.setColor(0.08, 0.05, 0.04, 1)
+  love.graphics.setLineWidth(4)
+  love.graphics.line(x - ax, y - ay, x + ax, y + ay)
+
+  -- Fireballs (see lua/effects/Flame.lua).
+  local omega = self.rotationSpeed
+  for i, f in ipairs(self:getFireballPositions()) do
+    local radius = f.radius * (0.93 + math.sin(t * 12 + i * 1.7) * 0.07)
+    -- Swinging round the pivot: velocity is omega x offset.
+    local ox, oy = f.x - x, f.y - y
+    local vx, vy = -omega * oy, omega * ox
+    local speed = math.sqrt(vx * vx + vy * vy)
+    local dirAngle = speed > 0.01 and math.atan2(vy, vx) or -math.pi / 2
+    local stretch = 1 + math.min(speed / TAIL_SPEED, 1) * MAX_TAIL
+    Flame.draw(f.x, f.y, radius, dirAngle, stretch, t, i * 3.17)
+  end
+
+  -- Embers: glowing sparks, cooling from bright yellow to dull red.
+  love.graphics.setBlendMode("add")
   for _, e in ipairs(self.embers) do
     local a = math.max(0, e.life)
-    local er, eg, eb = hslaApprox(e.hue, 1, 0.6, a)
+    local er, eg, eb = hslaApprox(e.hue, 1, 0.35 + 0.4 * a, a)
+    love.graphics.setColor(er, eg, eb, a * 0.5)
+    drawGlow(glow, e.x, e.y, e.radius * 7)
     love.graphics.setColor(er, eg, eb, a)
-    love.graphics.circle("fill", e.x, e.y, e.radius)
+    love.graphics.circle("fill", e.x, e.y, e.radius * 0.8)
   end
 
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.setLineWidth(1)
+  love.graphics.pop()
 end
 
 return FireBar

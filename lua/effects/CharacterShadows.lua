@@ -16,6 +16,10 @@
 --     where it's clear, gets none.
 -- Drawn right after the level and before the characters themselves, so
 -- they stand on top of their own shadows.
+--
+-- Ooombas also shadow each other: CharacterShadows.drawOntoOoomba, called
+-- after each one is drawn, lays the shadows of the ones in front of it
+-- (later in state.ooombas) over its sprite, the same way.
 
 local state = require("lua.state")
 local TiledTerrain = require("lua.world.TiledTerrain")
@@ -40,6 +44,18 @@ local OFFSET_Y = -SOFTNESS
 
 local casters = nil      -- the screen-sized canvas the shapes are drawn into
 local anyCaster = false  -- whether anything was drawn into it this frame
+local ooombaCasters = nil -- the same, for the Ooombas in front of one Ooomba (see drawOntoOoomba)
+
+-- `canvas`, or a new one in its place, sized to whatever's being drawn
+-- to: the screen, or a canvas.
+local function screenSized(canvas)
+  local target = love.graphics.getCanvas()
+  local w, h
+  if target then w, h = target:getDimensions() else w, h = love.graphics.getDimensions() end
+  if canvas and canvas:getWidth() == w and canvas:getHeight() == h then return canvas end
+  if canvas then canvas:release() end
+  return love.graphics.newCanvas(w, h)
+end
 
 local shader = nil
 local function getShader()
@@ -74,14 +90,7 @@ function CharacterShadows.prepare()
   local hasOoombas = state.ooombas and #state.ooombas > 0
   if not (drawPlayer or hasOoombas) then return end
 
-  -- (The size of whatever's being drawn to: the screen, or a canvas.)
-  local target = love.graphics.getCanvas()
-  local w, h
-  if target then w, h = target:getDimensions() else w, h = love.graphics.getDimensions() end
-  if not casters or casters:getWidth() ~= w or casters:getHeight() ~= h then
-    if casters then casters:release() end
-    casters = love.graphics.newCanvas(w, h)
-  end
+  casters = screenSized(casters)
 
   love.graphics.push("all")
   love.graphics.setCanvas(casters)
@@ -116,6 +125,50 @@ function CharacterShadows.drawOnto(level)
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(level.canvas, level.anchorX, level.anchorY)
   love.graphics.setShader()
+end
+
+-- Shadows on state.ooombas[index] from the Ooombas drawn after it (in
+-- front of it — later in the list draws on top) that are close enough
+-- to reach it. Call right after drawing it, in world space. The same
+-- shader as drawOnto, with the Ooomba's own sprite standing in for the
+-- level's tiles: shadow only where the sprite is.
+function CharacterShadows.drawOntoOoomba(index)
+  local ooombas = state.ooombas
+  local o = ooombas[index]
+  if o.portalTransit then return end
+  local oSize = math.max(o.drawWidth, o.drawHeight)
+  local any = false
+  for j = index + 1, #ooombas do
+    local f = ooombas[j]
+    -- (Generous: each one's whole sprite size, plus the shadow's offset
+    -- and softened edge.)
+    local reach = oSize + math.max(f.drawWidth, f.drawHeight) + math.abs(OFFSET_X) + math.abs(OFFSET_Y) + SOFTNESS
+    local dx, dy = f.pos.x - o.pos.x, f.pos.y - o.pos.y
+    if not f.portalTransit and dx * dx + dy * dy < reach * reach then
+      if not any then
+        any = true
+        ooombaCasters = screenSized(ooombaCasters)
+        love.graphics.push("all")
+        love.graphics.setCanvas(ooombaCasters)
+        love.graphics.clear(0, 0, 0, 0)
+        love.graphics.translate(OFFSET_X, OFFSET_Y)
+      end
+      f:draw()
+    end
+  end
+  if not any then return end
+  love.graphics.pop()
+
+  local s = getShader()
+  local pw, ph = ooombaCasters:getPixelDimensions()
+  s:send("casters", ooombaCasters)
+  s:send("castersSize", { pw, ph })
+  s:send("softPx", SOFTNESS * (state.zoom or 1) * ooombaCasters:getDPIScale())
+  s:send("strength", STRENGTH)
+  local prevShader = love.graphics.getShader()
+  love.graphics.setShader(s)
+  o:draw()
+  love.graphics.setShader(prevShader)
 end
 
 return CharacterShadows
