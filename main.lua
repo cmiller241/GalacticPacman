@@ -59,7 +59,10 @@ local WaterSystem = require("lua.systems.WaterSystem")
 local Recall = require("lua.systems.Recall")
 local CharacterShadows = require("lua.effects.CharacterShadows")
 local TileGlow = require("lua.effects.TileGlow")
+local FireBarGlow = require("lua.effects.FireBarGlow")
 local RopeRock = require("lua.world.RopeRock")
+local Cannon = require("lua.world.Cannon")
+local CameraShake = require("lua.effects.CameraShake")
 local WeaponModes = require("lua.systems.WeaponModes")
 
 local collisionSystem
@@ -129,6 +132,9 @@ local function resetWorldState()
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
   state.beltLandingPlanet = nil
   state.miningPlanet, state.prisms = nil, nil
+  state.cannons, state.cannonPlanet, state.cannonTargetPlanet, state.clearLanes = nil, nil, nil, nil
+  state.cannonRoute, state.cannonRails, state.cannonBumpers = nil, nil, nil
+  state.cannonZoomFlying, state.cannonZoomReturn = nil, nil
   state.elementPieces = {}
   state.portals, state.portalTracers = nil, nil
   WeaponModes.set("blaster")
@@ -1066,6 +1072,140 @@ function love.load()
     state.spaceShelter.introDone = true
   end
 
+  -- === The cannon (see lua/world/Cannon.lua) ===
+  -- A planet out in open space, up and to the left of the sun, with a
+  -- cannon on top — and a second planet far across the map, up and to
+  -- the right, that it fires at. Bob starts the game (and respawns)
+  -- standing beside the cannon: curl into a ball and jump in.
+  --
+  -- The shot takes a detour on the way, round metal rails at the
+  -- corners of its route (CANNON_ROUTE_CORNERS, below). The whole route
+  -- is placed to stay well clear of the sun, the belt and every
+  -- landmark — checked below, with a warning printed if that's ever no
+  -- longer true (move a corner or a planet). And random planetoids and
+  -- asteroids are kept out of a lane down every leg of it
+  -- (state.clearLanes — see worldGen.isInClearLane), so normally
+  -- nothing's in the way.
+  local SHOW_CANNON = true -- false removes both planets and the cannon (and starts him at the shelter again)
+  if SHOW_CANNON then
+    local CANNON_PLANET_X, CANNON_PLANET_Y, CANNON_PLANET_RADIUS = 18000, 16000, 220
+    local TARGET_PLANET_X, TARGET_PLANET_Y, TARGET_PLANET_RADIUS = 44000, 4000, 300
+    local CLEAR_LANE_HALF_WIDTH = 500
+
+    local function landmarkPlanet(x, y, radius, color)
+      local p = Planetoid.new(x, y, radius, color)
+      p.isImmovable = true
+      p.isPermanent = true
+      p.vel = Vector2.new(0, 0)
+      table.insert(state.planetoids, p)
+      return p
+    end
+    local cannonPlanet = landmarkPlanet(CANNON_PLANET_X, CANNON_PLANET_Y, CANNON_PLANET_RADIUS, { 0.5, 0.56, 0.68, 1 })
+    local targetPlanet = landmarkPlanet(TARGET_PLANET_X, TARGET_PLANET_Y, TARGET_PLANET_RADIUS, { 0.86, 0.52, 0.32, 1 })
+    state.cannonPlanet, state.cannonTargetPlanet = cannonPlanet, targetPlanet
+
+    -- The route doesn't go straight there: it turns at these corners,
+    -- each with a metal rail he rides round (see Cannon.lua) — right
+    -- from the cannon for about three cells, sharply down, right again,
+    -- then steeply up into the target. All well above the sun: the
+    -- nearest any of it comes is about 11500, past the belt's 9000.
+    -- On the way down into the second one: two Sonic-style
+    -- loop-the-loops, one after the other (loops = 2) — he rides right
+    -- round the first, carries on to the second, round that, and on
+    -- into the corner's curve.
+    --
+    -- Then, just to be obnoxious about it, five more rails: zigzagging round
+    -- the open space up and to the right (clear of the dome below, the
+    -- map's edges, and the target itself) — out right, back up and
+    -- left, right again, a hairpin near the top edge, and back down and
+    -- left — before finally heading up into the target.
+    --
+    -- And after the loops, a pinball pocket: five bumpers close together
+    -- (bumper = true — he ricochets off them instead of riding round), in
+    -- a tight zigzag he ping-pongs through, back and forth between its
+    -- two rows, before heading off to the next rail.
+    local CANNON_ROUTE_CORNERS = {
+      { 27000, 13000 },
+      { 30500, 18500, loops = 2 },
+      { 41000, 14000, bumper = true },
+      { 41700, 14800, bumper = true },
+      { 42400, 14000, bumper = true },
+      { 43100, 14800, bumper = true },
+      { 43800, 14000, bumper = true },
+      { 47500, 19500 },
+      { 56000, 13500 },
+      { 50000, 7000 },
+      { 56500, 3500 },
+      { 49500, 12500 },
+    }
+    local cannon = Cannon.new(cannonPlanet, -math.pi / 2, targetPlanet, CANNON_ROUTE_CORNERS) -- on top
+    state.cannons = { cannon }
+    state.cannonRoute = cannon.points -- (for the minimap)
+    state.cannonRails = cannon.rails  -- (likewise — its loops are drawn there)
+    state.cannonBumpers = cannon.bumpers -- (and its bumpers)
+
+    -- A clear lane down every leg of it (corner to corner), and round
+    -- every rail (a loop's whole ring reaches well past its corner's legs).
+    state.clearLanes = {}
+    local route = cannon.points
+    for i = 1, #route - 1 do
+      table.insert(state.clearLanes, { route[i][1], route[i][2], route[i + 1][1], route[i + 1][2], CLEAR_LANE_HALF_WIDTH })
+    end
+    local RAIL_CLEARANCE = 250 -- beyond each rail's own curve (and each bumper)
+    -- (Rails and bumpers alike: a circle round each.)
+    local circles = {}
+    for _, rail in ipairs(cannon.rails) do circles[#circles + 1] = { rail.cx, rail.cy, rail.radius } end
+    for _, b in ipairs(cannon.bumpers) do circles[#circles + 1] = { b.x, b.y, b.radius } end
+    for _, c in ipairs(circles) do
+      table.insert(state.clearLanes, { c[1], c[2], c[1], c[2], c[3] + RAIL_CLEARANCE })
+    end
+
+    -- The route's own sanity check: nearest it comes to the sun (versus
+    -- the belt's outer edge), and to every landmark that exists so far —
+    -- down its legs, and round its rails and bumpers (each taken as its
+    -- whole circle).
+    local function nearestOnRoute(x, y)
+      local best = math.huge
+      for i = 1, #route - 1 do
+        local ax, ay, bx, by = route[i][1], route[i][2], route[i + 1][1], route[i + 1][2]
+        local dx, dy = bx - ax, by - ay
+        local t = math.max(0, math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+        best = math.min(best, math.sqrt((x - (ax + dx * t)) ^ 2 + (y - (ay + dy * t)) ^ 2))
+      end
+      for _, c in ipairs(circles) do
+        local d = math.sqrt((x - c[1]) ^ 2 + (y - c[2]) ^ 2) - (c[3] + RAIL_CLEARANCE)
+        best = math.min(best, math.max(0, d))
+      end
+      return best
+    end
+    local sunX, sunY = worldGen.sunPos()
+    local _, beltOuter = worldGen.beltRadii()
+    if nearestOnRoute(sunX, sunY) < beltOuter + CLEAR_LANE_HALF_WIDTH then
+      print("main.lua: the cannon's route passes through the asteroid belt or the sun — move one of its corners or planets.")
+    end
+    for _, p in ipairs(state.planetoids) do
+      if p ~= cannonPlanet and p ~= targetPlanet and p ~= cannon.ledge then
+        local reach = (p.radius or math.max(p.halfWidth or 0, p.halfHeight or 0)) + CLEAR_LANE_HALF_WIDTH
+        if nearestOnRoute(p.pos.x, p.pos.y) < reach then
+          print(string.format("main.lua: the cannon's route passes close to a landmark at (%.0f, %.0f).", p.pos.x, p.pos.y))
+        end
+      end
+    end
+
+    -- He starts, and respawns, standing on the cannon planet a little to
+    -- the left of the cannon — not in it. The shelter's door-opening
+    -- intro is marked already over, since he isn't there behind the door.
+    local standAngle = -math.pi / 2 - 0.45
+    local standDist = cannonPlanet.radius + constants.PLAYER_RADIUS
+    state.respawnPoint = {
+      x = cannonPlanet.pos.x + math.cos(standAngle) * standDist,
+      y = cannonPlanet.pos.y + math.sin(standAngle) * standDist,
+      planet = cannonPlanet,
+    }
+    state.spaceShelter.playerInFront = true
+    state.spaceShelter.introDone = true
+  end
+
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
   -- before: cell generation steers new planetoids/asteroids away from
@@ -1541,7 +1681,11 @@ function love.update(dt)
     else
       -- (No walking in V.A.T.S. either — see the V.A.T.S. rules near the
       -- top of this function.)
-      state.player:move((state.introLocked or state.player.inPinball or state.vatsActive) and {} or state.keys)
+      -- (Nor while he's in a cannon or flying from one: the shot goes
+      -- dead straight — see lua/world/Cannon.lua.)
+      local noSteering = state.introLocked or state.player.inPinball or state.vatsActive
+        or state.player.inCannon or state.player.cannonFlight
+      state.player:move(noSteering and {} or state.keys)
     end
 
     -- PinballInterior:updateBall entirely REPLACES normal gravity and
@@ -1555,17 +1699,30 @@ function love.update(dt)
       state.player.inPinball:updateBall(state.player, state.timeScale, jumpHeld)
     elseif state.player.pullTarget then
       state.player:applyPullForce()
-    else
+    elseif not (state.player.inCannon or state.player.cannonFlight) then
+      -- (No gravity in a cannon, or on a cannon shot — see Cannon.lua.)
       state.gravitySystem:applyTo(state.player)
     end
 
     state.player:update()
 
+    -- Cannons: swallowing him, holding him while they aim, firing him —
+    -- and his flight once fired (see lua/world/Cannon.lua).
+    for _, cannon in ipairs(state.cannons or {}) do
+      cannon:update(state.player, state.timeScale)
+    end
+    Cannon.updateFlight(state.player, state.timeScale)
+    -- (And the coins down their routes — after the flight's moved him
+    -- for the frame.)
+    for _, cannon in ipairs(state.cannons or {}) do
+      cannon:updateCoins(state.player, state.timeScale / 60)
+    end
+
     -- Into a portal? Checked before collision, so landing on a floor
     -- portal doesn't stop his fall first (see PortalGun.tryEnter).
     PortalGun.tryEnter(state.player)
 
-    if not state.player.inPinball then
+    if not state.player.inPinball and not state.player.inCannon then
       collisionSystem:handlePlayerPlanetCollisions(state.player)
     end
 
@@ -1965,6 +2122,23 @@ function love.update(dt)
     state.activeZoomWindow = insideWindow
   end
 
+  -- A cannon shot (see lua/world/Cannon.lua): the moment he's fired,
+  -- ease all the way out (ZOOM_MIN) for the whole journey — and once
+  -- it's over (he's crashed into the target, or anything else ended it),
+  -- ease back to the zoom he had before. Same easing as the zoom
+  -- windows above, so a manual zoom mid-flight wins the same way.
+  local cannonFlying = state.player.cannonFlight ~= nil
+  if cannonFlying ~= (state.cannonZoomFlying or false) then
+    if cannonFlying then
+      state.cannonZoomReturn = state.zoomTarget or state.zoom
+      state.zoomTarget = ZOOM_MIN
+    elseif state.cannonZoomReturn then
+      state.zoomTarget = state.cannonZoomReturn
+      state.cannonZoomReturn = nil
+    end
+    state.cannonZoomFlying = cannonFlying
+  end
+
   -- Safety net: CameraDirector may zoom out past the player's own
   -- ZOOM_MIN during a script (see its SCRIPT_ZOOM_MIN) and normally
   -- hands back at a regular zoom — but if it ever lets go while still
@@ -2157,6 +2331,9 @@ function love.draw()
     end
   end
 
+  -- The fire bars' fireballs lighting up the planets near them (see
+  -- lua/effects/FireBarGlow.lua) — added over each one right after it's drawn.
+  FireBarGlow.prepare()
   for _, p in ipairs(state.planetoids) do
     -- The dome is ALSO in this list (for gravity/physics bookkeeping —
     -- see GravitySystem.new(state.planetoids)), but already drew
@@ -2176,6 +2353,7 @@ function love.draw()
     -- many water bodies end up existing.
     if p ~= state.skyDomePlanet and not p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
+      FireBarGlow.drawOnto(p)
       -- Duck-typed: only PinballPlanet has one right now (see
       -- lua/interiors/PinballInterior.lua and this planet's own setup
       -- comment), but any future planetoid with its own .interior
@@ -2184,6 +2362,14 @@ function love.draw()
         p.interior:draw()
       end
     end
+  end
+
+  -- Cannons, on their planets, and the rails along their routes, out in
+  -- space wherever they are (see lua/world/Cannon.lua).
+  for _, cannon in ipairs(state.cannons or {}) do
+    cannon:drawRails()
+    local px, py = cannon:pivot()
+    if utils.isOnScreen(px, py, 400, 50) then cannon:draw() end
   end
 
   -- Recall's yellow overlay on rewinding planetoids (and the aim ring).
@@ -2365,11 +2551,13 @@ function love.draw()
   end
 
   if state.ooombas then
-    for _, o in ipairs(state.ooombas) do
+    for i, o in ipairs(state.ooombas) do
       -- (Mid-portal it's split across both portals, either of which may
       -- be the one on screen — see PortalGun.drawOoomba.)
       if o.portalTransit or utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
         PortalGun.drawOoomba(o)
+        -- ...with the shadows of any in front of it falling on it.
+        CharacterShadows.drawOntoOoomba(i)
       end
     end
   end
@@ -2430,6 +2618,7 @@ function love.draw()
   PortalGun.draw()
 
   -- (Split across the two portals while he's going through one.)
+  Cannon.drawFlightTrail(state.player)
   PortalGun.drawPlayer(state.player)
 
   -- Water and spray, over him, so he looks like he's in it when swimming.
@@ -2680,4 +2869,22 @@ function love.draw()
 
   -- The black fade-in out of the title screen, over everything.
   TitleScreen.draw()
+end
+
+-- Screen shake (see lua/effects/CameraShake.lua): the camera nudged by
+-- this moment's shake for the draw only, and put back after — so the
+-- whole scene jolts on screen, but nothing that reads state.camera to
+-- decide anything (streaming, culling, aiming) is ever thrown off by it.
+do
+  local drawFrame = love.draw
+  function love.draw()
+    local camera = state.camera
+    local sx, sy = CameraShake.offset()
+    if camera and (sx ~= 0 or sy ~= 0) then
+      local zoom = state.zoom or 1
+      state.camera = { x = camera.x + sx / zoom, y = camera.y + sy / zoom }
+    end
+    drawFrame()
+    state.camera = camera
+  end
 end

@@ -1051,6 +1051,26 @@ local function getBumperFace(r)
   return face
 end
 
+-- One bumper, centred on (x, y): its baked face, drawn through the
+-- planetoids' own sun shading (lit side, dark side, highlight) — see
+-- Planetoid.applySunShadingAt. hitTicks: ticks since it was last hit,
+-- or nil — it pops (a little bigger) for the first few ticks of a hit,
+-- and its cap blinks for BUMPER_FLASH_TICKS. Shared with the bumpers
+-- out in space along the cannon's route (see lua/world/Cannon.lua).
+function PinballInterior.drawBumper(x, y, radius, hitTicks)
+  local hit = hitTicks and hitTicks < BUMPER_FLASH_TICKS
+  local grow = (hit and hitTicks < 6) and 1.15 or 1
+  local lit = hit and math.floor(hitTicks / BUMPER_BLINK_TICKS) % 2 == 0
+  local face = getBumperFace(radius)
+  local canvas = lit and face.lit or face.normal
+  local r = radius * grow
+  local shader = Planetoid.applySunShadingAt(x, y, r, (face.half - radius) * grow, BUMPER_SHADING_MIX)
+  local s = grow / BUMPER_BAKE_SCALE
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(canvas, x, y, 0, s, s, canvas:getWidth() / 2, canvas:getHeight() / 2)
+  if shader then love.graphics.setShader() end
+end
+
 function PinballInterior:draw()
   local ax, ay = self.anchorX, self.anchorY
   local w, h = self.mapWidth * TILE_WORLD_SIZE, self.mapHeight * TILE_WORLD_SIZE
@@ -1071,23 +1091,8 @@ function PinballInterior:draw()
   self:drawDrops()
 
   for _, b in ipairs(self.bumpers) do
-    -- The pop (slightly bigger) only for the first few ticks of a hit;
-    -- the cap keeps blinking for the rest of BUMPER_FLASH_TICKS.
     local elapsed = b.flashTimer and (BUMPER_FLASH_TICKS - b.flashTimer) or nil
-    local grow = (elapsed and elapsed < 6) and 1.15 or 1
-    local lit = elapsed and math.floor(elapsed / BUMPER_BLINK_TICKS) % 2 == 0
-
-    -- Baked face, drawn through the planetoids' own sun shading (lit
-    -- side, dark side, highlight) — see Planetoid.applySunShadingAt.
-    b.face = b.face or getBumperFace(b.radius)
-    local face = b.face
-    local canvas = lit and face.lit or face.normal
-    local r = b.radius * grow
-    local shader = Planetoid.applySunShadingAt(b.x, b.y, r, (face.half - b.radius) * grow, BUMPER_SHADING_MIX)
-    local s = grow / BUMPER_BAKE_SCALE
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(canvas, b.x, b.y, 0, s, s, canvas:getWidth() / 2, canvas:getHeight() / 2)
-    if shader then love.graphics.setShader() end
+    PinballInterior.drawBumper(b.x, b.y, b.radius, elapsed)
   end
 
   local pl = self.plunger

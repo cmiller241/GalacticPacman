@@ -235,6 +235,155 @@ local function getBulgeShader()
 end
 
 ----------------------------------------------------------------------
+-- Foreground forcefield shader
+----------------------------------------------------------------------
+
+-- The foreground's hex lattice, drawn procedurally rather than sampled
+-- from the baked tile (see drawForegroundGlass) — through the same
+-- bulge-and-ripple warp as getBulgeShader above, and the same scroll,
+-- but as glowing lines of energy:
+--   * each hex edge a crisp bright line with a soft glow into its cell;
+--   * faint near the deck, brighter toward the dome's edge (a fresnel
+--     rim, like light catching the curve of a bubble), with a soft haze
+--     right at the rim;
+--   * a few cells at a time flashing up and fading;
+--   * a slow band of energy sweeping across it on the diagonal;
+--   * and round anything that just hit the shield (see
+--     triggerShieldImpact): the cells there flaring, and a ring of lit
+--     cells spreading out from it.
+-- Drawn additively, so it only ever adds light.
+--
+-- Box space: pixels across the dome's bounding box (domeRadiusX*2 by
+-- domeRadiusY), the dome's centre at the middle of its bottom edge.
+local FG_MAX_IMPACTS = 6
+local FG_IMPACT_SECONDS = 0.9
+
+local forcefieldShader = nil
+local function getForcefieldShader()
+  if forcefieldShader then return forcefieldShader end
+
+  forcefieldShader = love.graphics.newShader([[
+    #define MAX_IMPACTS ]] .. FG_MAX_IMPACTS .. [[
+
+    extern vec2 boxSize;
+    extern vec2 center;
+    extern vec2 radii;
+    extern number strength;
+    extern number radius;
+    extern number hexWidth;
+    extern number scroll;
+    extern vec2 rippleCenter1;
+    extern vec2 rippleCenter2;
+    extern number rippleAmplitude;
+    extern number rippleWidth;
+    extern number rippleSpeed;
+    extern number rippleMaxRadius;
+    extern number time;
+    extern vec3 tint;
+    extern vec4 impacts[MAX_IMPACTS];   // x, y (box pixels), age 0..1, intensity
+    extern int impactCount;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+    // (Same ring as getBulgeShader's.)
+    vec2 ringDisplacement(vec2 p, vec2 ringCenter, float phaseOffset) {
+      vec2 fromCenter = p - ringCenter;
+      float d = length(fromCenter);
+      if (d <= 0.0001) return vec2(0.0);
+      vec2 dir = fromCenter / d;
+      float ringRadius = mod(time * rippleSpeed + phaseOffset, rippleMaxRadius);
+      float dist = d - ringRadius;
+      float envelope = exp(-(dist * dist) / (2.0 * rippleWidth * rippleWidth));
+      return dir * sin(dist / rippleWidth * 3.14159265) * envelope;
+    }
+
+    // Distance from a pointy-topped hex cell's middle, in cell widths
+    // (its flat sides at 0.5).
+    float hexDist(vec2 p) {
+      p = abs(p);
+      return max(dot(p, vec2(0.5, 0.8660254)), p.x);
+    }
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec2 pixel = uv * boxSize;
+      vec2 p = (pixel - center) / radii;
+      float d = length(p);
+      if (d > 1.02) return vec4(0.0);
+
+      if (d < radius && d > 0.0001) {
+        float t = 1.0 - (d / radius);
+        t = t * t * (3.0 - 2.0 * t);
+        p /= (1.0 + strength * t);
+      }
+      p += (ringDisplacement(p, rippleCenter1, 0.0)
+          + ringDisplacement(p, rippleCenter2, rippleMaxRadius * 0.5)) * rippleAmplitude;
+      vec2 warped = center + p * radii;
+
+      // Which cell, and how far from its edge.
+      vec2 hp = (warped + vec2(scroll, 0.0)) / hexWidth;
+      vec2 r = vec2(1.0, 1.7320508);
+      vec2 h = r * 0.5;
+      vec2 a = mod(hp, r) - h;
+      vec2 b = mod(hp - h, r) - h;
+      vec2 gv = dot(a, a) < dot(b, b) ? a : b;
+      // Its middle, rounded to whole numbers (cells sit on a half-step
+      // grid) — exactly the same for every pixel in it, so hashing it
+      // gives the whole cell one value, not speckle.
+      vec2 id = floor((hp - gv) * vec2(2.0, 1.1547005) + 0.5);
+      float e = 0.5 - hexDist(gv);              // 0 on its edge .. 0.5 in its middle
+      // (A pixel's size in cell widths — from hp, which is smooth, not e,
+      // whose rate of change jumps right where cells meet: on the lines.)
+      float fw = max(length(vec2(dFdx(hp.x), dFdy(hp.x))), 1e-5);
+      float line = 1.0 - smoothstep(fw * 0.6, fw * 1.8, e);
+      float glow = exp(-e * 14.0);
+
+      // Brighter toward the rim.
+      float fres = smoothstep(0.25, 1.0, d);
+      fres *= fres;
+      float haze = smoothstep(0.82, 1.0, d) * (1.0 - smoothstep(0.98, 1.02, d));
+
+      // Cells flashing up now and then.
+      float flash = pow(max(0.0, sin(time * 0.7 + hash(id) * 60.0)), 24.0) * step(0.6, hash(id + 7.13));
+
+      // The sweep, across the dome on the diagonal.
+      float along = dot(pixel / radii.x, vec2(0.8, -0.6));
+      float sweep = exp(-pow((along - (mod(time * 0.08, 2.4) - 0.6)) / 0.06, 2.0));
+
+      // Impacts.
+      float imp = 0.0;
+      for (int i = 0; i < MAX_IMPACTS; i++) {
+        if (i >= impactCount) break;
+        vec4 im = impacts[i];
+        float dist = length(pixel - im.xy);   // (where it really hit — not through the lens)
+        float fade = 1.0 - im.z;
+        float ring = exp(-pow((dist - im.z * 900.0) / 110.0, 2.0)) * fade;
+        float flare = exp(-dist / 160.0) * fade * fade;
+        imp += (ring + flare) * im.w;
+      }
+
+      float edges = line * 0.85 + glow * 0.3;
+      float light = edges * (0.18 + 0.9 * fres + 0.7 * sweep + 3.0 * imp)
+                  + flash * (0.12 + glow * 0.5) * (0.4 + fres)
+                  + imp * (0.25 + glow * 0.6)
+                  + haze * 0.25;
+      vec3 c = tint * light + vec3(1.0) * line * min(imp, 1.0) * 0.9;
+      return vec4(c, 1.0) * color;
+    }
+  ]])
+
+  return forcefieldShader
+end
+
+local pixelImage = nil
+local function getPixel()
+  if pixelImage then return pixelImage end
+  local data = love.image.newImageData(1, 1)
+  data:setPixel(0, 0, 1, 1, 1, 1)
+  pixelImage = love.graphics.newImage(data)
+  return pixelImage
+end
+
+----------------------------------------------------------------------
 -- Geometry helpers
 ----------------------------------------------------------------------
 
@@ -432,6 +581,15 @@ function SkyDomePlanetoid.new(x, y, options)
   self.lastImpactTime = 0
   self.shieldRipples = {}
   self.shieldSparks = {}
+  self.fgImpacts = {}
+
+  -- The foreground forcefield's colour (see getForcefieldShader).
+  self.domeForegroundFieldColor = parseRGBA(options.domeForegroundFieldColor, { 0.45, 0.82, 1.0, 1 })
+  self.domeForegroundFieldIntensity = options.domeForegroundFieldIntensity or 0.55
+  -- ...and the background's: the same field on the shield's far side,
+  -- fainter and finer (see drawDome).
+  self.domeBackFieldIntensity = options.domeBackFieldIntensity or 0.16
+  self.domeBackFieldHexSize = options.domeBackFieldHexSize or 38
 
   self:createOffscreen()
   return self
@@ -574,6 +732,10 @@ function SkyDomePlanetoid:triggerShieldImpact(worldX, worldY, intensity)
     spawnTime = self.lastImpactTime,
     intensity = intensity,
   })
+  -- (The foreground forcefield's own record, kept a little longer — see
+  -- getForcefieldShader. Oldest dropped first past FG_MAX_IMPACTS.)
+  table.insert(self.fgImpacts, { x = worldX, y = worldY, time = love.timer.getTime(), intensity = intensity })
+  if #self.fgImpacts > FG_MAX_IMPACTS then table.remove(self.fgImpacts, 1) end
 
   local sparkCount = math.floor(4 + intensity * 6 + 0.5)
   for _ = 1, sparkCount do
@@ -707,7 +869,20 @@ function SkyDomePlanetoid:drawDome()
   end
   love.graphics.setStencilTest()
 
-  if self.hexGridCanvas then
+  if self.domeBackFieldIntensity > 0 then
+    -- The far side of the shield: the same forcefield as the
+    -- foreground's (see drawForcefield), but smaller hexes, flat (no
+    -- lens — that's the near glass curving toward you), much fainter,
+    -- scrolling the other way, and flashing/sweeping on its own clock.
+    self:drawForcefield(glass, cx, cy, rx, ry, {
+      hexSize = self.domeBackFieldHexSize,
+      scrollSpeed = self.domeHexScrollSpeed,
+      bulge = false,
+      alpha = self.domeBackFieldIntensity,
+      timeOffset = 37.3,
+    })
+  elseif self.hexGridCanvas then
+    -- (The plain baked lattice, as it was, when domeBackFieldIntensity is 0.)
     love.graphics.stencil(function()
       love.graphics.polygon("fill", glass)
     end, "replace", 1)
@@ -900,6 +1075,64 @@ function SkyDomePlanetoid:drawShieldImpactEffects(cx, cy)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
+-- One layer of the procedural forcefield (see getForcefieldShader),
+-- clipped to the dome's glass — the foreground's (big hexes, through the
+-- bulge lens) or the background's (smaller, flat, fainter). opts:
+--   hexSize, scrollSpeed  the lattice's, like domeHexSize/domeHexScrollSpeed
+--   bulge                 whether it goes through the lens (and its ripples)
+--   alpha                 overall brightness
+--   timeOffset            seconds its flashes/sweep run ahead, so two
+--                         layers don't flash and sweep in step
+function SkyDomePlanetoid:drawForcefield(glass, cx, cy, rx, ry, opts)
+  if opts.alpha <= 0.001 then return end
+  local now = love.timer.getTime()
+  local hexWidth = math.sqrt(3) * opts.hexSize
+  local scroll = ((now * 1000 * opts.scrollSpeed) % hexWidth + hexWidth) % hexWidth
+
+  -- Recent impacts, in box pixels, aged 0..1.
+  local impacts = {}
+  for i = #self.fgImpacts, 1, -1 do
+    local im = self.fgImpacts[i]
+    local age = (now - im.time) / FG_IMPACT_SECONDS
+    if age >= 1 then
+      table.remove(self.fgImpacts, i)
+    else
+      impacts[#impacts + 1] = { im.x - (cx - rx), im.y - (cy - ry), age, im.intensity }
+    end
+  end
+
+  local shader = getForcefieldShader()
+  shader:send("boxSize", { rx * 2, ry })
+  shader:send("center", { rx, ry })
+  shader:send("radii", { rx, ry })
+  shader:send("strength", opts.bulge and self.domeBulgeStrength or 0)
+  shader:send("radius", self.domeBulgeRadius)
+  shader:send("hexWidth", hexWidth)
+  shader:send("scroll", scroll)
+  shader:send("rippleCenter1", self.domeForegroundRippleCenter1)
+  shader:send("rippleCenter2", self.domeForegroundRippleCenter2)
+  shader:send("rippleAmplitude", opts.bulge and self.domeForegroundRippleAmplitude or 0)
+  shader:send("rippleWidth", self.domeForegroundRippleWidth)
+  shader:send("rippleSpeed", self.domeForegroundRippleSpeed)
+  shader:send("rippleMaxRadius", self.domeForegroundRippleMaxRadius)
+  shader:send("time", now + opts.timeOffset)
+  shader:send("tint", { self.domeForegroundFieldColor[1], self.domeForegroundFieldColor[2], self.domeForegroundFieldColor[3] })
+  shader:send("impactCount", #impacts)
+  if #impacts > 0 then shader:send("impacts", unpack(impacts)) end
+
+  love.graphics.stencil(function()
+    love.graphics.polygon("fill", glass)
+  end, "replace", 1)
+  love.graphics.setStencilTest("greater", 0)
+  love.graphics.push("all")
+  love.graphics.setShader(shader)
+  love.graphics.setBlendMode("add")
+  love.graphics.setColor(1, 1, 1, opts.alpha)
+  love.graphics.draw(getPixel(), cx - rx, cy - ry, 0, rx * 2, ry)
+  love.graphics.pop()
+  love.graphics.setStencilTest()
+end
+
 function SkyDomePlanetoid:drawForegroundGlass()
   local zoom = state.zoom or 1
   local zoomMin = state.zoomMin or 0.5
@@ -927,7 +1160,20 @@ function SkyDomePlanetoid:drawForegroundGlass()
   -- SAME small pattern at a slightly different scroll offset; now the
   -- GPU's own texture sampler handles the repeat, and only the scroll
   -- uniform changes frame to frame — no canvas rebuild at all anymore.
-  if self.hexGridForegroundCanvas then
+  --
+  -- (That baked tile is still what this draws when
+  -- domeForegroundFieldIntensity is 0 — the plain lattice, as it was.
+  -- Otherwise it's the procedural forcefield instead, see
+  -- getForcefieldShader.)
+  if self.domeForegroundFieldIntensity > 0 then
+    self:drawForcefield(glass, cx, cy, rx, ry, {
+      hexSize = self.domeForegroundHexSize,
+      scrollSpeed = self.domeForegroundHexScrollSpeed,
+      bulge = true,
+      alpha = zoomFactor * self.domeForegroundFieldIntensity,
+      timeOffset = 0,
+    })
+  elseif self.hexGridForegroundCanvas then
     love.graphics.stencil(function()
       love.graphics.polygon("fill", glass)
     end, "replace", 1)

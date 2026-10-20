@@ -605,6 +605,24 @@ function worldGen.cellIntersectsLandmark(col, row)
   return false
 end
 
+-- Lanes kept clear of random spawns: state.clearLanes, each
+-- { ax, ay, bx, by, halfWidth } — a segment, and how far either side of
+-- it (and round its ends) nothing is placed. The cannon's flight path is
+-- one (see main.lua and lua/world/Cannon.lua): a straight shot across
+-- several cells would otherwise almost always clip a planetoid on the way.
+function worldGen.isInClearLane(x, y, radius)
+  for _, lane in ipairs(state.clearLanes or {}) do
+    local ax, ay, bx, by = lane[1], lane[2], lane[3], lane[4]
+    local dx, dy = bx - ax, by - ay
+    local lenSq = dx * dx + dy * dy
+    local t = lenSq > 0 and math.max(0, math.min(1, ((x - ax) * dx + (y - ay) * dy) / lenSq)) or 0
+    local px, py = ax + dx * t, ay + dy * t
+    local reach = lane[5] + (radius or 0)
+    if (x - px) ^ 2 + (y - py) ^ 2 < reach * reach then return true end
+  end
+  return false
+end
+
 local function randomPointInCell(col, row, radius)
   local originX = col * worldGen.CELL_SIZE
   local originY = row * worldGen.CELL_SIZE
@@ -612,7 +630,7 @@ local function randomPointInCell(col, row, radius)
   for _ = 1, 20 do
     x = originX + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
     y = originY + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
-    if not isNearSkyDome(x, y) then
+    if not isNearSkyDome(x, y) and not worldGen.isInClearLane(x, y, radius) then
       return x, y
     end
   end
@@ -720,6 +738,9 @@ local function createPlanetoidsInCell(col, row, count, belt)
       end
     else
       x, y = randomPointInCell(col, row, radius)
+      -- (Its fallback, after every try failed, can still be in a clear
+      -- lane — left out, rather than put in the way.)
+      placed = not worldGen.isInClearLane(x, y, radius)
     end
     if placed then
       local p = Planetoid.new(x, y, radius, randomColor())
@@ -737,7 +758,9 @@ local function createAsteroidsInCell(col, row, count)
   for i = 1, count do
     local radius = 16 + math.random() * 30
     local x, y = randomPointInCell(col, row, radius) -- also steers clear of the sky dome, see isNearSkyDome
-    table.insert(state.asteroids, Asteroid.new(x, y, radius))
+    if not worldGen.isInClearLane(x, y, radius) then
+      table.insert(state.asteroids, Asteroid.new(x, y, radius))
+    end
   end
 end
 

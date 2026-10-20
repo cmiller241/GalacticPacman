@@ -212,16 +212,10 @@ local function attachInputHandlers()
         -- the pinball planet — see PinballInterior:triggerJumpAction.
         state.player.inPinball:triggerJumpAction(state.player)
       elseif state.player and state.player.mode ~= "maze" and not state.introLocked then
-        if state.player.onSurface or state.player.touchingWall or state.player.submergedIn then
-          -- Player:jump() itself branches on which of the three applies
-          -- (grounded launch, wall-jump kick, or swim stroke) — routed
-          -- here together since all three are "Space performs a jump,"
-          -- as opposed to the ground-pound fallback below for plain
-          -- mid-air Space with nothing to jump off of (or swim in).
-          state.player:jump()
-        else
-          state.player:tryGroundPound()
-        end
+        -- A jump (grounded launch, wall-jump kick, or swim stroke) when
+        -- there's something to jump off — or, in mid-air, coyote time,
+        -- a buffered jump, or the ground pound. Player:pressJump decides.
+        state.player:pressJump()
       end
     end
 

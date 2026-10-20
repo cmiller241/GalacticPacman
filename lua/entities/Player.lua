@@ -39,6 +39,21 @@ local GROUND_POUND_SETTLE_TICKS = 7   -- baseline (60fps) ticks the pose takes t
 local GROUND_POUND_IMPACT_TICKS = 14  -- ticks he stays sat on the ground after landing one, before standing back up
 local GROUND_POUND_SEAT_ADJUST = 0    -- world units added to the computed seat drop (positive = lower still) — fine-tuning only
 
+-- Coyote time and jump buffering (see Player:pressJump) — the two little
+-- graces most platformers give a jump press that's a moment off:
+--   COYOTE_FRAMES       how long after walking/falling off an edge he can
+--                       still jump as if he were on it (60fps ticks)
+--   JUMP_BUFFER_FRAMES  how long a press in mid-air is held, waiting: land
+--                       in that time and he jumps the moment he touches
+--                       down; otherwise it becomes the ground pound (so the
+--                       pound starts this much later than the press)
+--   COYOTE_MAX_DRIFT    how far (world units) he can have got from where he
+--                       left the surface and still coyote-jump off it —
+--                       past this (a portal, say) it's long gone
+local COYOTE_FRAMES = 6
+local JUMP_BUFFER_FRAMES = 6
+local COYOTE_MAX_DRIFT = 140
+
 -- Sun shading on the astronaut — the same treatment every planetoid
 -- gets (see Planetoid.lua's own getSunShadingShader), applied separately to
 -- EACH piece of his rig (head, body, each arm, each boot): a lit side
@@ -275,6 +290,14 @@ function Player.new(x, y)
   -- every other system checks, same role isTeleporting plays above.
   self.isDying = false
   self.deathTimer = 0
+
+  -- Coyote time / jump buffering — see COYOTE_FRAMES and Player:pressJump.
+  -- coyotePlanet/coyotePos: the surface he was last standing on, and
+  -- where; coyoteTimer: ticks left to still jump off it once he's not.
+  self.coyoteTimer = 0
+  self.coyotePlanet = nil
+  self.coyotePos = nil
+  self.jumpBufferTimer = 0
 
   self.onSurface = false
   self.currentPlanet = nil
@@ -551,6 +574,7 @@ function Player:exitBallMode()
   if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   if self.inPinball then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inPinball first)
+  if self.inCannon then return end -- curled up in a cannon's barrel until it fires (see lua/world/Cannon.lua)
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -794,6 +818,7 @@ function Player:jump()
   -- same reasoning, frozen-in-place for a moment rather than mid-action.
   if self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
+  if self.inCannon then return end -- loaded in a cannon: it decides when he leaves (see lua/world/Cannon.lua)
 
   -- Requires actually MOVING at run speed, not just holding the run
   -- button (state.gamepadRunHeld) while standing still — self.groundMoveSpeedX
@@ -802,7 +827,19 @@ function Player:jump()
   -- the same jump-height boost as an actual running jump.
   local isRunningAndMoving = state.gamepadRunHeld and (self.groundMoveSpeedX or 0) ~= 0
   local jumpBoost = isRunningAndMoving and self.runJumpMultiplier or 1
-  if self.onSurface and self.currentPlanet then
+
+  -- Coyote time: just off an edge, he still jumps off the surface he
+  -- left (see canCoyoteJump) — launched exactly as if he'd still been on
+  -- it, so it's that surface the launch direction and strength come from.
+  local coyote = not (self.onSurface and self.currentPlanet) and self:canCoyoteJump()
+  if coyote then
+    self.currentPlanet = self.coyotePlanet
+  end
+  -- Any jump spends the grace, and anything waiting on a buffered press.
+  self.coyoteTimer = 0
+  self.jumpBufferTimer = 0
+
+  if (self.onSurface or coyote) and self.currentPlanet then
     local direction = self:getOutwardLaunchDirection()
     -- Per-planet override (e.g. SkyDomePlanetoid's own stronger
     -- jumpStrength, compensating for its heavier gravityStrength — see
@@ -918,6 +955,64 @@ function Player:tryGroundPound()
   if WaterSystem.wetAt(self.pos.x + down.x * self.radius, self.pos.y + down.y * self.radius) then return end
   if not state.gravitySystem or not state.gravitySystem:findDominantPlanet(self.pos) then return end
   self.isGroundPounding = true
+end
+
+-- The jump button (Space / Cross — see InputHandlers.lua and
+-- GamePadInput.lua). On something to jump off (the ground, a wall, water)
+-- it's an ordinary jump, as it always was. Otherwise, two graces:
+--   * coyote time — a moment after walking or falling off an edge, it's
+--     still a jump off that edge (see canCoyoteJump);
+--   * jump buffering — any other press in mid-air is held for
+--     JUMP_BUFFER_FRAMES: land (or touch a wall, or hit water) in that
+--     time and it's a jump the moment he does; if not, it's the ground
+--     pound mid-air presses have always been (see updateJumpGraces).
+function Player:pressJump()
+  if self.onSurface or self.touchingWall or self.submergedIn or self:canCoyoteJump() then
+    self:jump()
+  else
+    self.jumpBufferTimer = JUMP_BUFFER_FRAMES
+  end
+end
+
+-- Whether he's still within coyote time of the surface he last stood on:
+-- not long off it, not far from where he left it, and he left it by
+-- walking or falling off — not by jumping (jump spends it), being
+-- pulled away by the beam, curling up, a teleport, or a pound.
+function Player:canCoyoteJump()
+  if self.coyoteTimer <= 0 or not self.coyotePlanet or not self.coyotePos then return false end
+  if self.onSurface or self.pullTarget or self.isBall or self.morphState then return false end
+  if self.inCannon or self.cannonFlight then return false end
+  if self.isTeleporting or self.isGroundPounding or self.portalTransit then return false end
+  local dx, dy = self.pos.x - self.coyotePos.x, self.pos.y - self.coyotePos.y
+  return dx * dx + dy * dy <= COYOTE_MAX_DRIFT * COYOTE_MAX_DRIFT
+end
+
+-- Once a tick (see Player:update): keeps the coyote surface fresh while
+-- he's standing on one and counts it down once he isn't, and settles a
+-- buffered press — a jump if he's now got something to jump off, the
+-- ground pound once it's waited out in mid-air.
+function Player:updateJumpGraces(ts)
+  if self.onSurface and self.currentPlanet then
+    self.coyotePlanet = self.currentPlanet
+    self.coyotePos = self.pos:clone()
+    self.coyoteTimer = COYOTE_FRAMES
+  elseif self.coyoteTimer > 0 then
+    self.coyoteTimer = math.max(0, self.coyoteTimer - ts)
+  end
+
+  if self.jumpBufferTimer > 0 then
+    if self.onSurface or self.touchingWall or self.submergedIn then
+      -- (Spent either way — if something's blocking the jump right now
+      -- (dialogue, V.A.T.S., curling up), it shouldn't go off later.)
+      self.jumpBufferTimer = 0
+      self:jump()
+    else
+      self.jumpBufferTimer = math.max(0, self.jumpBufferTimer - ts)
+      if self.jumpBufferTimer <= 0 then
+        self:tryGroundPound()
+      end
+    end
+  end
 end
 
 -- Spawns an occasional dust puff at the player's feet while actively
@@ -1387,6 +1482,7 @@ function Player:update()
 
   self:updateBallMorph(state.timeScale)
   self:updateTeleport(state.timeScale)
+  self:updateJumpGraces(state.timeScale)
 
   if self.invincibleTimer > 0 then
     self.invincibleTimer = math.max(0, self.invincibleTimer - state.timeScale)
@@ -1537,7 +1633,10 @@ function Player:update()
     -- falling slower — gravity itself (GravitySystem) is untouched, so
     -- without this a submerged player would fall exactly like they do
     -- anywhere else.
+    -- (None at all on a cannon shot: it flies dead straight at full
+    -- speed until it's near the target — see Cannon.updateFlight.)
     local dragFactor = self.submergedIn and self.waterDrag or constants.DRAG
+    if self.cannonFlight then dragFactor = 1 end
     self.vel:scale(dragFactor ^ state.timeScale)
     self.pos:addScaled(self.vel, state.timeScale)
 
@@ -2362,8 +2461,9 @@ function Player:getNearbyBeam()
 end
 
 function Player:draw()
-  -- Gone for the death pause — only his death burst is on screen.
-  if self.isDying then return end
+  -- Gone for the death pause — only his death burst is on screen. And
+  -- not seen while he's inside a cannon's barrel (see lua/world/Cannon.lua).
+  if self.isDying or self.inCannon then return end
 
   local scale, pulseGlow = self:getTeleportPulse()
 
@@ -2505,6 +2605,7 @@ end
 
 function Player:trySelectPullTarget(explicitTarget)
   if self.mode ~= "space" or self.isBall or self.isTeleporting or self.isDying then return end
+  if self.inCannon then return end
 
   local best = nil
   if explicitTarget then
@@ -2779,15 +2880,24 @@ end
 function Player:respawn()
   local point = self.deathZoneRespawn or state.respawnPoint
   self.deathZoneRespawn = nil
-  -- Any trip through a portal is called off (see lua/systems/PortalGun.lua).
+  -- Any trip through a portal is called off (see lua/systems/PortalGun.lua),
+  -- and so is being in or fired from a cannon (see lua/world/Cannon.lua).
   self.portalTransit, self.portalDown = nil, nil
+  self.inCannon, self.cannonFlight = nil, nil
   if point then
     self.pos.x, self.pos.y = point.x, point.y
     if point.planet then
       self.onSurface = true
       self.currentPlanet = point.planet
       self.lastInfluencePlanet = point.planet
-      self.angle = -math.pi / 2
+      -- On a round planet his place on it IS this angle (from its
+      -- centre) — straight up would put him on its very top, wherever
+      -- the point actually is. Flat surfaces (the dome's deck) don't use it.
+      if point.planet.isRoundedRect then
+        self.angle = -math.pi / 2
+      else
+        self.angle = math.atan2(point.y - point.planet.pos.y, point.x - point.planet.pos.x)
+      end
     else
       -- A DeathZone's own respawn point names no surface — he's left
       -- airborne there and lands through the ordinary collision pass,
