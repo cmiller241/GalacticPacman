@@ -1,10 +1,12 @@
-body {
+html, body {
     margin: 0;
-    height: 100vh;
+    height: 100%;
     overflow: hidden;
-    background: linear-gradient(to bottom, #000050, #000010);
+    background: #000;
 }
+/* The game fills the window (the LÖVE shim sizes the canvas to it). */
 canvas {
     display: block;
-    border: 1px solid #000;
+    position: fixed;
+    inset: 0;
 }

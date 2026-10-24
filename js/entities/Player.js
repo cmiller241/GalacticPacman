@@ -1,1374 +1,952 @@
 // js/entities/Player.js
-import { Entity } from './Entity.js';
-import { state } from '../state.js';
-import {
-  GRAVITY_STRENGTH,
-  GROUND_POUND_GRAV_MULTIPLIER,
-  GROUND_POUND_PUSH_STRENGTH,
-  JUMP_STRENGTH,
-  PLAYER_LINEAR_SPEED,
-  PLAYER_RADIUS,
-  SURFACE_TOLERANCE,
-  DRAG
-} from '../constants.js';
-import { Vector2 } from '../vector2.js';
-import { Container, Sprite, Texture, Matrix } from 'pixi.js';
-import {
-  createDeathParticles,
-  createParticles
-} from '../utils.js';
-import { Particle } from './Particle.js';
-import { Fireball } from './world/Fireball.js';
-import { findNearestOccluder } from '../systems/Raycast.js';
-import { isValidLockTarget, selectNextLockTarget, selectPreviousLockTarget } from '../systems/TargetLock.js';
+//
+// The astronaut: physics / movement / landing / pull, the full-body
+// rig (body, head, arms, boots), planet-surface orientation and walk
+// cycle, aiming, wall jumps, swimming, the morph ball, Beam.js
+// teleports (with a brief post-arrival invincibility flicker), death
+// and respawn.
 
-export class Player extends Entity {
+import love from '../love/index.js';
+import lua from '../love/lua.js';
+import state from '../state.js';
+import Vector2 from '../vector2.js';
+import constants from '../constants.js';
+import DustPuff from '../effects/DustPuff.js';
+import Splash from '../effects/Splash.js';
+import GroundPoundBurst from '../effects/GroundPoundBurst.js';
+import SilhouetteGlow from '../effects/SilhouetteGlow.js';
+import TargetLock from '../systems/TargetLock.js';
+import WaterSystem from '../systems/WaterSystem.js';
+import PortalGun from '../systems/PortalGun.js';
+import WallContactPulse from './WallContactPulse.js';
+import Fireball from './Fireball.js';
+import Explosion from './Explosion.js';
+
+// How long, once the door-opening intro ends (state.introLocked flips
+// false), the rigid intro pose (arms/head — see drawFullBody's own
+// poseBlend) takes to ease back into whatever the normal pose would
+// be, rather than snapping there in one frame.
+const INTRO_POSE_TRANSITION_SECONDS = 0.6;
+const BLASTER_IN_USE_LINGER = 0.6; // seconds after a shot his blaster arm stays aimed (see isUsingBlaster)
+
+// Ground pound (see Player.update's own ground-pound bookkeeping, and
+// GROUND_POUND_POSE / Player.getGroundPoundSeatDrop further down).
+const GROUND_POUND_SETTLE_TICKS = 7;  // baseline (60fps) ticks the pose takes to sink down into its seated position at the start of a pound
+const GROUND_POUND_IMPACT_TICKS = 14; // ticks he stays sat on the ground after landing one, before standing back up
+const GROUND_POUND_SEAT_ADJUST = 0;   // world units added to the computed seat drop (positive = lower still) — fine-tuning only
+
+// Coyote time and jump buffering (see Player.pressJump) — the two little
+// graces most platformers give a jump press that's a moment off:
+//   COYOTE_FRAMES       how long after walking/falling off an edge he can
+//                       still jump as if he were on it (60fps ticks)
+//   JUMP_BUFFER_FRAMES  how long a press in mid-air is held, waiting: land
+//                       in that time and he jumps the moment he touches
+//                       down; otherwise it becomes the ground pound (so the
+//                       pound starts this much later than the press)
+//   COYOTE_MAX_DRIFT    how far (world units) he can have got from where he
+//                       left the surface and still coyote-jump off it —
+//                       past this (a portal, say) it's long gone
+const COYOTE_FRAMES = 6;
+const JUMP_BUFFER_FRAMES = 6;
+const COYOTE_MAX_DRIFT = 140;
+
+// Sun shading on the astronaut — the same treatment every planetoid
+// gets (see Planetoid.js's own getSunShadingShader), applied separately to
+// EACH piece of his rig (head, body, each arm, each boot): a lit side
+// facing the sun, falling off into shadow on the far side, with a soft
+// highlight on the lit side. Each piece is shaded as its own rounded
+// form, so he reads as a set of solid parts rather than one flat cutout.
+//
+// The numbers mirror Planetoid.js's: the shadow gradient is centered
+// shadowOffset of the way toward the sun and runs out over shadowReach
+// (both in units of the piece's own half-size); the highlight sits
+// highlightOffset toward the sun and is highlightSize across.
+//   strength   how much of that shadow is actually applied — 1 is the
+//              full planetoid treatment (far side nearly black), 0 none.
+//
+// HERO_SHADING_ENABLED is the one switch for all of it — the rig's
+// pieces AND the ball he curls into.
+const HERO_SHADING_ENABLED = true;
+
+const BODY_SHADING = {
+  strength: 0.28,
+  shadowOffset: 0.5,
+  shadowReach: 1.6,
+  overallDarken: 0.08,
+  highlightAlpha: 0.22,
+  highlightSize: 0.55,
+  highlightOffset: 0.48,
+};
+
+// One shader for every piece. It needs to know, for each pixel of
+// whichever image is being drawn, where that pixel sits relative to the
+// image's own center IN SCREEN SPACE — the rig rotates, scales and
+// mirrors its pieces every which way, and the light has to come from
+// the same direction on screen regardless. Rather than being told each
+// piece's transform, it recovers that from the image's own texture
+// coordinates: dFdx/dFdy say how the coordinates change from one screen
+// pixel to the next, and inverting that turns "this far from the middle
+// of the image" back into a direction and distance on screen. Anything
+// drawn without an image (plain shapes) has no such gradient and is
+// left untouched.
+let bodyShadingShader = null;
+function getBodyShadingShader() {
+  if (bodyShadingShader) return bodyShadingShader;
+  bodyShadingShader = love.graphics.newShader(`
+    extern vec2 lightDir;        // unit vector on screen, toward the sun
+    extern float strength;
+    extern float shadowOffset;
+    extern float shadowReach;
+    extern float overallDarken;
+    extern float highlightAlpha;
+    extern float highlightSize;
+    extern float highlightOffset;
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 texel = Texel(tex, uv) * color;
+
+      vec2 dx = dFdx(uv);
+      vec2 dy = dFdy(uv);
+      float det = dx.x * dy.y - dx.y * dy.x;
+      if (abs(det) < 1e-12) return texel;
+
+      // Screen-space offset of this pixel from the image's center, and
+      // the image's own half-width/half-height as screen-space vectors.
+      vec2 d = uv - vec2(0.5);
+      vec2 offset = vec2(dy.y * d.x - dy.x * d.y, dx.x * d.y - dx.y * d.x) / det;
+      vec2 halfW = vec2(dy.y, -dx.y) * 0.5 / det;
+      vec2 halfH = vec2(-dy.x, dx.x) * 0.5 / det;
+      float size = max(length(halfW), length(halfH));
+      if (size < 1e-6) return texel;
+      vec2 q = offset / size;   // -1..1 across the piece's longer side
+
+      float lit = clamp(1.0 - length(q - lightDir * shadowOffset) / shadowReach, 0.0, 1.0);
+      float shade = mix(1.0, lit, strength) * (1.0 - overallDarken * strength);
+
+      float h = clamp(1.0 - length(q - lightDir * highlightOffset) / highlightSize, 0.0, 1.0);
+      h = h * h * highlightAlpha;
+
+      vec3 rgb = texel.rgb * shade + vec3(1.0, 0.98, 0.92) * h * texel.a;
+      return vec4(rgb, texel.a);
+    }
+  `);
+  for (const name of ['strength', 'shadowOffset', 'shadowReach', 'overallDarken', 'highlightAlpha', 'highlightSize', 'highlightOffset']) {
+    bodyShadingShader.send(name, BODY_SHADING[name]);
+  }
+  return bodyShadingShader;
+}
+
+// Water bubbles: spawn just outside the player's own body, on whichever
+// side currently faces AWAY from the water planet's center, then travel
+// further outward along that same radial line, with a lazy angular
+// wobble, until reaching the water's own outer radius. Polar coordinates
+// (angle + r, relative to the water planet's center) because "outward
+// toward the surface" is a radial motion here — a player on the far side
+// of the core sees bubbles correctly head the opposite screen direction.
+const BUBBLE_SPAWN_CHANCE = 0.35; // per baseline (60fps) frame, while under BUBBLE_MAX_COUNT and submerged
+const BUBBLE_MAX_COUNT = 10;
+
+// Morph ball (ArrowDown to curl up, ArrowUp to stand back up — see
+// InputHandlers.js/GamePadInput.js's own calls into
+// enterBallMode/exitBallMode, and Player.drawBallMode for how it's
+// actually drawn). BALL_RADIUS_MULTIPLIER is deliberately the ONE
+// number behind both the drawn ball's own radius and his shorter
+// collision boundary — the ball's visible silhouette should always
+// exactly match where its actual collision is.
+const BALL_RADIUS_MULTIPLIER = 0.792; // 0.5 * 1.2 * 1.2 * 1.1
+const BALL_SPEED_MULTIPLIER = 2.1;    // 1.25 * 1.2 * 1.4
+
+// Curl-into-a-ball transition: two authored keyframes (see
+// BALL_MORPH_FRAME_1/2 near drawBallMorphPose) played in order on the
+// way in, reversed on the way out. this.isBall (and therefore
+// this.radius/ground speed) only flips at the very END of whichever
+// direction is playing — see Player.updateBallMorph.
+const BALL_MORPH_SEGMENT_TICKS = 8; // baseline (60fps) ticks each of the two keyframe blends takes
+
+// Teleport (Beam.js's own tryInteract) — a freeze-then-snap, not a
+// fade/cutscene: TELEPORT_OUT_TICKS is the pause before he vanishes
+// from the origin beam, with Player.getTeleportPulse's own scale/glow
+// blip playing out over it (ONLY this half gets the blip).
+// TELEPORT_IN_TICKS is the visually plain "arriving" pause right after
+// landing at the destination. Both in baseline (60fps) ticks.
+const TELEPORT_OUT_TICKS = 30;
+const TELEPORT_IN_TICKS = 30;
+
+// Brief post-arrival invincibility, so an enemy sitting near the beam
+// entrance can't get a free kill the instant he arrives somewhere new.
+// 120 ticks = 2s at 60fps.
+const INVINCIBLE_TICKS = 120;
+const INVINCIBLE_FLICKER_INTERVAL = 0.1; // seconds per blink phase
+
+// Death (Player.startDeath/updateDeath/respawn): how long he stays
+// gone — hidden and frozen where he died, his death burst playing out —
+// before reappearing at state.respawnPoint. Baseline (60fps) ticks.
+const DEATH_TICKS = 50;
+
+const BUBBLE_HEAD_GAP = 1.4;         // spawn distance from center, as a multiple of this.radius — clears his helmet instead of sitting on it
+const BUBBLE_FADE_DISTANCE = 20;     // world units of travel, just before reaching the water's own radius, that a bubble fades out over
+const BUBBLE_RISE_SPEED_MIN = 0.5;   // world units per baseline frame, radially outward
+const BUBBLE_RISE_SPEED_MAX = 1.1;
+const BUBBLE_WOBBLE_FREQ_MIN = 0.01; // radians per baseline frame the angular wobble oscillates at
+const BUBBLE_WOBBLE_FREQ_MAX = 0.03;
+const BUBBLE_WOBBLE_AMPLITUDE = 0.1; // radians of angular sway at full swing
+const BUBBLE_RADIUS_MIN = 2.5;
+const BUBBLE_RADIUS_MAX = 6;
+const BUBBLE_COLOR = [0.85, 0.97, 1.0];
+
+function newBubble(centerX, centerY, angle, startR, targetR) {
+  return {
+    centerX,
+    centerY,
+    baseAngle: angle,
+    r: startR,
+    targetR,
+    wobblePhase: Math.random() * Math.PI * 2,
+    wobbleFreq: BUBBLE_WOBBLE_FREQ_MIN + Math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
+    riseSpeed: BUBBLE_RISE_SPEED_MIN + Math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
+    radius: BUBBLE_RADIUS_MIN + Math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
+  };
+}
+
+// Down/Triangle only ENTER/EXIT ball mode on a clean press. Flip to
+// false to turn the ball off.
+const BALL_MODE_ENABLED = true;
+
+class Player {
+  static new(x, y) {
+    return new Player(x, y);
+  }
+
   constructor(x, y) {
-    super();
     this.pos = new Vector2(x, y);
+    this.prevPos = new Vector2(x, y);
     this.vel = new Vector2(0, 0);
-    // Overall size multiplier for the astronaut — scales BOTH the
-    // visual rig (via bodyScale below) and the collision circle
-    // (this.radius) together, so this one number is a genuine "make
-    // him bigger/smaller" knob rather than needing to keep two
-    // separately-tracked scale properties in sync by hand. 1 = current/
-    // default size. To preview him at 55% smaller: this.sizeMultiplier
-    // = 0.45 (that's "smaller BY 55%", i.e. 45% of the original size —
-    // if you actually meant "scaled TO 55% of original," use 0.55
-    // instead; tell me which you meant if this guess is wrong).
     this.sizeMultiplier = 1;
-    this.radius = PLAYER_RADIUS * this.sizeMultiplier;
+    this.radius = constants.PLAYER_RADIUS * this.sizeMultiplier;
+    // Snapshot of the normal (non-ball) radius — enterBallMode/exitBallMode
+    // toggle this.radius between this and baseRadius*BALL_RADIUS_MULTIPLIER.
+    this.baseRadius = this.radius;
+    this.isBall = false;
+    this.ballRollAngle = 0;
+    // Set by the pinball planet's own entry beam (see
+    // js/interiors/PinballInterior.js onEnter) to the PinballInterior
+    // instance he's currently inside, null otherwise. main.js checks this
+    // to swap out normal gravity/collision for PinballInterior.updateBall,
+    // and the input handlers route the jump button to
+    // PinballInterior.triggerJumpAction instead of an ordinary jump.
+    this.inPinball = null;
+    // null | "toBall" | "toHuman" — see enterBallMode/exitBallMode/
+    // updateBallMorph. morphElapsed is in baseline (60fps) ticks.
+    this.morphState = null;
+    this.morphElapsed = 0;
+
+    // Beam.js teleport (see startTeleport/updateTeleport below):
+    // isTeleporting is the one guard every other system checks.
+    this.isTeleporting = false;
+    this.teleportState = null;
+    this.teleportTimer = 0;
+    this.teleportOrigin = null;
+    this.teleportDestination = null;
+
+    // Post-arrival invincibility — ticks remaining.
+    this.invincibleTimer = 0;
+
+    // See startDeath/updateDeath/respawn.
+    this.isDying = false;
+    this.deathTimer = 0;
+
+    // Coyote time / jump buffering — see COYOTE_FRAMES and pressJump.
+    this.coyoteTimer = 0;
+    this.coyotePlanet = null;
+    this.coyotePos = null;
+    this.jumpBufferTimer = 0;
+
     this.onSurface = false;
-    this.onGround = false;
     this.currentPlanet = null;
-    this.currentInterior = null;
     this.lastInfluencePlanet = null;
     this.angle = 0;
-    // Rounded-rect equivalent of `angle` above — an arc-length position
-    // along the planet's perimeter (see RoundedRectPlanetoid), used only
-    // while this.currentPlanet.isRoundedRect. Set on landing by
-    // CollisionSystem, advanced by move() while walking.
     this.surfaceArcPos = 0;
-    this.mouthAngle = 0;
     this.facingDirection = 1;
     this.isGroundPounding = false;
-    this.mode = "space";
-    this.mazeCol = 14;
-    this.mazeRow = 15;
-    this.mazeDir = new Vector2(1, 0);
-    this.platformPos = null;
-    this.platformVel = new Vector2(0,0);
-    this.lastMoveTime = 0;
-    this.isTeleporting = false;
-    this.teleportTargetMode = null; // "maze", "platform", or "space"
-    this.teleportStartTime = 0;
-    this.teleportDuration = 900;
-    this.teleportScale = 1;
-    this.teleportGlow = 0;
-    this.isDying = false;
-    this.deathStartTime = 0;
-    this.deathDuration = 1200;
-    this.deathScale = 1;
-    this.deathRotation = 0;
-    this.deathAlpha = 1;
+    this.mode = 'space';
 
-    // ----------------------------
-    // BOOT SPRITE (used for platform/death — small stylized modes)
-    // ----------------------------
-    this.bootNaturalWidth = 232;
-    this.bootNaturalHeight = 312;
-    this.bootScale = 0.1;
-    // Final on-screen boot size is determined by the pre-scaled canvas
-    // built in initScaledAssets() (see scaledBootCanvas), not by these
-    // two natural-size fields directly — they're kept only as a record
-    // of the source PNG dimensions.
+    // Water planets never set onSurface — the player sinks straight
+    // through instead of landing — so this.submergedIn, recomputed fresh
+    // every frame in update(), is the only way to know "currently inside
+    // one of these" for water drag and the swim stroke in jump().
+    // waterDrag is much stronger than ordinary airborne DRAG — that's
+    // what makes sinking read as pushing through water. swimStrength is
+    // the outward-from-center impulse each jump press adds while submerged.
+    this.submergedIn = null;
+    this.waterDrag = 0.90;
+    // Terminal sink speed is roughly grav / (1-drag) ≈ 3.5 units/frame —
+    // swimStrength needs to clear that by a wide margin per stroke.
+    this.swimStrength = 16;
+    this.waterWalkSpeedMultiplier = 0.4; // walking the hard core at the bottom is still walking underwater
 
-    // ----------------------------
-    // FULL BODY SPRITE (used for the main planet-surface/space mode AND
-    // the maze mode)
-    // Offsets/joints are in each image's native pixel space — ported
-    // directly from the standalone astronaut prototype, since those
-    // values are what make the limbs line up anatomically.
-    // ----------------------------
+    // One-shot arm-wave played over swimStrokeDuration frames after each
+    // swim stroke (see jump()).
+    this.swimStrokeTimer = 0;
+    this.swimStrokeDuration = 18;
+
+    // Ground-pound visuals. groundPoundPoseTime: ticks spent in the
+    // current pound, for easing the pose down into place.
+    // groundPoundImpactTimer: ticks left of the "sat on the ground" beat
+    // after landing one. wasGroundPounding: last frame's isGroundPounding.
+    this.groundPoundPoseTime = 0;
+    this.groundPoundImpactTimer = 0;
+    this.wasGroundPounding = false;
+
+    this.bubbles = [];
+
+    this.isWalking = false;
+    this.walkTime = 0;
+    this.strideLength = 90;
+    this.lastWalkBobT = 0;
+    this.walkBobStrength = 3;
+
+    // Scales the ground-speed-carried horizontal jump velocity (see
+    // move()'s own groundMoveSpeedX and jump()'s use of it). 1.0 would be
+    // an exact carry; less is "jump friction".
+    this.jumpMomentumCarryScale = 0.3;
+    this.runSpeedMultiplier = 1.8;
+    // Running jumps clearly higher than standing ones without being too
+    // high once the dome's jumpStrength applies on every tile.
+    this.runJumpMultiplier = 1.2;
+    this.airControlAccel = 0.3;
+    // Also the hard ceiling jump()'s own momentum carry clamps to, pinned
+    // to the player's own max ground running speed — a jump carries and
+    // lets you maintain your ground speed in the air, it doesn't add to it.
+    this.airControlMaxSpeed = constants.PLAYER_LINEAR_SPEED * this.runSpeedMultiplier;
+    this.edgeFallCarryFraction = 0.35;
+    // How hard the player peels off a wall-climb shape (see
+    // TiledTerrain.js's buildRampClimbShape) when they stop actively
+    // climbing — applied along the current segment's own normal.
+    this.wallClimbDetachPush = constants.PLAYER_LINEAR_SPEED * 0.6;
+    // Which way (1 = the shape's "forward"/climbing direction, -1 = the
+    // reverse) the player was last moving while on a wall-climb shape's
+    // wall face or ceiling — see move()'s onClimbZone handling. null
+    // whenever not currently on either.
+    this.wallClimbDir = null;
+    // Which PLANET (TerrainShape) wallClimbDir was recorded against — its
+    // sign is only meaningful relative to THAT shape's own
+    // controlsReversed convention.
+    this.wallClimbDirPlanet = null;
+
+    // Wall jump: which wall (if any) was touched THIS FRAME, set fresh
+    // every frame by CollisionSystem.handlePlayerWallCollisions.
+    // wallJumpUpwardRatio is the vertical leg of an (1, ratio) launch
+    // vector before normalizing — 2 puts about 89% of launch speed into
+    // the upward component while still kicking off the wall.
+    this.touchingWall = null;
+    this.wallContactNormal = null;
+    this.wallJumpUpwardRatio = 2;
+
+    // Wall slide: while airborne, touching a wall, and holding the
+    // direction key INTO it, fall speed is capped to this.
+    this.wallSlideMaxFallSpeed = 2.5;
+    this.isWallSliding = false;
+
+    // Wall jump input lock: for wallJumpLockFrames after a wall jump,
+    // input back toward the wall just kicked off is ignored — otherwise
+    // air control immediately cancels the kick. wallJumpLockBlockedDir is
+    // which direction (-1/1) is currently locked out; null when none.
+    this.wallJumpLockFrames = 12;
+    this.wallJumpLockTimer = 0;
+    this.wallJumpLockBlockedDir = null;
+
+    // Time values are in SECONDS (love.timer.getTime())
+    this.mouseIdle = true;
+    this.mouseIdleThreshold = 2.0;         // seconds
+    this.mouseWheelSuppressDuration = 0.2; // seconds
+
+    this.pullTarget = null;
+    this.lockedTarget = null;
+    this.pullAccel = 0.85;
+    this.pullMaxSpeed = 18;
+    this.pullTangentialDamping = 0.12;
+
+    // Visual rig
     this.bodyScale = 0.1 * this.sizeMultiplier;
+    this.groundOffset = 250;
+    this.armSwingScale = 0.5;
+    this.maxAimFromForward = (90 + 5) * Math.PI / 180;
+    this.headLookScale = 0.6;
+    this.headPivotFraction = 0.9;
+    this.blasterMuzzleLength = 300;
+    this.blasterAngleOffset = -5 * Math.PI / 180;
+
     this.bodyPartsConfig = {
-      bodyY: 115, headY: -150,//-400,
+      bodyY: 115,
+      headY: -150,
       leftArmX: 136, leftArmY: 9, leftArmJointX: 73, leftArmJointY: 199,
       rightArmX: -186, rightArmY: -14, rightArmJointX: 119, rightArmJointY: 40,
       leftBootX: 111, leftBootY: 241, leftBootJointX: 83, leftBootJointY: 15,
-      rightBootX: -142, rightBootY: 241, rightBootJointX: 77, rightBootJointY: 15
+      rightBootX: -142, rightBootY: 241, rightBootJointX: 77, rightBootJointY: 15,
     };
-    this.walkTime = 0;
-    this.isWalking = false;
 
-    // How many pixels of actual surface travel make up one full leg
-    // swing cycle. The walk animation now advances based on real
-    // distance walked (see move()), not a flat per-frame amount — so
-    // legs/arms pendulate faster or slower in lockstep with how much
-    // ground he's actually covering. Lower = faster-looking stride.
-    this.strideLength = 90;
-    // Vertical walk bob — the body's effective height is lowest when
-    // both legs are angled apart (scissored mid-stride) and highest
-    // when either leg passes through vertical beneath it, same as a
-    // real walk cycle. See drawFullBody for how this gets applied.
-    this.walkBobStrength = 3;
-    // Tracks the walk-bob's own value frame to frame, so spawnWalkDust
-    // can detect the exact moment it crosses back above its "just
-    // planted" threshold, rather than sampling on a flat per-frame
-    // chance unrelated to actual footsteps.
-    this.lastWalkBobT = 0;
+    // How far above this.pos (world units) the very TOP of his visual
+    // helmet sits — derived from the numbers drawFullBody uses to place
+    // the head, so it stays correct if the rig's proportions change.
+    // CollisionSystem's handlePlayerWallCollisions uses this to give the
+    // player a vertical CAPSULE against walls/ceilings instead of a
+    // single circle centered near his feet.
+    const headImg = state.characterImages && state.characterImages.head;
+    let headH = 0;
+    if (headImg) headH = headImg.getHeight();
+    // -10: trims the capsule a little shorter than the helmet's own
+    // visual top edge, so it doesn't clip ceilings that look clear.
+    this.headReach = (this.groundOffset + Math.abs(this.bodyPartsConfig.headY)) * this.bodyScale
+      + headH * this.bodyScale * this.headPivotFraction
+      - 10;
 
-    // Arm swing amplitude relative to the leg swing amplitude (0.6,
-    // hardcoded below in drawFullBody). The right arm moves opposite
-    // its same-side leg, like a natural walking gait. (The left arm no
-    // longer uses this — it's dedicated to aiming, see below.)
-    this.armSwingScale = 0.5;
-
-    // How far (in the same raw joint-space units as bodyPartsConfig,
-    // multiplied by bodyScale) to shift the whole rig outward from the
-    // planet — away from this.pos — when drawing, so the boot soles
-    // land on the physical surface instead of the belt/origin doing so.
-    // Increase to lift the astronaut further off the surface, decrease
-    // to sink him back in. Tune this to taste once you see it in-game.
-    this.groundOffset = 250;
-
-    // How far past straight forward the blaster (left) arm is allowed
-    // to swing — up to and slightly past directly up/down, but never
-    // all the way around to point behind the character. 90° = exactly
-    // vertical; the extra amount is the "5 degrees past vertical"
-    // allowance.
-    this.maxAimFromForward = (90 + 5) * Math.PI / 180;
-
-    // Cached each frame by computeLeftArmAimAngle() while in "space"
-    // mode: the shoulder joint's world position and the actual
-    // (clamped) world angle the arm is currently pointing. shootFireball()
-    // reads these directly so shots always originate exactly where the
-    // gun barrel is visually aiming. aimRelativeAngle (the signed angle
-    // from "forward" to the clamped aim target) is what
-    // computeHeadLookTilt() reuses so the head can do a partial version
-    // of the same look direction.
+    // Aim cache
     this.aimShoulderPos = null;
     this.aimWorldAngle = 0;
     this.aimRelativeAngle = 0;
-    // this.pos AS OF the moment aimShoulderPos above was computed —
-    // recorded so shootFireball() can tell how far this.pos has moved
-    // since (computeLeftArmAimAngle runs during drawing, which happens
-    // AFTER shootFireball() within the same frame — see game.js's
-    // gameLoop — so this is always at least one frame behind by the
-    // time a shot actually fires). Re-anchoring the cached shoulder
-    // offset to the CURRENT this.pos at firing time, rather than firing
-    // from wherever the shoulder was a frame ago, matters most while
-    // pulling: this.pos accelerates continuously during a pull, and the
-    // early part of one often still curves in from residual launch
-    // velocity rather than moving in a straight line at the target, so
-    // the one-frame-old angle can be meaningfully wrong — enough to
-    // miss a small target even though everything LOOKED lined up.
     this.aimAnchorPos = null;
-
-    // How much of the arm's aim angle the head mimics when looking
-    // up/down at the aim target — 1.0 would match the arm exactly;
-    // lower values read as a more natural glance rather than a full
-    // swing. Tune to taste.
-    this.headLookScale = 0.6;
-
-    // Where within the head image, vertically, it pivots from — 0 = top
-    // of the image, 1 = bottom, 0.5 = dead center (the previous, only,
-    // behavior). A real head-tilt hinges from the neck rather than the
-    // middle, so once you're happy with headLookScale, try nudging this
-    // toward wherever the neck actually sits in head.png (probably
-    // somewhere in the 0.7–0.95 range). You'll likely want to re-check
-    // bodyPartsConfig.headY (how far the head sits from the body) at
-    // the same time, since changing the pivot shifts where the image
-    // lands relative to that anchor point.
-    this.headPivotFraction = 0.9;
-
-    // Distance from the shoulder joint to the muzzle tip, in the same
-    // raw joint-space units as bodyPartsConfig (multiplied by
-    // bodyScale). This is a guess — tune it once you see where
-    // fireballs actually spawn relative to the leftarm.png artwork.
-    this.blasterMuzzleLength = 300;
-
-    // Fine-tuning correction (radians), applied only at firing time —
-    // to both the muzzle position and the fired direction — in case
-    // the actual barrel opening in leftarm.png isn't perfectly aligned
-    // with the arm's computed aim direction. Does NOT affect the arm's
-    // visual rotation, only where/how the fireball launches. Nudge the
-    // sign/magnitude until shots visually leave from the barrel tip.
-    this.blasterAngleOffset = -5 * Math.PI / 180;
-
-    // Minimum time (ms) between shots while firing is held.
-    this.fireCooldown = 150;
-
-    // How strongly current left/right input leans a jump on
-    // SkyDomePlanetoid specifically (see getOutwardLaunchDirection) —
-    // weighted against a vertical component of 1.0 before
-    // normalizing, so this is roughly "how sideways" versus "how up"
-    // the jump reads. 0 = straight up regardless of input (old
-    // behavior); higher = more of a running-jump arc.
-    this.jumpHorizontalCarry = 0.6;
-    this.lastShotTime = 0;
-
-    // How much faster walking is while state.gamepadRunHeld is true
-    // (Square button) — multiplies PLAYER_LINEAR_SPEED directly in
-    // move()'s walking branches, so running speeds up everything that
-    // already scales off that value (footstep timing, dust frequency)
-    // for free, with no separate handling needed.
-    this.runSpeedMultiplier = 1.8;
-
-    // How much higher a jump launches while running (Square held) —
-    // a real, well-established platformer convention (a running jump
-    // going higher/farther than a standing one), and physically
-    // sensible too: momentum carrying into the jump. Deliberately more
-    // modest than runSpeedMultiplier above — jump height changes read
-    // as more dramatic per unit of multiplier than walking speed does,
-    // so a smaller boost here still feels clearly noticeable without
-    // tipping into "broken."
-    this.runJumpMultiplier = 1.3;
-
-    // Continuous mid-air horizontal steering (SkyDomePlanetoid gravity
-    // only — see move()'s airborne branch for why): per-frame
-    // acceleration while holding left/right, and a cap on how fast
-    // holding a direction can build vel.x up to. Deliberately modest —
-    // this is meant to read as "can nudge his arc a bit," not full
-    // in-air control comparable to ground walking.
-    this.airControlAccel = 0.3;
-    this.airControlMaxSpeed = 4;
-
-    // Scales down the horizontal velocity carried into a fall when
-    // walking off a SkyDomePlanetoid/JumpPlatform edge (see move()'s
-    // isSkyDome branch) — full PLAYER_LINEAR_SPEED read as an
-    // unnaturally strong "launch off a ramp," since it's roughly 14x
-    // GRAVITY_STRENGTH's own per-frame pull, so gravity took many
-    // frames to visually catch up and dominate the trajectory. A
-    // fraction still carries real, visible momentum (stepping off
-    // reads as a natural fall with a bit of forward drift, not an
-    // abrupt stop) without that launched-off-a-ramp look.
-    this.edgeFallCarryFraction = 0.35;
-
-    // ----------------------------
-    // PULL TARGET (right-click "pull star")
-    // ----------------------------
-    // this.pullTarget is a reference to whichever planetoid the player
-    // right-clicked on (null if not currently pulling). While set, and
-    // only in "space" mode, gameLoop applies a constant acceleration
-    // toward it instead of normal gravity (see applyPullForce below) —
-    // suspending gravity while pulling, rather than adding the two
-    // together, keeps the pull feeling like a deliberate, authoritative
-    // move rather than something fighting other nearby planets' pull.
-    // Cleared automatically on release, on landing, or if the target
-    // gets culled while out of range — never needs manual cleanup
-    // elsewhere.
-    this.pullTarget = null;
-    // ----------------------------
-    // this.lockedTarget (gamepad R1 "hard lock") is a reference to
-    // whichever planetoid/asteroid/goomba is currently locked on, or
-    // null. While set, it takes ABSOLUTE priority over every other aim
-    // source (even pullTarget) in computeLeftArmAimAngle below — the
-    // whole point is that the blaster persists pointing at it
-    // regardless of stick input, mouse position, or anything else.
-    // Validity (still exists, still on screen) is re-checked every
-    // frame in computeLeftArmAimAngle itself, which clears this the
-    // moment either check fails, rather than needing a separate
-    // per-frame update pass. See TargetLock.js for the actual
-    // candidate-gathering/selection logic, and tryLockTargetNext/
-    // tryLockTargetPrevious/clearLockTarget below for how this gets
-    // set/cleared.
-    this.lockedTarget = null;
-    // Acceleration per frame while pulling, and a speed cap so holding
-    // it indefinitely (or starting very close to the target) doesn't
-    // build unbounded velocity. Both are guesses — tune once you see it
-    // in motion.
-    this.pullAccel = 0.85;
-    this.pullMaxSpeed = 18;
-    // Fraction of velocity PERPENDICULAR to the pull direction removed
-    // each frame (see applyPullForce's own comment for the full
-    // reasoning) — without this, any sideways/tangential velocity
-    // present when a pull starts just persists, and a purely radial
-    // attractive force with nothing damping that tangential component
-    // is exactly what produces real orbital mechanics: circling the
-    // target for multiple loops while the pull only very gradually
-    // tightens the radius, rather than converging on it directly.
-    this.pullTangentialDamping = 0.12;
-
-    // How long (ms) the mouse can go without moving before we consider
-    // it "idle": facing stops following it (reverts to whatever
-    // movement set), and both arms switch to a synchronized sway
-    // instead of aim-tracking/counter-swing. Updated once per frame in
-    // updateOrientationAndFacing().
-    this.mouseIdleThreshold = 2000;
-    this.mouseIdle = true;
-    // How long (ms) after the last scroll-wheel zoom to also treat the
-    // mouse as idle — see updateOrientationAndFacing for why: rapid
-    // zoom changes shift the computed mouse WORLD position even though
-    // the cursor's screen position hasn't moved, which otherwise makes
-    // the aim-tracked arm/head jitter while scrolling.
-    this.mouseWheelSuppressDuration = 200;
-
-    // How much smaller the full-body rig renders inside the maze
-    // interior versus the main planet-surface/space mode. Tune to
-    // taste — 0.1 is roughly "fits in one tile."
-    this.mazeBodyScale = 0.1;
-
-    // Platform interior's own version of the above — deliberately a
-    // Platform interior's own version of the above — deliberately a
-    // SEPARATE tunable, not reusing mazeBodyScale. Platform mode does
-    // now get the same auto-zoom-on-entry treatment maze mode has (see
-    // game.js's own auto-zoom, gated on mode === "maze" OR "platform"),
-    // so this isn't compensating for a MISSING zoom the way it was
-    // before that was added — it's just its own separately-tuned value,
-    // since the two interior types don't need to look the same size
-    // relative to their own content. 0.3 (40% smaller than the first
-    // guess of 0.5) is still a starting guess, not verified-correct —
-    // tune further once you see it against the interior's actual tile
-    // size and the new zoom together.
-    this.platformBodyScale = 0.3;
-
-    // Platform interior walking/ladder speed, replacing the previous
-    // MOVE_SPEED*60 (30 px/frame) used there — roughly 6x
-    // PLAYER_LINEAR_SPEED's own space-mode walking speed, tuned for a
-    // small boot-only sprite and looking absurdly fast once scaled up
-    // to the full rig. This is closer to space-mode's own walking feel.
-    this.platformMoveSpeed = 6;
-
-    // Platform-mode tile-collision half-width/half-height — DECOUPLED
-    // from this.radius (space-mode's own collision size, which the old
-    // boot-only version of this reused via this.radius * 0.4, coupling
-    // the platform collision box to a completely unrelated mode's own
-    // scale). Kept at the same starting magnitude as that old value
-    // (30 * 0.4 = 12) rather than deriving a new one proportional to
-    // platformBodyScale above — I can't verify a "correct" derived size
-    // against the interior's actual tile size from here, and getting it
-    // wrong risks making collision feel too loose/imprecise, which
-    // seemed like the worse failure mode than a possible visual/
-    // collision size mismatch (worth checking once you see it — this
-    // is a genuine, deliberately separate tunable specifically so
-    // visual and collision size CAN be adjusted independently if they
-    // end up not matching).
-    this.platformHalfExtent = 12;
-
-    // How long (ms) without a successful tile-hop before the maze legs/
-    // head settle back to a neutral standing pose, instead of freezing
-    // mid-stride forever. Reuses this.lastMoveTime, which move()'s maze
-    // branch already updates on every hop.
-    this.mazeMoveIdleThreshold = 300;
-
-    // Brief invincibility window after teleporting into/out of the
-    // maze, so an enemy sitting near the beam entrance can't get a free
-    // kill the instant he arrives somewhere new. Set at the end of
-    // enterMazeMode()/exitMazeMode(). startDeath() checks isInvincible()
-    // and simply no-ops while it's active — centralized there rather
-    // than in each individual collision check, so it automatically
-    // covers every current and future cause of death, not just ghosts.
-    // draw() flickers him while it's in effect so it's visibly
-    // communicated, not just a silent grace period.
-    this.invincibleDuration = 2000; // ms
-    this.invincibleUntil = 0;
-
-    // ----------------------------
-    // PRE-SCALED SPRITE CACHE (perf)
-    // ----------------------------
-    // Every body part gets rendered ONCE to an offscreen canvas, instead
-    // of being resampled by drawImage from full source resolution every
-    // single frame. This is the same trick Planetoid.js uses for its
-    // texture. Built lazily on first draw() call, once we know the
-    // images have actually loaded.
-    //
-    // Baked at a resolution higher than "zoom = 1" needs — enough to
-    // stay crisp at state.zoomMax (see game.js) — so that zooming IN
-    // never has to upscale a low-res bitmap (blurry). Zooming out just
-    // downscales a higher-res one, which always looks clean. This means
-    // we never need to rebuild the cache while the player is actively
-    // zooming, which would reintroduce per-frame cost.
-    //
-    // Each cached entry is { canvas, displayWidth, displayHeight }:
-    // `canvas` is the (higher-res) baked bitmap; displayWidth/Height are
-    // the correct WORLD-SPACE size to actually draw it at (i.e. what its
-    // size would be at zoom=1) — draws always pass these explicitly to
-    // drawImage rather than relying on the canvas's own pixel size.
-    // This same cache is reused for both planet-surface/space mode and
-    // maze mode; maze mode just applies an additional mazeBodyScale
-    // shrink as an outer transform in draw().
-    //
-    // NOTE: if you ever change bodyScale or bootScale after construction,
-    // call this.invalidateScaledAssets() so these get rebuilt at the
-    // new size.
-    this.scaledPartsReady = false;
-    this.scaledParts = {};        // partKey -> { canvas, displayWidth, displayHeight }, at bodyScale
-    this.scaledBootCanvas = null; // { canvas, displayWidth, displayHeight }, at bootScale
   }
 
-  invalidateScaledAssets() {
-    this.scaledPartsReady = false;
-    this.scaledParts = {};
-    this.scaledBootCanvas = null;
+  // ----------------------------------------------------------------
+  // Morph ball
+  // ----------------------------------------------------------------
+
+  // Whether he's riding a cannon: loaded in one, or fired from one and
+  // still on the way (see js/world/Cannon.js). He can't do anything at
+  // all then — it's purely a ride.
+  isCannonRiding() {
+    return this.inCannon != null || this.cannonFlight != null;
   }
 
-  // Bakes img at `scale` (its correct world-space size, i.e. size at
-  // zoom=1) but rasterizes it internally at `scale * resolutionMultiplier`
-  // pixels, so it stays crisp when the caller later draws it larger
-  // (zoomed in) via the canvas' own scale transform. Returns both the
-  // baked canvas and the world-space size it should actually be drawn
-  // at, since those now differ.
-  makeScaledSprite(img, scale, resolutionMultiplier = 1) {
-    const displayWidth = Math.max(1, img.naturalWidth * scale);
-    const displayHeight = Math.max(1, img.naturalHeight * scale);
-    const bakeWidth = Math.max(1, Math.round(displayWidth * resolutionMultiplier));
-    const bakeHeight = Math.max(1, Math.round(displayHeight * resolutionMultiplier));
-    const canvas = document.createElement('canvas');
-    canvas.width = bakeWidth;
-    canvas.height = bakeHeight;
-    canvas.getContext('2d').drawImage(img, 0, 0, bakeWidth, bakeHeight);
-    return { canvas, displayWidth, displayHeight };
+  // Starts the curl-in ANIMATION — this.isBall itself doesn't flip until
+  // updateBallMorph finishes playing it. Ignored mid-transition, while
+  // already a ball, or while talking to an NPC.
+  enterBallMode() {
+    if (!BALL_MODE_ENABLED) return;
+    if (this.isBall || this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) return;
+    if (this.isCannonRiding()) return;
+    if (state.vatsActive) return; // in V.A.T.S. he only picks a target and pulls to it
+    this.morphState = 'toBall';
+    this.morphElapsed = 0;
+    // Curling up mid ground pound calls the pound off (a ball doesn't
+    // pound) — he just falls as a ball.
+    this.isGroundPounding = false;
   }
 
-  initScaledAssets() {
-    const images = state.characterImages;
-    // How much extra resolution to bake in, beyond zoom=1, so zooming
-    // in never has to upscale a low-res bitmap. Falls back to 2.5 (the
-    // current ZOOM_MAX in game.js) if state.zoomMax isn't set for some
-    // reason, so this degrades gracefully rather than baking too small.
-    const resMultiplier = Math.max(1, state.zoomMax || 2.5);
+  // Instantly becomes a ball — no curl-in animation, no guards — for
+  // the one case where he should already BE a ball the moment he
+  // arrives: the pinball planet's own entry beam (PinballInterior.onEnter).
+  forceBallMode() {
+    this.isBall = true;
+    this.radius = this.baseRadius * BALL_RADIUS_MULTIPLIER;
+    this.morphState = null;
+    this.morphElapsed = 0;
+  }
 
-    if (images) {
-      for (const key of ['body', 'head', 'leftarm', 'rightarm', 'leftboot', 'rightboot']) {
-        const img = images[key];
-        if (img && img.complete && img.naturalWidth > 0) {
-          this.scaledParts[key] = this.makeScaledSprite(img, this.bodyScale, resMultiplier);
-        }
+  // Starts the stand-back-up animation, played in REVERSE.
+  exitBallMode() {
+    if (!this.isBall || this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) return;
+    if (state.vatsActive) return;
+    if (this.inPinball) return; // he's the pinball until he drains
+    if (this.isCannonRiding()) return; // curled up for the whole ride
+    this.morphState = 'toHuman';
+    this.morphElapsed = 0;
+  }
+
+  // Advances whichever transition (if any) is currently playing, and
+  // flips the functional isBall/radius state the instant it completes.
+  updateBallMorph(ts) {
+    if (!this.morphState) return;
+    this.morphElapsed += ts;
+    if (this.morphElapsed >= BALL_MORPH_SEGMENT_TICKS * 2) {
+      if (this.morphState === 'toBall') {
+        this.isBall = true;
+        this.radius = this.baseRadius * BALL_RADIUS_MULTIPLIER;
+      } else {
+        this.isBall = false;
+        this.radius = this.baseRadius;
       }
+      this.morphState = null;
+      this.morphElapsed = 0;
     }
-    if (state.bootImage && state.bootImage.complete && state.bootImage.naturalWidth > 0) {
-      this.scaledBootCanvas = this.makeScaledSprite(state.bootImage, this.bootScale, resMultiplier);
-    }
-    this.scaledPartsReady = true;
   }
 
-  // ----------------------------
-  // BLASTER (LEFT ARM) AIMING
-  // ----------------------------
-  // Computes the local rotation to feed into drawLimb for the left arm
-  // so that — after accounting for the character's current orientation
-  // on the planet and the left/right mirror flip — the arm visually
-  // points at the mouse cursor in world space, clamped so it can swing
-  // up to just past straight up/down but never point behind him.
-  //
-  // Two things make this trickier than a plain "aim at target" formula:
-  //  1. "Forward" itself flips to the opposite world angle when the rig
-  //     is mirrored (facing left) — see the mirror comment in draw().
-  //  2. Because that mirror is a REFLECTION (not a rotation), a local
-  //     rotation applied before it doesn't just get negated — it gets
-  //     reflected. So converting "desired world angle" back into the
-  //     local rotation parameter needs different math on each side.
-  computeLeftArmAimAngle(orientation, dirSign, originPos) {
-    const cfg = this.bodyPartsConfig;
-    const s = this.bodyScale;
-    const cosO = Math.cos(orientation);
-    const sinO = Math.sin(orientation);
+  // ----------------------------------------------------------------
+  // Teleport (Beam.js)
+  // ----------------------------------------------------------------
 
-    // Mirror-aware shoulder world position: local x (offsetX) flips
-    // sign under the mirror, local y (offsetY) does not — same rule
-    // drawLimb relies on implicitly via the outer ctx transform.
-    const offsetX = cfg.leftArmX * dirSign;
-    const offsetY = cfg.leftArmY;
-    const wx = offsetX * cosO - offsetY * sinO;
-    const wy = offsetX * sinO + offsetY * cosO;
-    const shoulderX = originPos.x + wx * s;
-    const shoulderY = originPos.y + wy * s;
-
-    // "Forward" flips to the opposite world angle when mirrored, since
-    // the whole rig reflects about the vertical (radial, up/down)
-    // axis. Computed here (rather than only where it was previously
-    // used, further below) so the gamepad-idle fallback right below
-    // can also use it as its default aim direction.
-    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
-
-    // Re-checked every frame — the moment a lock stops being valid
-    // (destroyed, or scrolled out of the viewport), it's cleared here
-    // and this frame just falls through to the normal aim priority
-    // chain below instead, rather than needing a separate per-frame
-    // watcher elsewhere.
-    if (this.lockedTarget && !isValidLockTarget(this.lockedTarget)) {
-      this.lockedTarget = null;
-    }
-
-    // While actively pulling toward a planet, aim at the pull target's
-    // actual world position instead of the mouse — the beam in
-    // PullBeam.js originates from this same aimShoulderPos, so this is
-    // what keeps the blaster visually pointing along the beam rather
-    // than wherever the mouse happens to be hovering (which can easily
-    // drift away from the target once a pull is already underway).
-    let targetWorldX, targetWorldY;
-    if (this.lockedTarget) {
-      // Absolute top priority — even above pullTarget. A hard lock
-      // means the blaster persists pointing at this object no matter
-      // what else is going on; the right stick, mouse, and (unless
-      // it's pulling toward this SAME object — see L2's own handling
-      // in gamepadInput.js) pulling itself all get overridden while
-      // this is set.
-      targetWorldX = this.lockedTarget.pos.x;
-      targetWorldY = this.lockedTarget.pos.y;
-    } else if (this.pullTarget) {
-      targetWorldX = this.pullTarget.pos.x;
-      targetWorldY = this.pullTarget.pos.y;
-    } else if (state.gamepadAimActive) {
-      // The right stick gives a DIRECTION (normalized dx/dy), not a
-      // world position — atan2 below only cares about the direction
-      // from shoulder to target, not the distance, so projecting an
-      // arbitrary point far out along that direction works exactly
-      // the same as a real target position would.
-      targetWorldX = shoulderX + state.gamepadAimX * 1000;
-      targetWorldY = shoulderY + state.gamepadAimY * 1000;
-    } else if (state.gamepadIsActiveDevice) {
-      // Gamepad is the player's current input device, but the right
-      // stick itself is centered right now — falling through to the
-      // mouse fallback below would be wrong here. For a gamepad-only
-      // player the mouse cursor typically sits wherever it started
-      // (often near screen-center, which the camera keeps close to the
-      // player's own world position), making the shoulder-to-mouse
-      // vector tiny and numerically unstable. That instability was the
-      // actual cause of fireballs occasionally firing straight up
-      // despite the blaster visually appearing to point forward: the
-      // arm's VISUAL pose (natural sway, gated by mouseIdle) looked
-      // fine, but aimWorldAngle underneath was quietly still being
-      // computed from that degenerate mouse position regardless, since
-      // aimWorldAngle is deliberately kept accurate every frame even
-      // while the arm itself is just swaying (see where this method is
-      // called from drawFullBody). Defaulting to straight ahead here
-      // fixes the actual number fed to shootFireball()/the aim
-      // raycast, not just the arm's visual pose.
-      targetWorldX = shoulderX + Math.cos(forwardAngle) * 1000;
-      targetWorldY = shoulderY + Math.sin(forwardAngle) * 1000;
-    } else {
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: shoulderX, y: shoulderY };
-      targetWorldX = mouse.x / zoom + cam.x;
-      targetWorldY = mouse.y / zoom + cam.y;
-    }
-
-    const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
-
-    // Signed angle from forward to target, normalized to (-π, π]
-    let relative = Math.atan2(
-      Math.sin(targetAngle - forwardAngle),
-      Math.cos(targetAngle - forwardAngle)
-    );
-    // A hard lock bypasses the forward-cone clamp entirely — this is
-    // the actual fix for two symptoms that both trace back to the same
-    // cause: shots not going where the lock visually indicated, and
-    // repeated L1/R1 presses oscillating between just two objects
-    // instead of cycling through everyone in view. Both shootFireball()
-    // and tryLockTargetNext()'s own "next clockwise" search read
-    // this.aimWorldAngle directly, trusting it to be the TRUE angle to
-    // the locked target — but whenever that angle sat outside
-    // maxAimFromForward of wherever "forward" currently was, clamping
-    // pinned aimWorldAngle to the edge of that cone instead. Firing
-    // then went wherever the cone's edge pointed, not the target itself
-    // (looking "stale," as if using the target's position from whenever
-    // it was first locked, since the pinned angle barely moved frame to
-    // frame) — and cycling used that same wrong, barely-moving angle as
-    // its search's starting point, so successive presses kept
-    // re-finding whichever two candidates happened to straddle the
-    // cone's edge rather than sweeping around the whole group. A hard
-    // lock is a deliberate targeting mode, not normal free-aim, so it
-    // makes sense for it to ignore this arm-range constraint altogether
-    // rather than working around it.
-    if (!this.lockedTarget) {
-      relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
-    }
-    const clampedTargetAngle = forwardAngle + relative;
-
-    // Cache for shootFireball() (so shots spawn exactly where the arm
-    // is visually pointing this frame) and for computeHeadLookTilt()
-    // (so the head can do a partial version of the same "look toward"
-    // rotation).
-    this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
-    this.aimWorldAngle = clampedTargetAngle;
-    this.aimRelativeAngle = relative;
-    this.aimAnchorPos = this.pos.clone();
-
-    // Raycast from the muzzle tip, along the actual firing angle (the
-    // same formula shootFireball() itself uses for a real shot's
-    // direction), to find whatever the aim indicator should rest on
-    // and whatever L2 (gamepad) should be able to pull toward — see
-    // findNearestOccluder's own comment. Cached here (not recomputed
-    // separately by AimIndicator.js or gamepadInput.js) so both of
-    // those always agree on exactly the same target.
-    const fireAngle = clampedTargetAngle + this.blasterAngleOffset;
-    const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
-    const muzzleX = shoulderX + Math.cos(fireAngle) * muzzleDist;
-    const muzzleY = shoulderY + Math.sin(fireAngle) * muzzleDist;
-    const aimResult = findNearestOccluder(muzzleX, muzzleY, fireAngle);
-    this.aimTargetPoint = aimResult.point;
-    this.aimTargetObject = aimResult.object;
-
-    return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
+  // Starts the teleport sequence toward another Beam's own planted base —
+  // called from Beam.tryInteract. origin: the beam he's actually standing
+  // at (used only for getTeleportPulse's own glow color).
+  startTeleport(origin, destination) {
+    if (this.isTeleporting || this.isDying || this.morphState || state.dialogueActive) return;
+    if (this.isCannonRiding()) return;
+    if (!destination) return;
+    this.isTeleporting = true;
+    this.teleportState = 'out';
+    this.teleportTimer = TELEPORT_OUT_TICKS;
+    this.teleportOrigin = origin;
+    this.teleportDestination = destination;
+    this.vel.x = 0;
+    this.vel.y = 0;
   }
 
-  // Converts a desired WORLD-space angle into the local rotation
-  // parameter drawLimb (or a head/other part's own ctx.rotate) expects,
-  // accounting for the left/right mirror. Because that mirror is a
-  // REFLECTION (not a rotation), this isn't just a sign flip — see the
-  // comment on computeLeftArmAimAngle above for why.
-  worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign) {
-    if (dirSign > 0) {
-      return desiredWorldAngle - orientation;
-    }
-    return (orientation + Math.PI) - desiredWorldAngle;
-  }
+  // Advances the freeze-then-snap sequence. The position swap happens
+  // the instant the "out" pause reaches zero: he lands at the
+  // destination beam's own PLANTED BASE, offset outward by his own
+  // radius along the beam's facing direction, then onSurface/
+  // currentPlanet/touchingWall are cleared so gravity/landing re-acquire
+  // fresh from the new position next frame, and the post-arrival
+  // invincibility window starts. A short "in" pause follows before
+  // isTeleporting clears and normal input resumes.
+  updateTeleport(ts) {
+    if (!this.teleportState) return;
+    this.teleportTimer -= ts;
+    if (this.teleportTimer > 0) return;
 
-  // ----------------------------
-  // HEAD LOOK TILT
-  // ----------------------------
-  // Tilts the head partway toward the same clamped aim target the
-  // blaster arm uses (computeLeftArmAimAngle, called earlier this frame
-  // — this reads its cached aimRelativeAngle rather than recomputing
-  // anything), scaled down by headLookScale so it reads as a natural
-  // glance up/down rather than a full arm-like swing. headLookScale of
-  // 1.0 would exactly match the arm's aim angle; lower values glance
-  // less. Returns 0 (straight ahead) when aimRelativeAngle hasn't been
-  // set yet.
-  computeHeadLookTilt(orientation, dirSign) {
-    const forwardAngle = dirSign > 0 ? orientation : orientation + Math.PI;
-    const desiredWorldAngle = forwardAngle + this.headLookScale * this.aimRelativeAngle;
-    return this.worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign);
-  }
-
-  // ----------------------------
-  // FIRING
-  // ----------------------------
-  // Spawns a Fireball from the blaster's muzzle tip, using this frame's
-  // cached aim (see computeLeftArmAimAngle). Only fires while in
-  // "space" mode (the main planet-surface/flight gameplay), respects a
-  // cooldown, and does nothing while dying/teleporting or before the
-  // first aim has been computed.
-  shootFireball() {
-    if (this.isDying || this.isTeleporting) return;
-    if (this.mode !== "space" && this.mode !== "platform") return;
-
-    const now = Date.now();
-    if (now - this.lastShotTime < this.fireCooldown) return;
-
-    if (this.mode === "platform") {
-      // No free-aim concept exists in a tile-based interior (no
-      // established mouse/stick-look mechanism here at all, unlike
-      // space mode) — fires straight in whichever direction he's
-      // currently facing instead, the simplest, most natural fit for a
-      // side-view platformer. This is a genuinely NEW capability
-      // (shooting was previously blocked outright in this mode via the
-      // mode guard above), so it's a reasonable starting design, not
-      // something verified against actual platform-interior content —
-      // I haven't confirmed fireball-vs-blob-monster collision is wired
-      // up in CollisionSystem.js, so a shot may currently just pass
-      // through them harmlessly until that's checked.
-      this.lastShotTime = now;
-      const angle = this.facingDirection < 0 ? Math.PI : 0;
-      const muzzleDist = this.blasterMuzzleLength * this.platformBodyScale;
-      const tipX = this.pos.x + Math.cos(angle) * muzzleDist;
-      const tipY = this.pos.y;
-      state.fireballs.push(new Fireball(tipX, tipY, angle));
-      state.audioManager.playFireball();
-      return;
-    }
-
-    if (!this.aimShoulderPos) return;
-    this.lastShotTime = now;
-
-    // aimShoulderPos/aimWorldAngle were computed during the PREVIOUS
-    // frame's drawing pass (see aimAnchorPos's own comment for why),
-    // so this.pos may have moved since — re-anchor the cached shoulder
-    // offset to wherever this.pos actually is right now, rather than
-    // firing from where the shoulder was a frame ago.
-    const anchor = this.aimAnchorPos || this.pos;
-    const shoulderX = this.aimShoulderPos.x + (this.pos.x - anchor.x);
-    const shoulderY = this.aimShoulderPos.y + (this.pos.y - anchor.y);
-
-    // For a hard lock or an active pull, there's a known, LIVE target
-    // position worth aiming at exactly, rather than trusting the
-    // previous frame's cached angle — this is what actually fixes
-    // shots drifting off a small target while pulling toward it (the
-    // scenario most likely to have moved meaningfully since last
-    // frame). Mouse/stick aim has no such live position to re-derive
-    // from (the mouse didn't move just because the player did), so
-    // those keep using the cached angle as before.
-    let angle;
-    if (this.lockedTarget) {
-      // Deliberately excludes blasterAngleOffset below — see that
-      // property's own comment: it's a permanent few-degree visual
-      // fudge so the fireball appears to leave from the barrel opening
-      // in leftarm.png, tuned for ordinary free-aim where the player
-      // judges "does this look right" by eye. Applied to an actual
-      // hard lock, that same bias becomes a real miss: its linear
-      // deviation scales with distance (~8.7% of range at 5°), which a
-      // close/large target's own radius usually absorbs but a distant
-      // or small one often can't — exactly the intermittent "off by a
-      // few degrees" pattern this exists to fix. A lock's whole point
-      // is guaranteed centering, so it gets the true angle, unmodified.
-      angle = Math.atan2(this.lockedTarget.pos.y - shoulderY, this.lockedTarget.pos.x - shoulderX);
-    } else if (this.pullTarget) {
-      angle = Math.atan2(this.pullTarget.pos.y - shoulderY, this.pullTarget.pos.x - shoulderX) + this.blasterAngleOffset;
-    } else {
-      angle = this.aimWorldAngle + this.blasterAngleOffset;
-    }
-
-    const muzzleDist = this.blasterMuzzleLength * this.bodyScale;
-    const tipX = shoulderX + Math.cos(angle) * muzzleDist;
-    const tipY = shoulderY + Math.sin(angle) * muzzleDist;
-
-    state.fireballs.push(new Fireball(tipX, tipY, angle));
-    state.audioManager.playFireball();
-    // Firing is one of the two actions that immediately ends V.A.T.S.
-    // (the other is a successful pull — see trySelectPullTarget below)
-    // — set here, at the point a shot actually fires, rather than in
-    // gamepadInput.js's R2 handling, since that only INITIATES the
-    // call each frame and has no way to know whether this cooldown
-    // check above actually let a shot through.
-    state.vatsActive = false;
-  }
-
-  // ----------------------------
-  // PULL TARGET (right-click "pull star")
-  // ----------------------------
-  // Converts the current mouse position to world space (same approach
-  // computeLeftArmAimAngle already uses) and checks it against every
-  // planetoid — circular ones via a plain distance-to-center check,
-  // the rounded-rect one via its own containsPoint(), since it isn't
-  // truly circular. On a hit: sets pullTarget, and if currently
-  // grounded, launches off the current planet with a real jump-strength
-  // kick so the pull can actually take hold immediately (see below for
-  // why that launch matters, not just a bare onSurface flip).
-  //
-  // explicitTarget, if given, skips the mouse-position lookup entirely
-  // and uses that object instead — this is how gamepadInput.js's L2
-  // handler reuses this same method with the raycast-derived
-  // aimTargetObject rather than duplicating everything below it. Still
-  // validated the same way an explicit target STILL has to actually be
-  // a current, pullable planetoid (in state.planetoids, not
-  // isPullExempt) — the raycast that produced aimTargetObject also
-  // considers asteroids as occluders, which were never valid pull
-  // targets even via mouse, so this guards against pulling one of
-  // those in by mistake.
-  trySelectPullTarget(explicitTarget = null) {
-    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
-
-    let best = null;
-    if (explicitTarget) {
-      if (state.planetoids.includes(explicitTarget) && !explicitTarget.isPullExempt) {
-        best = explicitTarget;
+    if (this.teleportState === 'out') {
+      const destination = this.teleportDestination;
+      if (destination) {
+        const dirX = Math.cos(destination.angle), dirY = Math.sin(destination.angle);
+        this.pos.x = destination.pos.x + dirX * this.radius;
+        this.pos.y = destination.pos.y + dirY * this.radius;
+        // Also re-anchor prevPos to the SAME spot, so this frame doesn't
+        // look like one huge sweep from the origin beam to here to the
+        // swept collision checks.
+        this.prevPos = this.pos.clone();
       }
-    } else {
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
-      const worldX = mouse.x / zoom + cam.x;
-      const worldY = mouse.y / zoom + cam.y;
-
-      let bestDistSq = Infinity;
-      for (const planet of state.planetoids) {
-        if (planet.isPullExempt) continue; // e.g. JumpPlatform - jump-only, never a valid pull target
-        let hit;
-        if (planet.isRoundedRect) {
-          hit = typeof planet.containsPoint === 'function' && planet.containsPoint(worldX, worldY);
-        } else {
-          const dx = worldX - planet.pos.x;
-          const dy = worldY - planet.pos.y;
-          hit = (dx * dx + dy * dy) <= planet.radius * planet.radius;
-        }
-        if (!hit) continue;
-        const distSq = (worldX - planet.pos.x) ** 2 + (worldY - planet.pos.y) ** 2;
-        if (distSq < bestDistSq) {
-          bestDistSq = distSq;
-          best = planet;
-        }
-      }
-    }
-
-    if (best) {
-      // If currently standing on something, launch off it exactly like
-      // a normal jump does (same JUMP_STRENGTH kick, same direction —
-      // straight out from the planet's center). Without this, onSurface
-      // flips to false but position doesn't move at all this instant,
-      // so the very next landing-collision check (which still runs
-      // every frame regardless of pulling) finds him still within
-      // landing range of the SAME planet and immediately re-catches
-      // him before the pull force has had any real distance to work
-      // with. The jump kick gives him genuine separation in the first
-      // frame; applyPullForce() then bends that trajectory toward the
-      // target over subsequent frames.
-      if (this.onSurface && this.currentPlanet) {
-        const launchDir = this.getOutwardLaunchDirection();
-        this.vel = launchDir.multiply(JUMP_STRENGTH);
-      }
-      this.pullTarget = best;
       this.onSurface = false;
       this.currentPlanet = null;
-      // A successful pull is the other of the two actions that
-      // immediately ends V.A.T.S. (the other is firing — see
-      // shootFireball above) — set here, inside the `if (best)` branch,
-      // since this method can also just no-op if no valid target was
-      // found (explicitTarget invalid, or nothing under the mouse),
-      // and V.A.T.S. should only end on an ACTUAL pull, not merely an
-      // attempt.
-      state.vatsActive = false;
+      this.touchingWall = null;
+      this.wallContactNormal = null;
+      this.invincibleTimer = INVINCIBLE_TICKS;
+      this.teleportState = 'in';
+      this.teleportTimer = TELEPORT_IN_TICKS;
+      // Optional extension point for a destination that needs to do more
+      // than just "stand him here" — e.g. the pinball planet's own entry
+      // beam, whose destination.onArrive curls him into a ball.
+      if (destination && destination.onArrive) destination.onArrive(this);
+    } else {
+      this.isTeleporting = false;
+      this.teleportState = null;
+      this.teleportOrigin = null;
+      this.teleportDestination = null;
     }
   }
 
-  clearPullTarget() {
-    this.pullTarget = null;
-  }
-
-  // ----------------------------
-  // HARD LOCK (gamepad R1 = next/clockwise, L1 = previous/counter-
-  // clockwise, circle = release)
-  // ----------------------------
-  // Both cycle from wherever the blaster is currently aimed
-  // (this.aimWorldAngle — kept accurate every frame regardless of
-  // source, so this works whether there's no lock yet, per the
-  // first-press case starting from whatever the normal aim system
-  // currently has it pointed at, or an existing lock, since
-  // aimWorldAngle would already equal the angle to the current
-  // lockedTarget by the time either of these runs again). See
-  // TargetLock.js's selectNextLockTarget/selectPreviousLockTarget for
-  // the actual candidate-gathering/sorting logic — the two are mirror
-  // images of each other, so in the common case a single R1 press
-  // followed by a single L1 press (or vice versa) lands back on
-  // whatever was locked before, reading as a genuine undo.
-  tryLockTargetNext() {
-    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
-    const originPos = this.aimShoulderPos || this.pos;
-    const referenceAngle = this.aimWorldAngle ?? 0;
-    this.lockedTarget = selectNextLockTarget(this.lockedTarget, referenceAngle, originPos);
-  }
-
-  tryLockTargetPrevious() {
-    if (this.mode !== "space" || this.isDying || this.isTeleporting) return;
-    const originPos = this.aimShoulderPos || this.pos;
-    const referenceAngle = this.aimWorldAngle ?? 0;
-    this.lockedTarget = selectPreviousLockTarget(this.lockedTarget, referenceAngle, originPos);
-  }
-
-  clearLockTarget() {
-    this.lockedTarget = null;
-  }
-
-  // Called from gameLoop INSTEAD OF normal gravity while pullTarget is
-  // set (see the comment on pullTarget in the constructor for why).
-  // Constant acceleration toward the target's current center — not
-  // distance-scaled like gravity — so it reads as a deliberate pull
-  // rather than a weak ambient force, with a speed cap so it can't
-  // build unbounded velocity if held a long time.
-  applyPullForce() {
-    if (this.onSurface) { this.pullTarget = null; return; }
-    if (!this.pullTarget) return;
-    if (!state.planetoids.includes(this.pullTarget)) {
-      // Target drifted out of the active cell neighborhood and got
-      // culled while still far away — let the player keep whatever
-      // velocity they already had rather than erroring or snapping.
-      this.pullTarget = null;
-      return;
-    }
-
-    const dx = this.pullTarget.pos.x - this.pos.x;
-    const dy = this.pullTarget.pos.y - this.pos.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 1e-6) return;
-
-    const dirX = dx / dist, dirY = dy / dist;
-
-    // Split current velocity into a RADIAL component (along dirX/dirY,
-    // toward the target) and whatever's left over — the TANGENTIAL
-    // (perpendicular/sideways) component — and damp only that second
-    // part. A plain "keep adding acceleration toward the target," with
-    // nothing ever removing sideways velocity, is a purely radial
-    // attractive force — the same shape as gravity, which is exactly
-    // why it was producing real orbits instead of a direct approach:
-    // whatever tangential velocity was present when the pull started
-    // (almost always some, since the initiating launch-kick fires
-    // straight out from wherever the player was standing, not
-    // necessarily toward the pull target at all) just persisted,
-    // circling the target while the radial pull only very slowly
-    // tightened the loop. Damping the tangential part each frame is
-    // what actually converges the path onto the target directly.
-    const radialSpeed = this.vel.x * dirX + this.vel.y * dirY;
-    const tangentX = this.vel.x - radialSpeed * dirX;
-    const tangentY = this.vel.y - radialSpeed * dirY;
-    // Math.pow for the retained fraction — same reasoning as
-    // Asteroid.js's drag: damping is an exponential per-frame decay
-    // rate, so scaling it correctly by timeScale means exponentiating
-    // the RETAINED fraction (1 - damping), not just multiplying the
-    // damping amount directly.
-    const tangentRetention = Math.pow(1 - this.pullTangentialDamping, state.timeScale);
-    this.vel.x -= tangentX * (1 - tangentRetention);
-    this.vel.y -= tangentY * (1 - tangentRetention);
-
-    this.vel.x += dirX * this.pullAccel * state.timeScale;
-    this.vel.y += dirY * this.pullAccel * state.timeScale;
-
-    const speed = this.vel.length();
-    if (speed > this.pullMaxSpeed) {
-      this.vel = this.vel.multiply(this.pullMaxSpeed / speed);
-    }
-  }
-
-  // ----------------------------
-  // TELEPORT HELPER
-  // ----------------------------
-  startTeleport(targetMode, targetPos = null) {
-    this.isTeleporting = true;
-    this.teleportTargetMode = targetMode;
-    this.teleportStartTime = Date.now();
-    this.teleportScale = 1;
-    this.teleportGlow = 0;
-    this.vel = new Vector2(0, 0);
-    this.onSurface = false;
-
-    if (targetPos && targetMode === "platform") {
-      this.platformPos = targetPos.clone();
-    }
-  }
-
-  // ----------------------------
-  // INVINCIBILITY
-  // ----------------------------
+  // Checked by startDeath and by draw for the flicker itself.
   isInvincible() {
-    return Date.now() < this.invincibleUntil;
+    return this.invincibleTimer > 0;
   }
 
-  // ----------------------------
-  // DEATH
-  // ----------------------------
-  startDeath() {
-    if (this.isInvincible()) return;
-    if (!this.isDying) {
-      this.isDying = true;
-      this.deathStartTime = Date.now();
-      this.deathScale = 1;
-      this.deathRotation = 0;
-      this.deathAlpha = 1;
-      createDeathParticles(this.pos, 400);
-      state.audioManager.playDeath();
-      state.vatsActive = false; // dying ends V.A.T.S. immediately, same as a successful shot or pull already do
+  // ----------------------------------------------------------------
+  // Pull anchor (SkyDome → grass deck; others → center). Returns [x, y].
+  // ----------------------------------------------------------------
+
+  getPullAnchor(target) {
+    if (!target) return [this.pos.x, this.pos.y];
+    if (target.isSkyDome) {
+      if (target.getPullAnchor) return target.getPullAnchor();
+      if (target.trueSurfaceY) return [target.pos.x, target.trueSurfaceY()];
     }
+    return [target.pos.x, target.pos.y];
   }
+
+  // ----------------------------------------------------------------
+  // Physics / movement
+  // ----------------------------------------------------------------
 
   applyGravity() {
     if (this.onSurface) return;
-    let planet = state.gravitySystem.findDominantPlanet(this.pos);
+    // Prefer shared GravitySystem (handles SkyDome deck gravity correctly)
+    if (state.gravitySystem) {
+      state.gravitySystem.applyTo(this);
+      return;
+    }
+
+    let planet = null;
     if (!planet && this.lastInfluencePlanet) planet = this.lastInfluencePlanet;
     if (planet) {
       this.lastInfluencePlanet = planet;
-      const direction = planet.pos.subtract(this.pos).normalize();
-      let grav = GRAVITY_STRENGTH;
-      if (this.isGroundPounding) grav *= GROUND_POUND_GRAV_MULTIPLIER;
+      let direction;
+      if (planet.isRoundedRect && planet.nearestSurfacePoint) {
+        const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+        if (surface.distance > 1e-6) {
+          direction = new Vector2(surface.point.x - this.pos.x, surface.point.y - this.pos.y).normalize();
+        } else {
+          direction = surface.normal.clone().multiply(-1);
+        }
+      } else {
+        direction = planet.pos.subtract(this.pos).normalize();
+      }
+      let grav = constants.GRAVITY_STRENGTH;
+      if (this.isGroundPounding) grav *= constants.GROUND_POUND_GRAV_MULTIPLIER;
       this.vel.add(direction.multiply(grav));
     }
   }
 
-  // Helper: Check if a point (x,y) is inside a solid tile ('#')
-  isSolidTile(x, y) {
-    const interior = this.currentInterior;
-    if (!interior) return false;
-    const tileX = Math.floor(x / interior.tileSize);
-    const tileY = Math.floor(y / interior.tileSize);
-    return interior.tiles[tileY]?.[tileX] === '#';  // Only '#' blocks; 'H' is climbable/passable
-  }
-
-  updateMazePosition() {
-    const interior = this.currentInterior;
-    const planet = this.currentPlanet;   // still points to the BeamPlanetoid
-  
-    if (!interior || !planet) {
-      console.warn("updatePlayerMazePosition: missing interior or planet");
-      return;
+  // "Down" direction used purely for the character rig's visual rotation
+  // — NOT for physics/gravity. forceUprightJump surfaces (TiledTerrain)
+  // keep the astronaut standing straight up regardless of which way a
+  // 45-degree segment's normal points, the same way Mario doesn't tilt
+  // to match a slope.
+  visualDownDirection(planet) {
+    // Held while going through a portal, and eased back after coming out
+    // (see js/systems/PortalGun.js).
+    if (this.portalDown) return this.portalDown.clone();
+    if (!planet) return new Vector2(0, 1);
+    if (planet.isRoundedRect) {
+      if (planet.forceUprightJump) return new Vector2(0, 1);
+      const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
+      return surface.normal.clone().multiply(-1);
     }
-  
-    const offsetX = planet.pos.x - (interior.cols * interior.tileSize / 2);
-    const offsetY = planet.pos.y - (interior.rows * interior.tileSize / 2);
-  
-    this.pos.x = offsetX + this.mazeCol * interior.tileSize + interior.tileSize / 2;
-    this.pos.y = offsetY + this.mazeRow * interior.tileSize + interior.tileSize / 2;
+    return planet.pos.subtract(this.pos).normalize();
   }
 
-  enterMazeMode() {
-    const interior = this.currentPlanet?.interior;
-    if (!interior) {
-      console.error("Cannot enter maze: no planet or interior");
-      return;
+  getOutwardLaunchDirection() {
+    if (!this.currentPlanet) return new Vector2(0, -1);
+    if (this.currentPlanet.isRoundedRect) {
+      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
+      let direction = surface.normal;
+      // forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
+      // whatever this surface's own local normal is — jumping off a slope
+      // still launches straight up.
+      if (this.currentPlanet.forceUprightJump) direction = new Vector2(0, -1);
+      return direction;
     }
-    this.mode = "maze";
-    this.currentInterior = interior;
-    this.onSurface = false;
-    this.mazeCol = interior.exitColLeft;
-    this.mazeRow = interior.exitRow;
-  
-    this.mazeDir = new Vector2(1, 0);
-    this.lastMoveTime = Date.now();
-  
-    this.updateMazePosition();
-    this.invincibleUntil = Date.now() + this.invincibleDuration;
+    return this.pos.subtract(this.currentPlanet.pos).normalize();
   }
 
-  exitMazeMode() {
-    this.mode = "space";
-    this.currentInterior = null;
-    if (this.currentPlanet) { // Assuming set before entering, or set to mazePlanet
-      const surfaceDist = this.currentPlanet.radius + this.radius;
-      this.pos.x = this.currentPlanet.pos.x + Math.cos(this.currentPlanet.beamAngle) * surfaceDist;
-      this.pos.y = this.currentPlanet.pos.y + Math.sin(this.currentPlanet.beamAngle) * surfaceDist;
-      this.angle = this.currentPlanet.beamAngle;
-      this.onSurface = true;
-      this.lastInfluencePlanet = this.currentPlanet;
+  jump() {
+    // Locked out entirely while curling into/out of a ball, while
+    // talking to an NPC, mid-teleport or dying — a single guard here
+    // covers every input source that calls this.
+    if (this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) return;
+    if (state.vatsActive) return; // in V.A.T.S. he only picks a target and pulls to it
+    if (this.inCannon) return; // loaded in a cannon: it decides when he leaves (see js/world/Cannon.js)
+
+    // Requires actually MOVING at run speed, not just holding the run
+    // button while standing still — groundMoveSpeedX is 0 whenever no
+    // direction key is held.
+    const isRunningAndMoving = state.gamepadRunHeld && (this.groundMoveSpeedX ?? 0) !== 0;
+    const jumpBoost = isRunningAndMoving ? this.runJumpMultiplier : 1;
+
+    // Coyote time: just off an edge, he still jumps off the surface he
+    // left (see canCoyoteJump) — launched exactly as if he'd still been
+    // on it.
+    const coyote = !(this.onSurface && this.currentPlanet) && this.canCoyoteJump();
+    if (coyote) this.currentPlanet = this.coyotePlanet;
+    // Any jump spends the grace, and anything waiting on a buffered press.
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
+
+    if ((this.onSurface || coyote) && this.currentPlanet) {
+      const direction = this.getOutwardLaunchDirection();
+      // Per-planet override (e.g. SkyDomePlanetoid's own stronger
+      // jumpStrength, compensating for its heavier gravityStrength)
+      // takes priority over the global default.
+      const jumpStrength = this.currentPlanet.jumpStrength ?? constants.JUMP_STRENGTH;
+      this.vel = direction.multiply(jumpStrength * jumpBoost);
+      // Carries current ground speed into the jump — a running jump
+      // launches you forward as well as up. Clamped to airControlMaxSpeed
+      // so rapid repeat jumps can't compound into an ever-faster leapfrog.
+      const carriedVelX = this.vel.x + (this.groundMoveSpeedX ?? 0) * this.jumpMomentumCarryScale;
+      this.vel.x = Math.max(-this.airControlMaxSpeed, Math.min(this.airControlMaxSpeed, carriedVelX));
+      this.onSurface = false;
+      this.currentPlanet = null;
+      if (state.audioManager) state.audioManager.playJump();
+    } else if (!this.onSurface && this.touchingWall && !this.isBall) {
+      // Wall jump: kicks away from whichever wall was touched THIS FRAME.
+      // Mostly-up with a horizontal kick away from the wall, same launch
+      // strength as a normal jump on this level. Clearing touchingWall
+      // afterward means chaining wall jumps requires actually drifting
+      // back into a wall in between.
+      const jumpStrength = (this.lastInfluencePlanet && this.lastInfluencePlanet.jumpStrength) ?? constants.JUMP_STRENGTH;
+      const direction = new Vector2(this.wallContactNormal.x, -this.wallJumpUpwardRatio).normalize();
+      this.vel = direction.multiply(jumpStrength * jumpBoost);
+
+      // Turn to face away from the wall (the kick direction), and lock
+      // BOTH that facing and horizontal input back toward this wall for
+      // wallJumpLockFrames — otherwise mouse-aim facing could flip him
+      // back around the very next frame.
+      const awayDir = this.wallContactNormal.x > 0 ? 1 : -1;
+      this.facingDirection = awayDir;
+      this.wallJumpLockBlockedDir = -awayDir;
+      this.wallJumpLockTimer = this.wallJumpLockFrames;
+
+      this.spawnWallJumpEffects();
+
+      this.touchingWall = null;
+      this.wallContactNormal = null;
+      if (state.audioManager) state.audioManager.playJump();
+    } else if (this.submergedIn) {
+      // Swim stroke: an outward-from-center impulse ADDED to (not
+      // replacing) current velocity, so repeated presses build against
+      // the water's own strong drag — paddling rather than identical
+      // little hops. No cooldown: this can fire on every press while
+      // submerged. Enough strokes carry the player back out past the
+      // surface entirely.
+      const planet = this.submergedIn;
+      const away = this.pos.subtract(planet.pos);
+      const dist = away.length();
+      const dir = dist > 1 ? away.normalize() : new Vector2(0, -1);
+      this.vel.add(dir.multiply(this.swimStrength));
+      this.swimStrokeTimer = this.swimStrokeDuration;
+      if (state.audioManager) state.audioManager.playJump();
     }
-    this.invincibleUntil = Date.now() + this.invincibleDuration;
   }
 
-  updatePlatformPosition() {
-    const interior = this.currentInterior;
-    const planet = this.currentPlanet;
-  
-    if (!interior || !planet) {
-      console.warn("updatePlayerPlatformPosition: missing interior or planet");
-      return;
+  // Jump pressed in mid-air (and not buffered into a landing): slam
+  // straight down. Works at ANY point in the air — on the way up, on the
+  // way back down, or after simply walking off a ledge. The one
+  // requirement is that something is actually pulling on him: a pound is
+  // just heavier gravity until he lands.
+  tryGroundPound() {
+    if (this.isGroundPounding || this.isDying || this.onSurface) return;
+    if (state.vatsActive) return;
+    // Not as a ball, or while curling into/out of one.
+    if (this.isBall || this.morphState) return;
+    // Not in water either — there, jump is how he swims. That includes
+    // being only partway in (his feet in the water count too).
+    if (this.submergedIn) return;
+    const down = this.visualDownDirection(this.lastInfluencePlanet);
+    if (WaterSystem.wetAt(this.pos.x + down.x * this.radius, this.pos.y + down.y * this.radius)) return;
+    if (!state.gravitySystem || !state.gravitySystem.findDominantPlanet(this.pos)) return;
+    this.isGroundPounding = true;
+  }
+
+  // The jump button (Space / Cross). On something to jump off (the
+  // ground, a wall, water) it's an ordinary jump. Otherwise, two graces:
+  //   * coyote time — a moment after walking or falling off an edge, it's
+  //     still a jump off that edge (see canCoyoteJump);
+  //   * jump buffering — any other press in mid-air is held for
+  //     JUMP_BUFFER_FRAMES: land in that time and it's a jump the moment
+  //     he does; if not, it's the ground pound (see updateJumpGraces).
+  pressJump() {
+    if (this.isCannonRiding()) return;
+    if (this.onSurface || this.touchingWall || this.submergedIn || this.canCoyoteJump()) {
+      this.jump();
+    } else {
+      this.jumpBufferTimer = JUMP_BUFFER_FRAMES;
     }
-  
-    const offsetX = planet.pos.x - (interior.cols * interior.tileSize / 2);
-    const offsetY = planet.pos.y - (interior.rows * interior.tileSize / 2);
-  
-    this.pos.x = offsetX + this.platformPos.x;
-    this.pos.y = offsetY + this.platformPos.y;
   }
 
-  enterPlatformMode() {
-    const interior = this.currentPlanet?.interior;
-    if (!interior) {
-      console.error("Cannot enter platform: no planet or interior");
-      return;
+  // Whether he's still within coyote time of the surface he last stood
+  // on: not long off it, not far from where he left it, and he left it
+  // by walking or falling off — not by jumping, being pulled away by the
+  // beam, curling up, a teleport, or a pound.
+  canCoyoteJump() {
+    if (this.coyoteTimer <= 0 || !this.coyotePlanet || !this.coyotePos) return false;
+    if (this.onSurface || this.pullTarget || this.isBall || this.morphState) return false;
+    if (this.inCannon || this.cannonFlight) return false;
+    if (this.isTeleporting || this.isGroundPounding || this.portalTransit) return false;
+    const dx = this.pos.x - this.coyotePos.x, dy = this.pos.y - this.coyotePos.y;
+    return dx * dx + dy * dy <= COYOTE_MAX_DRIFT * COYOTE_MAX_DRIFT;
+  }
+
+  // Once a tick (see update): keeps the coyote surface fresh while he's
+  // standing on one and counts it down once he isn't, and settles a
+  // buffered press — a jump if he's now got something to jump off, the
+  // ground pound once it's waited out in mid-air.
+  updateJumpGraces(ts) {
+    if (this.onSurface && this.currentPlanet) {
+      this.coyotePlanet = this.currentPlanet;
+      this.coyotePos = this.pos.clone();
+      this.coyoteTimer = COYOTE_FRAMES;
+    } else if (this.coyoteTimer > 0) {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - ts);
     }
-  
-    this.mode = "platform";
-    this.currentInterior = interior;
-    this.onSurface = false; // Not on planetary surface anymore
-  
-    // Spawn player at the portal exit tile (centered)
-    this.platformPos = new Vector2(
-      (interior.exitColLeft + 0.5) * interior.tileSize,
-      (interior.exitRow + 0.5) * interior.tileSize
-    );
-  
-    this.platformVel = new Vector2(0, 0);
-  
-    // Check if on ground immediately below
-    const tileX = Math.floor(this.platformPos.x / interior.tileSize);
-    const tileY = Math.floor(this.platformPos.y / interior.tileSize);
-    const belowTile = interior.tiles[tileY + 1]?.[tileX];
-    this.onGround = belowTile === "#" || belowTile === "H";
-  
-    // Sync global position
-    this.updatePlatformPosition();
+
+    if (this.jumpBufferTimer > 0) {
+      if (this.onSurface || this.touchingWall || this.submergedIn) {
+        // (Spent either way — if something's blocking the jump right now,
+        // it shouldn't go off later.)
+        this.jumpBufferTimer = 0;
+        this.jump();
+      } else {
+        this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - ts);
+        if (this.jumpBufferTimer <= 0) this.tryGroundPound();
+      }
+    }
   }
 
-  // Spawns an occasional dust puff at the player's feet while actively
-  // walking on a surface — reuses the same Particle class already used
-  // for explosions/impacts elsewhere (see utils.js's createParticles),
-  // just with a dusty tan/beige color instead of that pattern's fiery
-  // oranges, and a gentle scatter-and-drift-up rather than an
-  // energetic burst. Called from all three on-surface walking branches
-  // in move() below (isSkyDome flat walking, generic rect-perimeter
-  // walking, and circular-planet walking), since dust should kick up
-  // regardless of which underlying walking system currently applies.
+  // Spawns a dust puff at the player's feet on each footstep while
+  // walking on a surface.
   spawnWalkDust() {
     if (!this.currentPlanet) return;
 
-    // Ties dust to actual FOOTSTEPS rather than a flat per-frame
-    // chance — the walk-bob (see drawFullBody) is exactly 0 when a leg
-    // passes through vertical and peaks at 1 right when it's most
-    // scissored, about to plant. Detecting the moment it crosses back
-    // above a high threshold catches that "just planted" instant, once
-    // per actual footfall (twice per full walkTime cycle, once per
-    // leg) — a flat per-frame chance instead just produced a
-    // continuous, undifferentiated trail with no relationship to
-    // individual steps.
+    // Ties dust to actual FOOTSTEPS — the walk-bob is 0 when a leg
+    // passes through vertical and peaks at 1 right when it's about to
+    // plant; catching the moment it crosses back above a high threshold
+    // is that "just planted" instant, once per footfall.
     const bobT = Math.sin(this.walkTime) ** 2;
     const justPlanted = bobT > 0.85 && this.lastWalkBobT <= 0.85;
     this.lastWalkBobT = bobT;
     if (!justPlanted) return;
 
-    // "Down" toward whatever surface the player is currently standing
-    // on — same derivation used elsewhere in this class (surface
-    // normal for rect-type planets, direction-to-center for circular
-    // ones), so dust spawns at the actual feet regardless of
-    // orientation.
-    let downDir;
-    if (this.currentPlanet.isRoundedRect) {
-      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
-      downDir = surface.normal.clone().multiply(-1);
-    } else {
-      downDir = this.currentPlanet.pos.subtract(this.pos).normalize();
-    }
-    const feetPos = this.pos.clone().add(downDir.multiply(this.radius * 0.9));
-    const sideDir = new Vector2(-downDir.y, downDir.x); // perpendicular to "down" — scatters dust sideways along the surface, regardless of its orientation
+    // Same "down" as the rig's own visual orientation, so on a slope dust
+    // spawns at his actual (always-upright) visual feet.
+    const downDir = this.visualDownDirection(this.currentPlanet);
+    const feetPos = this.pos.clone().add(downDir.clone().multiply(this.radius * 0.9));
+    const sideDir = new Vector2(-downDir.y, downDir.x); // scatters dust sideways along the surface
 
-    // A small CLUSTER per footstep (2-3 particles, 4-6 while running) —
-    // reads as an actual puff kicking up rather than a trailing spark.
-    // Running already triggers this MORE OFTEN for free too, since
-    // walkTime (and therefore footstep timing) advances by actual
-    // distance covered per frame, which running increases directly —
-    // this only adds the extra per-footstep volume on top of that.
+    // A small CLUSTER per footstep (2-3 particles, 4-6 while running).
     const running = state.gamepadRunHeld;
     const puffCount = (running ? 4 : 2) + Math.floor(Math.random() * (running ? 3 : 2));
-    for (let i = 0; i < puffCount; i++) {
-      const sideSpread = (Math.random() - 0.5) * 2.5;
-      const upSpeed = 0.2 + Math.random() * 0.4;
-      const vel = sideDir.multiply(sideSpread).add(downDir.multiply(-upSpeed));
+    DustPuff.spawn(feetPos, downDir, sideDir, puffCount, 2.5, 0.2, 0.6);
+  }
 
-      const particle = new Particle(feetPos, vel, 22 + Math.random() * 14);
-      particle.color = `hsl(${35 + Math.random() * 15}, ${30 + Math.random() * 15}%, ${55 + Math.random() * 15}%)`; // dusty tan/beige
-      particle.radius = 2 + Math.random() * 1.5;
-      particle.drag = 0.9;      // slows down rather than drifting at constant speed forever, like real dust settling
-      particle.growRate = 0.06; // gently expands over its life, like a puff dispersing rather than staying a fixed-size dot
-      state.particles.push(particle);
+  // Visual feedback for a wall-jump kick-off: a dust burst outward from
+  // the wall plus a small expanding contact ring (WallContactPulse).
+  // Called BEFORE this.pos/this.wallContactNormal change for the kick,
+  // so both land exactly at the contact point.
+  spawnWallJumpEffects() {
+    const normal = this.wallContactNormal;
+    const sideDir = new Vector2(-normal.y, normal.x);
+    const intoWallDir = normal.clone().multiply(-1);
+
+    const puffCount = 4 + Math.floor(Math.random() * 3);
+    DustPuff.spawn(this.pos, intoWallDir, sideDir, puffCount, 3.5, 0.6, 1.2);
+
+    if (state.wallContactPulses) {
+      state.wallContactPulses.push(WallContactPulse.new(this.pos.x, this.pos.y));
     }
   }
 
   move(keys) {
-    // ----------------------------
-    // MAZE MODE
-    // ----------------------------
-    if (this.mode=="maze") {
-      const now = Date.now();
-      if (now - this.lastMoveTime < 110) return;
-      let dx = 0, dy = 0;
-      if (keys['ArrowLeft']) dx = -1;
-      if (keys['ArrowRight']) dx = 1;
-      if (keys['ArrowUp']) dy = -1;
-      if (keys['ArrowDown']) dy = 1;
-      if (dx !== 0 || dy !== 0) {
-        const newCol = this.mazeCol + dx;
-        const newRow = this.mazeRow + dy;
-        if (dy === -1 && this.mazeRow === this.currentInterior.exitRow &&
-          (this.mazeCol === this.currentInterior.exitColLeft || this.mazeCol === this.currentInterior.exitColRight)) {
-          this.startTeleport("space");
-          return;
-        }
-        if (!this.currentInterior.walls[newRow]?.[newCol]) {
-          this.mazeCol = newCol;
-          this.mazeRow = newRow;
-          this.mazeDir = new Vector2(dx || this.mazeDir.x, dy || this.mazeDir.y).normalize();
-          // Only horizontal movement changes which way he's facing —
-          // moving up/down keeps whatever left/right he was last
-          // facing, rather than rotating him to face up/down.
-          if (dx !== 0) this.facingDirection = dx > 0 ? 1 : -1;
-          // Advance the same walk-cycle phase used on planet surfaces,
-          // by one tile's worth of "distance" per hop — ties the small
-          // leg/arm wiggle directly to actual tile hops (discrete,
-          // matching the maze's stop-motion-style movement) rather than
-          // a continuous per-frame timer.
-          this.walkTime += (this.currentInterior.tileSize / this.strideLength) * Math.PI * 2;
-          this.lastMoveTime = now;
-          this.updateMazePosition();
-        }
-      }
-      return;
-    }
+    // Locked out while curling into/out of a ball, talking to an NPC,
+    // teleporting or dying: treating `keys` as empty means every
+    // ArrowLeft/ArrowRight check below falls through to "no input," while
+    // everything else this function does keeps running as normal.
+    if (this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) keys = {};
+    // Sat on the ground for a beat after a ground pound lands — no
+    // walking off mid-impact. (wasGroundPounding covers the one frame
+    // between touching down and update starting that timer.)
+    if (this.groundPoundImpactTimer > 0 || (this.wasGroundPounding && this.onSurface)) keys = {};
 
-
-    // ----------------------------
-    // PLATFORM MODE
-    // ----------------------------
-    if (this.mode === "platform") {
-      const interior = this.currentInterior;
-      const tileSize = interior.tileSize;
-      const tiles = interior.tiles;
-
-      // Horizontal input
-      // Scaled by state.timeScale for consistency with every other
-      // walking branch and world entity, which already slow down
-      // during V.A.T.S. — missed here since this branch was built in a
-      // later turn than the original V.A.T.S. walking-speed fix, before
-      // this file had platform-mode visibility at all.
-      this.isWalking = false;
-      if (keys['ArrowLeft']) { this.platformVel.x = -this.platformMoveSpeed * state.timeScale; this.facingDirection = -1; this.isWalking = true; }
-      else if (keys['ArrowRight']) { this.platformVel.x = this.platformMoveSpeed * state.timeScale; this.facingDirection = 1; this.isWalking = true; }
-      else this.platformVel.x = 0;
-
-      // Vertical input/checks (ladders)
-      const centerX = this.platformPos.x;
-      const centerY = this.platformPos.y;
-      const halfWidth = this.platformHalfExtent;
-      const halfHeight = this.platformHalfExtent;
-      const tileX = Math.floor(centerX / tileSize);
-      const tileY = Math.floor(centerY / tileSize);
-      const onLadder = tiles[tileY]?.[tileX] === 'H';
-      const footTileY = Math.floor((centerY + halfHeight) / tileSize);
-      const ladderBelow = tiles[footTileY + 1]?.[tileX] === 'H';
-
-        // allow dropping through platform onto ladder
-        if (this.onGround && keys['ArrowDown'] && ladderBelow) {
-        this.onGround = false;
-        this.platformVel.y = this.platformMoveSpeed * state.timeScale;
-        }
-
-        // All scaled by state.timeScale, same reasoning as the horizontal
-        // input above.
-        if (onLadder) {
-        if (keys['ArrowUp']) this.platformVel.y = -this.platformMoveSpeed * state.timeScale;
-        else if (keys['ArrowDown']) this.platformVel.y = this.platformMoveSpeed * state.timeScale;
-        else this.platformVel.y = 0;
-        }
-        else if (!this.onGround) {
-        this.platformVel.y += GRAVITY_STRENGTH * state.timeScale;
-        }
-
-      // Separate horizontal/vertical movement for better collision
-      // Horizontal first (unchanged)
-      let newX = this.platformPos.x + this.platformVel.x;
-      const left = newX - halfWidth;
-      const right = newX + halfWidth;
-      const midY = this.platformPos.y; // Use center for side checks
-
-      if (this.platformVel.x < 0 && (this.isSolidTile(left, this.platformPos.y - halfHeight + 0.1) || this.isSolidTile(left, midY))) {
-        newX = (Math.floor(left / tileSize) + 1) * tileSize + halfWidth;
-        this.platformVel.x = 0;
-      } else if (this.platformVel.x > 0 && (this.isSolidTile(right, this.platformPos.y - halfHeight + 0.1) || this.isSolidTile(right, midY))) {
-        newX = Math.floor(right / tileSize) * tileSize - halfWidth;
-        this.platformVel.x = 0;
-      }
-      this.platformPos.x = newX;
-
-      // Advance the same walk-cycle phase used everywhere else, by
-      // actual horizontal distance moved THIS frame — placed after the
-      // wall-collision check above (not in the input section), using
-      // the FINAL platformVel.x, so standing blocked against a wall
-      // reads as standing still rather than animating as if still
-      // walking. This — plus this.isWalking itself, set above — was
-      // the actual missing piece behind the walk animation never
-      // playing in platform mode: this branch was adapted from tile-
-      // collision code that only ever drove a static, non-animated
-      // boot sprite, so it never had any reason to maintain these
-      // before the full rig's shared drawFullBody pipeline (which
-      // reads them) was wired up for this mode.
-      if (this.isWalking) {
-        this.walkTime += (Math.abs(this.platformVel.x) / this.strideLength) * Math.PI * 2;
-      }
-
-      // Vertical — ONE-WAY PLATFORMS (this is the fix!)
-      let newY = this.platformPos.y + this.platformVel.y;
-      const leftFoot = this.platformPos.x - halfWidth + 0.1;
-      const rightFoot = this.platformPos.x + halfWidth - 0.1;
-      const newBottom = newY + halfHeight;
-      const newTop = newY - halfHeight;
-
-      this.onGround = false;
-
-    if (this.platformVel.y < 0 && !onLadder) {
-        if (this.isSolidTile(leftFoot, newTop) || this.isSolidTile(rightFoot, newTop)) {
-          newY = (Math.floor(newTop / tileSize) + 1) * tileSize + halfHeight;
-          this.platformVel.y = 0;
-        }
-      } 
-      else if (this.platformVel.y >= 0) {
-
-        const wantsDrop = keys['ArrowDown'] && ladderBelow;
-
-        if (!wantsDrop &&
-            (this.isSolidTile(leftFoot, newBottom) || this.isSolidTile(rightFoot, newBottom))) {
-
-            newY = Math.floor(newBottom / tileSize) * tileSize - halfHeight;
-            this.platformVel.y = 0;
-            this.onGround = true;
-        }
-
-        // allow dropping through platform if ladder below
-        if (wantsDrop) {
-            this.platformVel.y = this.platformMoveSpeed * state.timeScale;
-        }
-     }
-
-      this.platformPos.y = newY;
-
-      // Prevent falling offscreen (safety net)
-      if (this.platformPos.y > interior.rows * tileSize + 100) {
-        this.platformPos.y = 0;
-        this.platformVel.y = 0;
-        console.warn('Player fell offscreen - respawning');
-      }
-
-      this.updatePlatformPosition();  // Sync global pos
-      return;
-    }
-
-    // ----------------------------
-    // PLANET SURFACE
-    // ----------------------------
     if (this.onSurface && this.currentPlanet && this.currentPlanet.isRoundedRect) {
       const planet = this.currentPlanet;
       this.isWalking = false;
       let ds = 0;
-      // Scaled by state.timeScale so walking (and everything ds itself
-      // drives downstream — footstep timing, dust spawn frequency, the
-      // edge-fall carried velocity) slows to a crawl right along with
-      // the rest of the world during V.A.T.S., for consistency with
-      // gravity/drag/pull-force and every world entity, which already
-      // do. Deliberately scoped to ground walking only, not the
-      // airborne-steering nudge further below in this same method —
-      // that's a separate mechanic and wasn't part of what was asked.
-      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1) * state.timeScale;
+      const rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1)
+        * (this.isBall ? BALL_SPEED_MULTIPLIER : 1);
+      const speed = rawSpeed * state.timeScale;
 
-      if (keys['ArrowLeft']) { ds = -speed; this.facingDirection = -1; this.isWalking = true; }
-      if (keys['ArrowRight']) { ds = speed; this.facingDirection = 1; this.isWalking = true; }
+      // Unscaled (no state.timeScale) current ground speed+direction —
+      // jump() carries this into the jump's own vel.x. Kept separate from
+      // ds/speed because vel gets timeScale applied again on its own.
+      this.groundMoveSpeedX = 0;
 
-      // isSkyDome planets (SkyDomePlanetoid, JumpPlatform) are always
-      // axis-aligned and never rotate, so walking on them is handled
-      // directly in world-X rather than through the general arc-length/
-      // segment system every other rect-type planet uses. Two reasons:
-      // right at a sharp (cornerRadius=0) corner, the flat top and the
-      // side edge meet at literally the same point, and an earlier
-      // version that clamped the ARC POSITION there turned out
-      // unreliable — the player could still end up walking onto the
-      // (very short) side edges despite the clamp. And more
-      // importantly: reaching the edge should DETACH the player and
-      // let them fall, not just halt them there — plain world-X bounds
-      // checking makes both of those straightforward, with no
-      // equivalent segment-boundary ambiguity.
+      if (keys['ArrowLeft']) { ds = -speed; this.facingDirection = -1; this.isWalking = true; this.groundMoveSpeedX = -rawSpeed; }
+      if (keys['ArrowRight']) { ds = speed; this.facingDirection = 1; this.isWalking = true; this.groundMoveSpeedX = rawSpeed; }
+
       if (planet.isSkyDome) {
-        const coreHalfWidth = planet.halfWidth - planet.cornerRadius;
+        const coreHalfWidth = planet.halfWidth - (planet.cornerRadius ?? 0);
         const minX = planet.pos.x - coreHalfWidth;
         const maxX = planet.pos.x + coreHalfWidth;
         const desiredX = this.pos.x + ds;
 
         if (desiredX < minX || desiredX > maxX) {
-          // Walked past the edge of the flat top — detach and fall,
-          // carrying a FRACTION of current walking speed into vel.x
-          // (see edgeFallCarryFraction's own comment for why not the
-          // full speed) so stepping off a ledge reads as a natural
-          // fall with a bit of forward momentum, not an abrupt stop, a
-          // slide onto the side, or an unnaturally strong launch.
           this.onSurface = false;
           this.currentPlanet = null;
           this.vel = new Vector2(ds * this.edgeFallCarryFraction, 0);
         } else {
-          const topY = planet.pos.y - planet.halfHeight;
+          const topY = planet.trueSurfaceY ? planet.trueSurfaceY() : (planet.pos.y - planet.halfHeight);
           this.pos = new Vector2(desiredX, topY - this.radius);
         }
       } else {
-        // Recomputed every frame (not just when ds !== 0) so the
-        // player stays glued to the surface as the planet rotates, the
-        // same way circular-planet walking already recomputes pos from
-        // the planet's current pos every frame regardless of input.
-        this.surfaceArcPos += ds;
-        const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, this.radius);
-        this.pos = worldSurface.point;
+        // rampLeft's wall sits on the opposite side from rampRight's, so
+        // its arc-length-increasing direction is physically leftward —
+        // flip ds once so "climbing" always lines up with the key that
+        // visually walks the player into the ramp.
+        if (planet.isWallClimb && planet.controlsReversed) ds = -ds;
+
+        // Wall-climb shapes detach the player if they STOP or REVERSE
+        // direction on the wall face OR the ceiling — Sonic-loop style:
+        // nothing but committed momentum holds you to either. Not the
+        // curve leading in, the slope leading out, or flat ledges.
+        //
+        // wallClimbDir resets once off BOTH zones, but NOT when crossing
+        // from one into the other (one continuous commitment). It ALSO
+        // resets on a planet swap — another shape may read the same held
+        // key with the opposite sign.
+        const currentSeg = planet.isWallClimb ? planet.segmentAtArcPosition(this.surfaceArcPos) : null;
+        const onClimbZone = currentSeg != null && (currentSeg.isWallFace || currentSeg.isCeiling);
+        if (planet !== this.wallClimbDirPlanet) {
+          this.wallClimbDir = null;
+          this.wallClimbDirPlanet = planet;
+        }
+
+        let shouldDetach = false;
+        if (onClimbZone) {
+          // Requires the run button — an ordinary walking pace isn't
+          // committed enough to hold either zone. Ball mode is ALWAYS
+          // treated as "running" for this check.
+          if (ds === 0 || !(state.gamepadRunHeld || this.isBall)) {
+            shouldDetach = true;
+          } else {
+            const dirSign = ds > 0 ? 1 : -1;
+            if (this.wallClimbDir != null && this.wallClimbDir !== dirSign) shouldDetach = true;
+            else this.wallClimbDir = dirSign;
+          }
+        } else {
+          this.wallClimbDir = null;
+        }
+
+        if (shouldDetach) {
+          this.onSurface = false;
+          this.currentPlanet = null;
+          this.vel = currentSeg.normal.multiply(this.wallClimbDetachPush);
+        } else {
+          // Optional per-surface speed scaling (e.g. TiledTerrain slowing
+          // the player down climbing a 45-degree slope, speeding up
+          // descending one), looked up at the CURRENT arc position.
+          if (typeof planet.getArcSpeedMultiplier === 'function') {
+            ds *= planet.getArcSpeedMultiplier(this.surfaceArcPos, ds);
+          }
+
+          const desiredArcPos = this.surfaceArcPos + ds;
+
+          // isOpenPath surfaces (a hill has two ends, not a closed loop)
+          // fall off the end instead of wrapping around.
+          if (planet.isOpenPath && (desiredArcPos < 0 || desiredArcPos > planet.getPerimeter())) {
+            // Snap to the exact edge vertex before falling, so the swept
+            // landing test can exclude a re-land on the very next frame.
+            const edgeArcPos = desiredArcPos < 0 ? 0 : planet.getPerimeter();
+            this.pos = planet.worldPointAtArcPosition(edgeArcPos, this.radius).point;
+            this.onSurface = false;
+            this.currentPlanet = null;
+            // Carried along the path's ACTUAL tangent at the edge, not
+            // assumed purely horizontal — a wall-climb shape's ceiling
+            // stretch runs backwards in world-x.
+            const edgeSeg = planet.segmentAtArcPosition ? planet.segmentAtArcPosition(edgeArcPos) : null;
+            const carryDir = edgeSeg ? edgeSeg.tangent : new Vector2(1, 0);
+            this.vel = carryDir.multiply(ds * this.edgeFallCarryFraction);
+          } else {
+            this.surfaceArcPos = desiredArcPos;
+            const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, this.radius);
+            this.pos = worldSurface.point;
+          }
+        }
       }
 
       if (this.isWalking) {
         this.walkTime += (Math.abs(ds) / this.strideLength) * Math.PI * 2;
         this.spawnWalkDust();
+        // Rolling-without-slipping: a wheel of radius r moving a signed
+        // distance ds rotates by exactly ds/r radians. Wrapped every
+        // frame so this angle never loses precision over a long session.
+        if (this.isBall) {
+          this.ballRollAngle = (this.ballRollAngle + ds / this.radius) % (Math.PI * 2);
+        }
       }
     } else if (this.onSurface && this.currentPlanet) {
       const surfaceDist = this.currentPlanet.radius + this.radius;
-      // See the isRoundedRect branch above for why this is scaled by
-      // state.timeScale.
-      const speed = PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1) * state.timeScale;
+      // Walking the hard core at the bottom of a water planet is still
+      // walking underwater — the same water resistance applies.
+      const speedMul = (state.gamepadRunHeld ? this.runSpeedMultiplier : 1) * (this.submergedIn ? this.waterWalkSpeedMultiplier : 1)
+        * (this.isBall ? BALL_SPEED_MULTIPLIER : 1);
+      const speed = constants.PLAYER_LINEAR_SPEED * speedMul * state.timeScale;
       const angularSpeed = speed / surfaceDist;
 
       this.isWalking = false;
@@ -1387,211 +965,241 @@ export class Player extends Entity {
       this.pos.x = this.currentPlanet.pos.x + Math.cos(this.angle) * surfaceDist;
       this.pos.y = this.currentPlanet.pos.y + Math.sin(this.angle) * surfaceDist;
 
-      // Advance the walk cycle by the actual arc-length distance moved
-      // this frame (|Δangle| × surfaceDist), scaled by strideLength, so
-      // the leg/arm swing speed always matches real ground covered
-      // rather than an arbitrary flat rate.
       if (this.isWalking) {
-        const distanceMoved = Math.abs(this.angle - prevAngle) * surfaceDist;
-        this.walkTime += (distanceMoved / this.strideLength) * Math.PI * 2;
+        const signedDistanceMoved = (this.angle - prevAngle) * surfaceDist;
+        this.walkTime += (Math.abs(signedDistanceMoved) / this.strideLength) * Math.PI * 2;
         this.spawnWalkDust();
-      }
-    } else if (!this.onSurface && this.lastInfluencePlanet && this.lastInfluencePlanet.isSkyDome) {
-      // Continuous mid-air horizontal steering, specific to
-      // SkyDomePlanetoid gravity — "left/right" always maps to a
-      // consistent world direction there (unlike a circular planet,
-      // where it wouldn't mean anything fixed while airborne). Without
-      // this, a jump that started from a standstill could never be
-      // steered at all once airborne, even holding left/right the
-      // whole time: getOutwardLaunchDirection() only reads input ONCE,
-      // at the moment jump() is called, and the edge-detach fall sets
-      // vel.x once too — neither is ever revisited afterward, so with
-      // no horizontal input held at that single instant, the rest of
-      // the arc was locked in as purely vertical no matter what was
-      // pressed mid-air. This adds a light touch of ongoing control on
-      // top of whatever the jump/fall already set vel.x to, not a
-      // replacement for it — gentle acceleration while held, capped at
-      // airControlMaxSpeed, so it reads as "can nudge the arc a bit,"
-      // not full ground-level walking control transplanted into the air.
-      if (keys['ArrowLeft']) {
-        this.vel.x = Math.max(this.vel.x - this.airControlAccel, -this.airControlMaxSpeed);
-        this.facingDirection = -1;
-      }
-      if (keys['ArrowRight']) {
-        this.vel.x = Math.min(this.vel.x + this.airControlAccel, this.airControlMaxSpeed);
-        this.facingDirection = 1;
-      }
-    }
-  }
-
-  // "Straight up from wherever I'm currently standing," given the
-  // current planet — the planet's TRUE surface normal for rect-type
-  // planets, not the naive "away from the planet's center" vector.
-  // Those two are only ever the same thing on a perfect circle (or,
-  // close enough, near a corner of a roughly-square rect) — on
-  // anything long and thin, "away from center" increasingly tilts
-  // toward whichever edge you're standing nearest, worse the further
-  // you are from the horizontal middle, which is exactly the
-  // curving-jumps-near-the-edge bug this replaced. Shared by jump()
-  // and the pull-initiation launch kick, since both are fundamentally
-  // the same action: detach outward from the current standing spot.
-  getOutwardLaunchDirection() {
-    if (!this.currentPlanet) return new Vector2(0, -1);
-    if (this.currentPlanet.isRoundedRect) {
-      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
-      let direction = surface.normal;
-
-      // SkyDomePlanetoid specifically: blend in current horizontal
-      // input. The ground here never curves, so "straight up relative
-      // to the local surface" is ALWAYS exactly world-up no matter how
-      // the player is moving — unlike every other planet (including
-      // the original, full-perimeter rect one), where walking around a
-      // curve naturally imparts a sense of "forward" into the jump via
-      // the surface normal itself. Without this, jumps here read as
-      // unnaturally floaty compared to everywhere else in the game.
-      if (this.currentPlanet.isSkyDome) {
-        let horizontalInput = 0;
-        if (state.keys['ArrowLeft']) horizontalInput = -1;
-        if (state.keys['ArrowRight']) horizontalInput = 1;
-        if (horizontalInput !== 0) {
-          direction = new Vector2(
-            direction.x + horizontalInput * this.jumpHorizontalCarry,
-            direction.y
-          ).normalize();
+        if (this.isBall) {
+          this.ballRollAngle = (this.ballRollAngle + signedDistanceMoved / this.radius) % (Math.PI * 2);
         }
       }
+    } else if (!this.onSurface && this.lastInfluencePlanet
+      && (this.lastInfluencePlanet.isSkyDome || this.lastInfluencePlanet.forceUprightJump || this.submergedIn)) {
+      // Ordinary circular planets deliberately don't get fixed
+      // screen-space left/right air control — "sideways" isn't
+      // well-defined on a sphere. SkyDome / forceUprightJump surfaces are
+      // the exception.
+      const lockedDir = this.wallJumpLockTimer > 0 ? this.wallJumpLockBlockedDir : null;
 
-      return direction;
-    }
-    return this.pos.subtract(this.currentPlanet.pos).normalize();
-  }
+      if (this.submergedIn) {
+        // Orbits around the water body's own center — a velocity nudge
+        // along the current TANGENT. Only the tangential component is
+        // touched; getting farther from the center is NOT something
+        // left/right can do (that used to carry players out past the
+        // shore). Gravity and the swim stroke stay the only radial movers.
+        const water = this.submergedIn;
+        let radial = this.pos.subtract(water.pos);
+        if (radial.length() > 0.01) radial.normalize();
+        else radial = new Vector2(0, -1);
+        const tangent = new Vector2(-radial.y, radial.x);
 
-  jump() {
-    const jumpBoost = state.gamepadRunHeld ? this.runJumpMultiplier : 1;
+        let tangentSpeed = this.vel.dot(tangent);
+        const radialSpeed = this.vel.dot(radial);
 
-    if (this.mode === "platform") {
-      if (this.onGround) {
-        this.platformVel.y = -JUMP_STRENGTH * 0.5 * jumpBoost;
-        this.onGround = false;
-        state.audioManager.playJump();
-      }
-      return;
-    }
+        const swimAccel = this.airControlAccel * state.timeScale;
+        if (keys['ArrowLeft'] && lockedDir !== -1) {
+          tangentSpeed = Math.min(tangentSpeed, Math.max(tangentSpeed - swimAccel, -this.airControlMaxSpeed));
+          this.facingDirection = -1;
+        }
+        if (keys['ArrowRight'] && lockedDir !== 1) {
+          tangentSpeed = Math.max(tangentSpeed, Math.min(tangentSpeed + swimAccel, this.airControlMaxSpeed));
+          this.facingDirection = 1;
+        }
 
-    if (this.onSurface && this.currentPlanet) {
-      const direction = this.getOutwardLaunchDirection();
-      this.vel = direction.multiply(JUMP_STRENGTH * jumpBoost);
-      this.onSurface = false;
-      this.currentPlanet = null;
-      state.audioManager.playJump();
-    }
-  }
-
-  tryGroundPound() {
-    if (this.isGroundPounding) return;
-    let planet = state.gravitySystem.findDominantPlanet(this.pos) || this.lastInfluencePlanet;
-    if (planet) {
-      const outwardDir = this.pos.subtract(planet.pos).normalize();
-      const radialVel = this.vel.dot(outwardDir);
-      if (radialVel > 0) this.isGroundPounding = true;
-    }
-  }
-
-  checkMazeDots() {
-    if (this.mode != "maze") return;
-    const interior = this.currentInterior;
-    for (let i = interior.dots.length - 1; i >= 0; i--) {
-      const d = interior.dots[i];
-      if (d.x === this.mazeCol && d.y === this.mazeRow) {
-        state.audioManager.playEatDot();
-        interior.dots.splice(i, 1);
-        state.score += 10;
-      }
-    }
-    for (let i = interior.powerPellets.length - 1; i >= 0; i--) {
-      const p = interior.powerPellets[i];
-      if (p.x === this.mazeCol && p.y === this.mazeRow) {
-        state.audioManager.playEatDot();
-        interior.powerPellets.splice(i, 1);
-        state.score += 50;
+        this.vel = tangent.multiply(tangentSpeed).add(radial.multiply(radialSpeed));
+      } else {
+        // Nudges vel.x toward (and up to) the air cap in the held
+        // direction — but never REDUCES it if momentum carried from a
+        // running jump already exceeds that cap (that read as sudden air
+        // friction killing the jump's distance). The cap follows the run
+        // button, same as ground speed. Acceleration is scaled by
+        // timeScale so air control doesn't depend on frame rate.
+        const airMaxSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1);
+        const airAccel = this.airControlAccel * state.timeScale;
+        if (keys['ArrowLeft'] && lockedDir !== -1) {
+          this.vel.x = Math.min(this.vel.x, Math.max(this.vel.x - airAccel, -airMaxSpeed));
+          this.facingDirection = -1;
+        }
+        if (keys['ArrowRight'] && lockedDir !== 1) {
+          this.vel.x = Math.max(this.vel.x, Math.min(this.vel.x + airAccel, airMaxSpeed));
+          this.facingDirection = 1;
+        }
       }
     }
+  }
+
+  updateBubbles() {
+    const timeScale = state.timeScale ?? 1;
+    this.bubbles = this.bubbles ?? [];
+
+    if (this.submergedIn && this.bubbles.length < BUBBLE_MAX_COUNT && Math.random() < BUBBLE_SPAWN_CHANCE * timeScale) {
+      const water = this.submergedIn;
+      const away = this.pos.subtract(water.pos);
+      const dist = away.length();
+      const angle = dist > 1 ? Math.atan2(away.y, away.x) : (Math.random() * Math.PI * 2);
+
+      // Spawned past the player's OWN position along this same radial
+      // line — that keeps it "above his head" on any side of the core.
+      const spawnR = dist + this.radius * BUBBLE_HEAD_GAP;
+      const targetR = water.radius;
+      if (spawnR < targetR) {
+        this.bubbles.push(newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR));
+      }
+    }
+
+    for (let i = this.bubbles.length - 1; i >= 0; i--) {
+      const b = this.bubbles[i];
+      b.r += b.riseSpeed * timeScale;
+      b.wobblePhase += b.wobbleFreq * timeScale;
+      if (b.r >= b.targetR) this.bubbles.splice(i, 1);
+    }
+  }
+
+  // Drawn separately from the rest of the player (see main.js's own call
+  // site, right after the water planet's second draw pass) so bubbles
+  // stay visible on top of the translucent water fill.
+  drawBubbles() {
+    for (const b of this.bubbles ?? []) {
+      const angle = b.baseAngle + Math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE;
+      const bx = b.centerX + Math.cos(angle) * b.r;
+      const by = b.centerY + Math.sin(angle) * b.r;
+
+      const fadeStart = b.targetR - BUBBLE_FADE_DISTANCE;
+      let fade = 1;
+      if (b.r > fadeStart) fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE;
+
+      love.graphics.setColor(BUBBLE_COLOR[0], BUBBLE_COLOR[1], BUBBLE_COLOR[2], 0.5 * fade);
+      love.graphics.circle('fill', bx, by, b.radius);
+      love.graphics.setColor(1, 1, 1, 0.75 * fade);
+      love.graphics.circle('line', bx, by, b.radius);
+    }
+    love.graphics.setColor(1, 1, 1, 1);
   }
 
   update() {
-    // ----------------------------
-    // DEATH
-    // ----------------------------
+    // Captured before this frame's own movement, so CollisionSystem can
+    // do a swept crossing test against open-path terrain.
+    this.prevPos = this.pos.clone();
+
+    // Frozen in place for the whole death pause.
     if (this.isDying) {
-      const elapsed = Date.now() - this.deathStartTime;
-      const t = Math.min(elapsed / this.deathDuration, 1);
-      this.deathScale = 1 - (t*t*t);
-      this.deathRotation += 0.2;
-      this.deathAlpha = 1 - t;
-      if (t >= 1) state.gameOver = true;
+      this.updateDeath(state.timeScale);
       return;
     }
 
-    // ----------------------------
-    // TELEPORT
-    // ----------------------------
-    if (this.isTeleporting) {
-      const elapsed = Date.now() - this.teleportStartTime;
-      const t = elapsed / this.teleportDuration;
+    this.updateBallMorph(state.timeScale);
+    this.updateTeleport(state.timeScale);
+    this.updateJumpGraces(state.timeScale);
 
-      if (t >= 1) {
-        this.isTeleporting = false;
+    if (this.invincibleTimer > 0) {
+      this.invincibleTimer = Math.max(0, this.invincibleTimer - state.timeScale);
+    }
 
-        if (this.teleportTargetMode === "maze") {
-          this.enterMazeMode();
-        } else if (this.teleportTargetMode === "platform") {
-          this.enterPlatformMode();
-        } else {
-          this.exitMazeMode(); // Assuming for "space"
+    if (this.swimStrokeTimer > 0) {
+      this.swimStrokeTimer = Math.max(0, this.swimStrokeTimer - state.timeScale);
+    }
+
+    // Ground pound: time the pose, and catch the landing. isGroundPounding
+    // is cleared by the collision pass the moment he touches down, so "it
+    // was true last time and now it isn't, and he's standing on
+    // something" is the landing — as opposed to a pound that ended some
+    // other way (bouncing off an Ooomba, dropping into water).
+    if (this.isGroundPounding && !this.onSurface) {
+      this.groundPoundPoseTime += state.timeScale;
+    }
+    if (this.wasGroundPounding && !this.isGroundPounding && this.onSurface) {
+      this.groundPoundImpactTimer = GROUND_POUND_IMPACT_TICKS;
+      const down = this.visualDownDirection(this.currentPlanet);
+      GroundPoundBurst.spawn(
+        this.pos.x + down.x * this.radius, this.pos.y + down.y * this.radius,
+        new Vector2(-down.x, -down.y));
+      if (state.audioManager) state.audioManager.playGroundPound();
+    } else if (this.groundPoundImpactTimer > 0) {
+      this.groundPoundImpactTimer = this.onSurface ? Math.max(0, this.groundPoundImpactTimer - state.timeScale) : 0;
+    }
+    if (!this.isGroundPounding && this.groundPoundImpactTimer <= 0) {
+      this.groundPoundPoseTime = 0;
+    }
+    this.wasGroundPounding = this.isGroundPounding;
+
+    // Recomputed fresh every frame, regardless of onSurface — a water
+    // planet never sets onSurface.
+    const wasSubmergedIn = this.submergedIn;
+    this.submergedIn = null;
+    if (state.planetoids) {
+      for (const p of state.planetoids) {
+        if (p.isWaterPlanet && this.pos.subtract(p.pos).length() < p.radius) {
+          this.submergedIn = p;
+          break;
         }
-
-        this.teleportTargetMode = null;
-        return;
       }
-
-      const pulse = Math.sin(t * Math.PI);
-      this.teleportScale = 1 + pulse * 1.2;
-      this.teleportGlow = pulse;
-
-      if (Math.random() < 0.6) {
-        const beamDir = new Vector2(
-          Math.cos(this.currentPlanet?.beamAngle || 0),
-          Math.sin(this.currentPlanet?.beamAngle || 0)
-        );
-        const side = new Vector2(-beamDir.y, beamDir.x).multiply((Math.random()-0.5)*1.5);
-        const speed = 2 + Math.random()*2;
-        const vel = beamDir.multiply(speed).add(side);
-        state.particles.push(new Particle(this.pos.clone(), vel));
-      }
-      return;
+    }
+    // ...or in a pool of sprayed water (see js/systems/WaterSystem.js).
+    if (!this.submergedIn && !this.inPinball) {
+      this.submergedIn = WaterSystem.submergedAt(this) ?? null;
     }
 
-    // ----------------------------
-    // MAZE MODE
-    // ----------------------------
-    if (this.mode=="maze") {
-      this.vel = new Vector2(0,0);
-      this.mouthAngle = Math.sin(Date.now()*0.01)*(Math.PI/4);
-      return;
+    // Splash the instant submergedIn actually flips (either direction).
+    if (this.submergedIn !== wasSubmergedIn) {
+      const water = this.submergedIn ?? wasSubmergedIn;
+      Splash.spawn(this.pos, this.pos.subtract(water.pos).normalize());
     }
 
-    // ----------------------------
-    // PLANET MOVEMENT
-    // ----------------------------
-    if (!this.onSurface) {
-      // Math.pow for the drag decay — see Asteroid.js's identical
-      // reasoning: an exponential per-frame rate has to be
-      // exponentiated by timeScale, not just multiplied, or the
-      // player's velocity would decay at its normal, un-slowed rate
-      // even while visible movement is slowed, and wouldn't resume at
-      // the same speed once V.A.T.S. ends.
-      this.vel = this.vel.multiply(Math.pow(DRAG, state.timeScale));
-      this.pos.add(this.vel.clone().multiply(state.timeScale));
+    // isGroundPounding only ever gets cleared by actually LANDING, which
+    // water never does — a pound started in the frame a swim stroke
+    // carries him just past the surface would otherwise triple his
+    // gravity near the water. Pounding in open water means nothing
+    // anyway, so clear it whenever submerged.
+    if (this.submergedIn) this.isGroundPounding = false;
+
+    this.updateBubbles();
+
+    // Marks the moment the shelter door reaches fully open
+    // (state.spaceShelter.playerInFront flips true) so drawFullBody can
+    // ease the rigid intro pose back to normal over
+    // INTRO_POSE_TRANSITION_SECONDS. wasPlayerInFront starts undefined so
+    // the very first call just establishes a baseline.
+    const playerInFront = (state.spaceShelter && state.spaceShelter.playerInFront) || false;
+    if (this.wasPlayerInFront === undefined) this.wasPlayerInFront = playerInFront;
+    if (!this.wasPlayerInFront && playerInFront) {
+      this.introPoseBlendStart = love.timer.getTime();
+    }
+    this.wasPlayerInFront = playerInFront;
+
+    if (this.wallJumpLockTimer > 0) {
+      this.wallJumpLockTimer -= state.timeScale;
+      if (this.wallJumpLockTimer <= 0) this.wallJumpLockBlockedDir = null;
+    }
+
+    // isWallSliding drives drawFullBody's dedicated wall-slide pose —
+    // reset false every frame BEFORE the onSurface check below, or a
+    // landing mid-slide would leave it stuck true.
+    this.isWallSliding = false;
+
+    // Not while on a pinball table: PinballInterior.updateBall already
+    // moved him this frame, with its own collision.
+    if (!this.onSurface && !this.inPinball) {
+      // Wall slide: only caps a fall that's already faster than the slide
+      // speed, and only while the direction key into that wall is held.
+      // Facing is forced AWAY from the wall for the whole slide.
+      if (this.touchingWall && this.wallContactNormal && this.vel.y > this.wallSlideMaxFallSpeed && !this.isBall) {
+        const towardWallDir = this.wallContactNormal.x > 0 ? -1 : 1;
+        const holdingIntoWall = (towardWallDir === -1 && state.keys['ArrowLeft'])
+          || (towardWallDir === 1 && state.keys['ArrowRight']);
+        if (holdingIntoWall) {
+          this.vel.y = this.wallSlideMaxFallSpeed;
+          this.isWallSliding = true;
+          this.facingDirection = -towardWallDir;
+        }
+      }
+
+      // Water's own much stronger drag is what makes sinking read as
+      // pushing through resistance. (None at all on a cannon shot: it
+      // flies dead straight at full speed — see Cannon.updateFlight.)
+      let dragFactor = this.submergedIn ? this.waterDrag : constants.DRAG;
+      if (this.cannonFlight) dragFactor = 1;
+      this.vel.scale(dragFactor ** state.timeScale);
+      this.pos.addScaled(this.vel, state.timeScale);
 
       if (this.pos.x - this.radius < 0) { this.pos.x = this.radius; this.vel.x = -this.vel.x; }
       if (this.pos.x + this.radius > state.sceneWidth) { this.pos.x = state.sceneWidth - this.radius; this.vel.x = -this.vel.x; }
@@ -1599,200 +1207,383 @@ export class Player extends Entity {
       if (this.pos.y + this.radius > state.sceneHeight) { this.pos.y = state.sceneHeight - this.radius; this.vel.y = -this.vel.y; }
     }
 
-    this.mouthAngle = Math.sin(Date.now() * 0.01) * (Math.PI / 4);
-
     this.updateOrientationAndFacing();
   }
 
-  // ----------------------------
-  // MOUSE-DRIVEN FACING
-  // ----------------------------
-  // While the mouse is actively being used, the character faces
-  // whichever side of him it's currently on — even if that's opposite
-  // his direction of travel (a fun little "moonwalk" when aiming
-  // backward while moving forward, left in on purpose). Once the mouse
-  // has been idle for a while, facing just reverts to whatever move()
-  // already set from arrow-key input.
-  //
-  // Also updates this.mouseIdle, which drawFullBody uses to decide
-  // whether the arms should track the aim or sway together instead.
-  //
-  // Only meaningful in "space" mode (the full-body rig); a no-op
-  // otherwise. Deliberately recomputes its own local `orientation`
-  // rather than touching/reading anything shared with draw() — cheap
-  // trig, and keeps the two computations independent so there's no risk
-  // of them drifting out of sync during early-return frames (death,
-  // teleport) where update() doesn't reach this point.
+  // ----------------------------------------------------------------
+  // Facing / orientation
+  // ----------------------------------------------------------------
+
   updateOrientationAndFacing() {
-    if (this.mode !== "space") return;
+    if (this.mode !== 'space') return;
 
-    const lastMove = state.lastMouseMoveTime || 0;
-    const lastWheel = state.lastWheelTime || 0;
-    const recentlyScrolled = (Date.now() - lastWheel) < this.mouseWheelSuppressDuration;
-    // A hard lock (this.lockedTarget) counts as live aim input too,
-    // same as an actively-pushed gamepad stick — without this, facing
-    // would stay frozen at whatever it was before the lock (never
-    // turning to actually face a locked target that's behind the
-    // player), and the arm would keep showing its idle sway pose
-    // instead of visually tracking the lock (see drawFullBody's own
-    // mouseIdle check).
-    this.mouseIdle = !this.lockedTarget && !state.gamepadAimActive && (recentlyScrolled || (Date.now() - lastMove) > this.mouseIdleThreshold);
-
-    if (this.mouseIdle) return; // facing stays whatever move() set
-
-    let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-    let downDir = new Vector2(0, 1);
-    if (planet) {
-      if (planet.isRoundedRect) {
-        const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
-        downDir = surface.normal.clone().multiply(-1);
-      } else {
-        downDir = planet.pos.subtract(this.pos).normalize();
-      }
+    // Locked facing right for the door-opening intro (not on the title
+    // screen, which has him running around on autopilot).
+    if (state.introLocked && !state.titleScreen) {
+      this.facingDirection = 1;
+      return;
     }
+
+    const lastMove = state.lastMouseMoveTime ?? 0;
+    const lastWheel = state.lastWheelTime ?? 0;
+    const now = love.timer.getTime();
+
+    // The title screen ignores the mouse outright (always "idle").
+    const recentlyScrolled = (now - lastWheel) < this.mouseWheelSuppressDuration;
+    this.mouseIdle = !this.lockedTarget
+      && !state.gamepadAimActive
+      && (state.titleScreen || recentlyScrolled || (now - lastMove) > this.mouseIdleThreshold);
+
+    if (this.mouseIdle) return;
+
+    const planet = (this.onSurface && this.currentPlanet) || this.lastInfluencePlanet;
+    const downDir = this.visualDownDirection(planet);
     const downAngle = Math.atan2(downDir.y, downDir.x);
     const orientation = downAngle - Math.PI / 2;
-
     const tangentX = Math.cos(orientation);
     const tangentY = Math.sin(orientation);
 
-    // A hard lock takes priority over everything else here too — the
-    // astronaut should turn to face whatever's locked on, even if it's
-    // currently behind him, rather than the mouse/stick case below
-    // (which the lock overrides the same way computeLeftArmAimAngle's
-    // own priority chain already does for the aim angle itself).
     let toTargetX, toTargetY;
     if (this.lockedTarget) {
       toTargetX = this.lockedTarget.pos.x - this.pos.x;
       toTargetY = this.lockedTarget.pos.y - this.pos.y;
     } else if (state.gamepadAimActive) {
-      // The right stick already gives a DIRECTION, not a position — no
-      // subtraction from the player's own position needed, unlike the
-      // mouse case below (which has to convert a screen point into a
-      // world point, then subtract). Same projection-onto-tangent-axis
-      // technique either way, just a different source for the vector
-      // being projected.
-      toTargetX = state.gamepadAimX;
-      toTargetY = state.gamepadAimY;
+      toTargetX = state.gamepadAimX ?? 0;
+      toTargetY = state.gamepadAimY ?? 0;
     } else {
-      const cam = state.camera || { x: 0, y: 0 };
-      const zoom = state.zoom || 1;
-      const mouse = state.mouse || { x: this.pos.x, y: this.pos.y };
+      const cam = state.camera ?? { x: 0, y: 0 };
+      const zoom = state.zoom ?? 1;
+      const mouse = state.mouse ?? { x: this.pos.x, y: this.pos.y };
       const mouseWorldX = mouse.x / zoom + cam.x;
       const mouseWorldY = mouse.y / zoom + cam.y;
       toTargetX = mouseWorldX - this.pos.x;
       toTargetY = mouseWorldY - this.pos.y;
     }
-    const projection = toTargetX * tangentX + toTargetY * tangentY;
 
-    // Positive means the target (locked object, mouse, or stick
-    // direction) is on the local +x side (dirSign +1); negative means
-    // it's on the local -x side (dirSign -1) — same convention drawing
-    // and aiming already use elsewhere.
-    this.facingDirection = projection >= 0 ? 1 : -1;
+    // Wall-jump facing lock and wall-sliding both force facing away from
+    // the wall on their own — skipped while either is active.
+    if (this.wallJumpLockTimer <= 0 && !this.isWallSliding) {
+      const projection = toTargetX * tangentX + toTargetY * tangentY;
+      this.facingDirection = projection >= 0 ? 1 : -1;
+    }
   }
 
-  // ----------------------------
-  // BOOT DRAW HELPER (platform / death modes)
-  // ----------------------------
-  drawBoot(ctx) {
-    const sprite = this.scaledBootCanvas;
-    if (!sprite) return;
-    ctx.drawImage(
-      sprite.canvas,
-      -sprite.displayWidth / 2,
-      -sprite.displayHeight / 2,
-      sprite.displayWidth,
-      sprite.displayHeight
-    );
+  // ----------------------------------------------------------------
+  // Aim helpers
+  // ----------------------------------------------------------------
+
+  worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign) {
+    if (dirSign > 0) return desiredWorldAngle - orientation;
+    return (orientation + Math.PI) - desiredWorldAngle;
   }
 
-  // ----------------------------
-  // FULL BODY DRAW HELPERS (planet-surface/space mode AND maze mode)
-  // Ported from the standalone astronaut prototype: each limb has a
-  // fixed offset from the rig's origin (rotated by `orientation`, the
-  // same "up is away from the planet" angle already computed by the
-  // caller) plus a "joint" pivot within its own image so it swings from
-  // the right spot. `originPos` is passed in explicitly (rather than
-  // always using this.pos) so the caller can offset the whole rig
-  // outward from the planet without touching the physics position.
-  //
-  // Draws from the pre-scaled sprite cache (see initScaledAssets) rather
-  // than resampling the source images every frame. cosO/sinO are passed
-  // in from drawFullBody so they're computed once per frame, not once
-  // per limb. Each sprite's displayWidth/Height (its correct world-space
-  // size) is passed explicitly to drawImage, since the underlying cached
-  // canvas is baked at a higher resolution than that (see
-  // initScaledAssets) so zooming in stays crisp.
-  // ----------------------------
-  drawLimb(ctx, partKey, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal = false) {
-    const sprite = this.scaledParts[partKey];
-    if (!sprite) return;
+  computeLeftArmAimAngle(orientation, dirSign, originPos) {
+    const cfg = this.bodyPartsConfig;
     const s = this.bodyScale;
-    ctx.save();
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+
+    const offsetX = cfg.leftArmX * dirSign;
+    const offsetY = cfg.leftArmY;
     const wx = offsetX * cosO - offsetY * sinO;
     const wy = offsetX * sinO + offsetY * cosO;
-    ctx.translate(originPos.x + wx * s, originPos.y + wy * s);
-    ctx.rotate(orientation + angle);
-    // Mirrors the sprite art itself (e.g. so a thumb baked into the
-    // artwork points the correct way after a rotation that swings the
-    // limb well outside its normal range of motion) — added AFTER the
-    // rotate above but BEFORE drawImage. Because it's applied here, the
-    // existing -jointX*s/-jointY*s offset below still correctly lands
-    // the joint at the origin with no separate adjustment needed: the
-    // flip mirrors the offset along with the art, and those two
-    // mirrored quantities still cancel out the same way they did
-    // unflipped.
-    if (flipHorizontal) ctx.scale(-1, 1);
-    ctx.drawImage(sprite.canvas, -jointX * s, -jointY * s, sprite.displayWidth, sprite.displayHeight);
-    ctx.restore();
+    const shoulderX = originPos.x + wx * s;
+    const shoulderY = originPos.y + wy * s;
+
+    const forwardAngle = dirSign > 0 ? orientation : (orientation + Math.PI);
+
+    // Re-checked every frame — the moment a lock stops being valid
+    // (destroyed, scrolled out of the viewport, or landed on), it's
+    // cleared here and this frame falls through to the normal aim
+    // priority chain below.
+    if (this.lockedTarget && !TargetLock.isValidLockTarget(this.lockedTarget)) {
+      this.lockedTarget = null;
+    }
+
+    // With a gamepad as the active input device and the right stick
+    // resting in its deadzone, there's no meaningful aim target — the
+    // mouse branch below would land almost exactly on the shoulder, and
+    // that near-zero vector's angle is floating-point noise. Aiming
+    // straight ahead matches the plain "shoot ahead of me" expectation.
+    const aimStraightAhead = !this.lockedTarget && !this.pullTarget
+      && !state.gamepadAimActive && state.gamepadIsActiveDevice;
+
+    let targetWorldX, targetWorldY;
+    if (aimStraightAhead) {
+      targetWorldX = shoulderX + Math.cos(forwardAngle) * 1000;
+      targetWorldY = shoulderY + Math.sin(forwardAngle) * 1000;
+    } else if (this.lockedTarget) {
+      // lockAimLeadX/Y: an optional offset from the target's own center
+      // to aim at instead — the title screen's autopilot sets it to lead
+      // a moving asteroid (see TitleScreen.js).
+      targetWorldX = this.lockedTarget.pos.x + (this.lockAimLeadX ?? 0);
+      targetWorldY = this.lockedTarget.pos.y + (this.lockAimLeadY ?? 0);
+    } else if (this.pullTarget) {
+      [targetWorldX, targetWorldY] = this.getPullAnchor(this.pullTarget);
+    } else if (state.gamepadAimActive) {
+      targetWorldX = shoulderX + (state.gamepadAimX ?? 0) * 1000;
+      targetWorldY = shoulderY + (state.gamepadAimY ?? 0) * 1000;
+    } else {
+      const cam = state.camera ?? { x: 0, y: 0 };
+      const zoom = state.zoom ?? 1;
+      const mouse = state.mouse ?? { x: shoulderX, y: shoulderY };
+      targetWorldX = mouse.x / zoom + cam.x;
+      targetWorldY = mouse.y / zoom + cam.y;
+    }
+
+    const targetAngle = Math.atan2(targetWorldY - shoulderY, targetWorldX - shoulderX);
+    let relative = Math.atan2(
+      Math.sin(targetAngle - forwardAngle),
+      Math.cos(targetAngle - forwardAngle),
+    );
+
+    if (!this.lockedTarget) {
+      relative = Math.max(-this.maxAimFromForward, Math.min(this.maxAimFromForward, relative));
+    }
+
+    const clampedTargetAngle = forwardAngle + relative;
+    this.aimShoulderPos = new Vector2(shoulderX, shoulderY);
+    this.aimWorldAngle = clampedTargetAngle;
+    this.aimRelativeAngle = relative;
+    this.aimAnchorPos = this.pos.clone();
+
+    return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
   }
 
-  drawFullBody(ctx, orientation, originPos) {
-    if (!this.scaledPartsReady) this.initScaledAssets();
-    if (!this.scaledParts.body && !this.scaledParts.leftboot) { this.drawBoot(ctx); return; }
+  computeHeadLookTilt(orientation, dirSign) {
+    const forwardAngle = dirSign > 0 ? orientation : (orientation + Math.PI);
+    const desiredWorldAngle = forwardAngle + this.headLookScale * (this.aimRelativeAngle ?? 0);
+    return this.worldAngleToLocalRotation(desiredWorldAngle, orientation, dirSign);
+  }
+
+  // ----------------------------------------------------------------
+  // Drawing
+  // ----------------------------------------------------------------
+
+  drawLimb(img, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal) {
+    if (!img) return;
+    const s = this.bodyScale;
+
+    const wx = offsetX * cosO - offsetY * sinO;
+    const wy = offsetX * sinO + offsetY * cosO;
+
+    love.graphics.push();
+    love.graphics.translate(originPos.x + wx * s, originPos.y + wy * s);
+    love.graphics.rotate(orientation + angle);
+    if (flipHorizontal) love.graphics.scale(-1, 1);
+    love.graphics.draw(img, -jointX * s, -jointY * s, 0, s, s);
+    love.graphics.pop();
+  }
+
+  // A fixed pose (WALL_SLIDE_POSE) — no walk-bob, no aim-follow. Also its
+  // own z-order: the right arm (reaching back across/over the head in
+  // this pose) is drawn AFTER the head.
+  drawWallSlidePose(orientation, originPos) {
+    const images = state.characterImages;
+    if (!images) return;
+
+    const cfg = this.bodyPartsConfig;
+    const pose = WALL_SLIDE_POSE;
+    const s = this.bodyScale;
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+
+    this.drawLimb(images.leftboot, pose.leftBootX, pose.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, pose.leftBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(images.leftarm, cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, pose.leftArmAngle, orientation, originPos, cosO, sinO);
+
+    if (images.body) {
+      const [bodyW, bodyH] = images.body.getDimensions();
+      love.graphics.push();
+      love.graphics.translate(originPos.x, originPos.y);
+      love.graphics.rotate(orientation);
+      love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
+      love.graphics.pop();
+    }
+
+    this.drawLimb(images.rightboot, pose.rightBootX, pose.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, pose.rightBootAngle, orientation, originPos, cosO, sinO);
+
+    if (images.head) {
+      const [headW, headH] = images.head.getDimensions();
+      const headWX = -pose.headY * sinO;
+      const headWY = pose.headY * cosO;
+      const pivotY = headH * s * this.headPivotFraction;
+      love.graphics.push();
+      love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
+      love.graphics.rotate(orientation + pose.headAngle);
+      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      love.graphics.pop();
+    }
+
+    this.drawLimb(images.rightarm, cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, pose.rightArmAngle, orientation, originPos, cosO, sinO);
+  }
+
+  // How far (world units) the ground-pound pose has to be drawn below his
+  // standing position for the lowest part of it to sit exactly on the
+  // ground. Worked out from the pose itself — the bottom of the body,
+  // and each boot's image turned to its own angle about its own joint,
+  // whichever reaches lowest. Cached; none of it changes.
+  getGroundPoundSeatDrop() {
+    if (groundPoundSeatDrop !== null) return groundPoundSeatDrop;
+    const images = state.characterImages;
+    if (!images || !images.body) return 0;
+
+    const cfg = this.bodyPartsConfig, pose = GROUND_POUND_POSE;
+    const bodyH = images.body.getHeight();
+    let lowest = pose.bodyY + bodyH / 2;
+
+    const lowestOfBoot = (img, attachY, jointX, jointY, angle) => {
+      if (!img) return -Infinity;
+      const [w, h] = img.getDimensions();
+      const sinA = Math.sin(angle), cosA = Math.cos(angle);
+      let best = -Infinity;
+      for (const corner of [[0, 0], [w, 0], [0, h], [w, h]]) {
+        best = Math.max(best, attachY + (corner[0] - jointX) * sinA + (corner[1] - jointY) * cosA);
+      }
+      return best;
+    };
+    lowest = Math.max(lowest,
+      lowestOfBoot(images.leftboot, pose.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, pose.leftBootAngle),
+      lowestOfBoot(images.rightboot, pose.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, pose.rightBootAngle));
+
+    // All in the rig's own unscaled units until the last step: the soles
+    // of his feet are his collision radius below this.pos, and the rig's
+    // origin is groundOffset above it.
+    const solesY = this.groundOffset + this.baseRadius / this.bodyScale;
+    groundPoundSeatDrop = (solesY - lowest) * this.bodyScale + GROUND_POUND_SEAT_ADJUST;
+    return groundPoundSeatDrop;
+  }
+
+  // Draws one blended ball-morph pose (leftboot, leftarm, body,
+  // rightboot, rightarm, head) — every part's own X/Y/angle comes
+  // straight from `pose`; jointX/jointY still come from cfg (an intrinsic
+  // property of the source art).
+  drawBallMorphPose(orientation, originPos, pose) {
+    const images = state.characterImages;
+    if (!images) return;
 
     const cfg = this.bodyPartsConfig;
     const s = this.bodyScale;
     const cosO = Math.cos(orientation);
     const sinO = Math.sin(orientation);
-    const inMaze = this.mode === "maze";
 
-    // In the maze there's no continuous "walking" flag (movement is
-    // discrete tile hops, throttled in move()) — walkTime only ever
-    // advances when a hop actually happens there, so this reflects
-    // whatever phase it's currently at. mazeRecentlyMoved additionally
-    // requires that hop to have been recent, so legs/head settle back
-    // to neutral if he's just standing still rather than freezing
-    // mid-stride forever.
-    const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
-    // Platform mode's own equivalent of the onSurface check below —
-    // this.onSurface is specifically space/planet mode's ground-
-    // contact flag, so it's always false in platform mode regardless
-    // of whether he's actually standing on a tile there; this.onGround
-    // is platform mode's own separate tracking for that. Without this,
-    // none of the four walk-animation reads below (this one included)
-    // would ever trigger in platform mode even with isWalking/walkTime
-    // correctly maintained, since this.onSurface alone would never be
-    // true there.
-    const platformWalking = this.mode === "platform" && this.onGround && this.isWalking;
-    const walkAngle = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
+    this.drawLimb(images.leftboot, pose.leftBootX, pose.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, pose.leftBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(images.leftarm, pose.leftArmX, pose.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, pose.leftArmAngle, orientation, originPos, cosO, sinO);
 
-    // sin(walkTime)^2 is 0 exactly when walkAngle itself is 0 (legs
-    // neutral, one passing through vertical — body at its highest) and
-    // 1 exactly when walkAngle is at its own extreme (legs maximally
-    // scissored apart — body at its lowest), naturally oscillating at
-    // TWICE walkAngle's frequency, matching that this happens once per
-    // EACH leg's neutral-to-spread swing, not once per full stride.
-    // Applied along (-sinO, cosO) — the character's own local "down"
-    // direction (toward whatever surface they're standing on) after
-    // the orientation rotation, not always world-+Y, since "down" can
-    // point any direction on a curved planet.
-    const walkBobT = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
+    if (images.body) {
+      const [bodyW, bodyH] = images.body.getDimensions();
+      love.graphics.push();
+      love.graphics.translate(originPos.x, originPos.y);
+      love.graphics.rotate(orientation);
+      love.graphics.draw(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s);
+      love.graphics.pop();
+    }
+
+    this.drawLimb(images.rightboot, pose.rightBootX, pose.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, pose.rightBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(images.rightarm, pose.rightArmX, pose.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, pose.rightArmAngle, orientation, originPos, cosO, sinO);
+
+    if (images.head) {
+      const [headW, headH] = images.head.getDimensions();
+      const headWX = -pose.headY * sinO;
+      const headWY = pose.headY * cosO;
+      const pivotY = headH * s * this.headPivotFraction;
+      love.graphics.push();
+      love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
+      love.graphics.rotate(orientation + pose.headAngle);
+      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      love.graphics.pop();
+    }
+  }
+
+  // Picks and blends the right pair of keyframes for whichever direction
+  // (this.morphState) and how far into it (this.morphElapsed) the
+  // transition is, then draws that pose with the same facing-direction
+  // flip wrapper draw() itself uses.
+  drawBallMorphTransition(orientation) {
+    const planet = (this.onSurface && this.currentPlanet) || this.lastInfluencePlanet;
+    const outwardDir = this.visualDownDirection(planet).multiply(-1);
+    const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+
+    const segT = Math.min(1, this.morphElapsed / BALL_MORPH_SEGMENT_TICKS);
+    let pose;
+    if (this.morphState === 'toBall') {
+      if (this.morphElapsed < BALL_MORPH_SEGMENT_TICKS) {
+        pose = lerpBallMorphPose(BALL_MORPH_STANDING_POSE, BALL_MORPH_FRAME_1, segT);
+      } else {
+        const t2 = Math.min(1, (this.morphElapsed - BALL_MORPH_SEGMENT_TICKS) / BALL_MORPH_SEGMENT_TICKS);
+        pose = lerpBallMorphPose(BALL_MORPH_FRAME_1, BALL_MORPH_FRAME_2, t2);
+      }
+    } else { // "toHuman" — same two keyframes, played in reverse
+      if (this.morphElapsed < BALL_MORPH_SEGMENT_TICKS) {
+        pose = lerpBallMorphPose(BALL_MORPH_FRAME_2, BALL_MORPH_FRAME_1, segT);
+      } else {
+        const t2 = Math.min(1, (this.morphElapsed - BALL_MORPH_SEGMENT_TICKS) / BALL_MORPH_SEGMENT_TICKS);
+        pose = lerpBallMorphPose(BALL_MORPH_FRAME_1, BALL_MORPH_STANDING_POSE, t2);
+      }
+    }
+
+    love.graphics.push();
+    love.graphics.translate(this.pos.x, this.pos.y);
+    love.graphics.rotate(orientation);
+    love.graphics.scale(dirSign, 1);
+    love.graphics.rotate(-orientation);
+    love.graphics.translate(-this.pos.x, -this.pos.y);
+
+    this.drawBallMorphPose(orientation, visualPos, pose);
+
+    love.graphics.pop();
+  }
+
+  // Whether the blaster's in use right now, or was a moment ago: spraying
+  // water, holding fire, or a fireball/portal shot within the last
+  // BLASTER_IN_USE_LINGER seconds. Its arm then stays aimed (see
+  // drawFullBody) instead of drifting into the idle sway.
+  isUsingBlaster() {
+    if (WaterSystem.isSpraying()) return true;
+    if (state.gamepadFireHeld || (state.mouseDown && (state.weaponMode ?? 'blaster') === 'blaster')) return true;
+    const now = love.timer.getTime();
+    if (this.lastShotTime != null && now - this.lastShotTime < BLASTER_IN_USE_LINGER) return true;
+    if (PortalGun.lastShotTime != null && now - PortalGun.lastShotTime < BLASTER_IN_USE_LINGER) return true;
+    return false;
+  }
+
+  drawFullBody(orientation, originPos) {
+    const images = state.characterImages;
+    if (!images) return;
+
+    if (this.isWallSliding) {
+      this.drawWallSlidePose(orientation, originPos);
+      return;
+    }
+
+    // Mid ground pound: its own fixed pose (GROUND_POUND_POSE) from the
+    // moment it starts until he lands, held through the impact beat after
+    // landing so he's seen to actually HIT the ground in it. Drawn lower
+    // than his standing self by getGroundPoundSeatDrop (in this pose his
+    // feet are up in front of him), eased in over the first
+    // GROUND_POUND_SETTLE_TICKS so he sinks into the pose.
+    const poundAirborne = this.isGroundPounding && !this.onSurface;
+    const poundLanded = this.onSurface && (this.groundPoundImpactTimer > 0 || this.wasGroundPounding);
+    if (poundAirborne || poundLanded) {
+      const settle = poundLanded ? 1 : Math.min(1, this.groundPoundPoseTime / GROUND_POUND_SETTLE_TICKS);
+      const drop = this.getGroundPoundSeatDrop() * settle;
+      const downAngle = orientation + Math.PI / 2;
+      const seatedOrigin = new Vector2(originPos.x + Math.cos(downAngle) * drop, originPos.y + Math.sin(downAngle) * drop);
+      this.drawBallMorphPose(orientation, seatedOrigin, GROUND_POUND_POSE);
+      return;
+    }
+
+    const cfg = this.bodyPartsConfig;
+    const s = this.bodyScale;
+    const cosO = Math.cos(orientation);
+    const sinO = Math.sin(orientation);
+
+    const walkAngle = (this.onSurface && this.isWalking) ? (Math.sin(this.walkTime) * 0.6) : 0;
+    const walkBobT = (this.onSurface && this.isWalking) ? (Math.sin(this.walkTime) ** 2) : 0;
     const walkBobAmount = walkBobT * this.walkBobStrength;
     originPos = new Vector2(
       originPos.x + -sinO * walkBobAmount,
-      originPos.y + cosO * walkBobAmount
+      originPos.y + cosO * walkBobAmount,
     );
 
     const dirSign = this.facingDirection < 0 ? -1 : 1;
@@ -1802,441 +1593,49 @@ export class Player extends Entity {
     let leftArmAngle, rightArmAngle;
     let rightArmFlipped = false;
 
-    if (inMaze) {
-      // No mouse/aim concept in the maze — both arms just sway
-      // together, tied to the same hop-driven walk phase as the legs.
-      const swayAngle = walkAngle * this.armSwingScale;
+    // Held rigidly at attention (both arms straight down, no aim/sway/
+    // head-tilt) while standing behind the shelter's still-closed/opening
+    // door — the blaster arm's own aim pose would poke out past the
+    // door's clipped frame otherwise (see SpaceShelter.js's drawDoor).
+    // poseBlend (1 = fully forced, 0 = fully normal) eases this back to
+    // the normal pose over INTRO_POSE_TRANSITION_SECONDS starting the
+    // moment the door reaches fully open.
+    let poseBlend = 0;
+    if (state.titleScreen) {
+      // Out in the belt on autopilot (see TitleScreen.js) — ordinary pose.
+      poseBlend = 0;
+    } else if (state.spaceShelter && !state.spaceShelter.playerInFront) {
+      poseBlend = 1;
+    } else if (this.introPoseBlendStart != null) {
+      const elapsed = love.timer.getTime() - this.introPoseBlendStart;
+      poseBlend = Math.max(0, 1 - elapsed / INTRO_POSE_TRANSITION_SECONDS);
+    }
+
+    const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
+    if (this.mouseIdle && !this.pullTarget && !this.isUsingBlaster()) {
+      const swayAngle = (this.onSurface && this.isWalking)
+        ? (walkAngle * this.armSwingScale)
+        : (Math.sin(love.timer.getTime() * 1.5) * 0.15);
       leftArmAngle = swayAngle;
       rightArmAngle = swayAngle;
     } else {
-      // Always compute the aim angle (even while idle) so aimShoulderPos/
-      // aimWorldAngle stay accurate to the current aim target for
-      // shootFireball() — but only actually use it for the arm's visual
-      // angle when the mouse isn't idle, OR the player is actively
-      // pulling (in which case the arm must stay visually locked to the
-      // pull target regardless of idle mouse state — see
-      // computeLeftArmAimAngle above). Otherwise, while idle, both arms
-      // sway together instead: in sync with the walk cycle if walking, or
-      // a slow gentle idle sway if just standing still.
-      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
-      if (this.mouseIdle && !this.pullTarget) {
-        const swayAngle = (platformWalking || (this.onSurface && this.isWalking))
-          ? walkAngle * this.armSwingScale
-          : Math.sin(Date.now() * 0.0015) * 0.15;
-        leftArmAngle = swayAngle;
-        rightArmAngle = swayAngle;
-      } else {
-        leftArmAngle = aimAngle;
-        rightArmAngle = walkAngle * this.armSwingScale;
-      }
+      leftArmAngle = aimAngle;
+      rightArmAngle = walkAngle * this.armSwingScale;
     }
 
-    if (!inMaze && !this.onSurface) {
-      // Simple in-flight pose: legs splayed, and the non-blaster
-      // (right) arm raises up and slightly outward — angled, not
-      // straight up — rather than just hanging at the side, which is
-      // what happened before this: walkAngle (what normally drives its
-      // swing) evaluates to 0 while airborne, so it had nothing to
-      // move it. Reuses the same world-angle-then-convert approach the
-      // aiming arm already uses (worldAngleToLocalRotation) with a
-      // fixed "up and outward" target instead of the mouse/pull
-      // target, so the direction stays correct regardless of current
-      // body orientation or the left/right facing mirror.
-      leftBootAngle = -0.7;
-      rightBootAngle = 0.7;
-      const raisedWorldAngle = -Math.PI / 2 - (Math.PI * 0.75) * dirSign; // "up," tilted 135° AWAY from the blaster-arm side — sign flipped and magnitude increased from the previous +45°-toward-blaster version, per feedback
-      rightArmAngle = this.worldAngleToLocalRotation(raisedWorldAngle, orientation, dirSign);
-      rightArmFlipped = true; // mirrors the sprite art so the thumb (baked into the artwork) points toward the body instead of away from it at this large a rotation
+    if (poseBlend > 0) {
+      // The right arm's rest art already hangs down at 0 local rotation,
+      // but the left (blaster) arm's local 0 points it straight out in
+      // front — rotate it to world-angle pi/2 (straight down), nudged 5
+      // degrees counterclockwise, via the same world-to-local conversion
+      // every other world-angle-driven pose here uses.
+      const blasterRestWorldAngle = Math.PI / 2 - (5 * Math.PI / 180);
+      const forcedLeftArmAngle = this.worldAngleToLocalRotation(blasterRestWorldAngle, orientation, dirSign);
+      leftArmAngle += (forcedLeftArmAngle - leftArmAngle) * poseBlend;
+      rightArmAngle *= (1 - poseBlend);
     }
 
-    this.drawLimb(ctx, 'leftboot', cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
-    this.drawLimb(ctx, 'leftarm', cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO);
-
-    const bodySprite = this.scaledParts.body;
-    if (bodySprite) {
-      ctx.save();
-      ctx.translate(originPos.x, originPos.y);
-      ctx.rotate(orientation);
-      ctx.drawImage(
-        bodySprite.canvas,
-        -bodySprite.displayWidth / 2,
-        cfg.bodyY * s - bodySprite.displayHeight / 2,
-        bodySprite.displayWidth,
-        bodySprite.displayHeight
-      );
-      ctx.restore();
-    }
-
-    this.drawLimb(ctx, 'rightboot', cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
-    this.drawLimb(ctx, 'rightarm', cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO, rightArmFlipped);
-
-    const headSprite = this.scaledParts.head;
-    if (headSprite) {
-      ctx.save();
-      const headWX = -cfg.headY * sinO;
-      const headWY = cfg.headY * cosO;
-      const headBob = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
-      // Look toward the aim target (up if aiming up, down if aiming
-      // down), same idea as the arm. Not applicable in the maze (no
-      // aim concept there) or while the mouse is idle — both just stay
-      // neutral, matching the arms swaying together instead of
-      // tracking a stale aim point.
-      const headLookTilt = (inMaze || this.mouseIdle) ? 0 : this.computeHeadLookTilt(orientation, dirSign);
-      const headTilt = headBob + headLookTilt;
-      ctx.translate(originPos.x + headWX * s, originPos.y + headWY * s);
-      ctx.rotate(orientation + headTilt);
-      const pivotY = headSprite.displayHeight * this.headPivotFraction;
-      ctx.drawImage(
-        headSprite.canvas,
-        -headSprite.displayWidth / 2,
-        -pivotY,
-        headSprite.displayWidth,
-        headSprite.displayHeight
-      );
-      ctx.restore();
-    }
-  }
-
-  draw() {
-    const ctx = state.ctx;
-    let scale = 1;
-    let glow = 0;
-
-    if (this.isDying) {
-      ctx.save();
-      ctx.globalAlpha = this.deathAlpha;
-      ctx.translate(this.pos.x, this.pos.y);
-      ctx.rotate(this.deathRotation);
-      ctx.scale(this.deathScale, this.deathScale);
-      ctx.shadowColor = 'orange';
-      ctx.shadowBlur = 30 * (this.deathAlpha * 0.5);
-      this.drawBoot(ctx);
-      ctx.shadowBlur = 0;
-      ctx.restore();
-      return;
-    }
-
-    if (this.isTeleporting) {
-      scale = this.teleportScale;
-      glow = this.teleportGlow;
-    }
-
-    // Invincibility flicker: applies to whichever mode is drawn below
-    // (platform, maze, or planet). Balanced by the ctx.restore() calls
-    // added at the platform branch's return and at the very end of this
-    // function — each mode's own internal save/restore pairs nest
-    // inside this one without interfering with it.
-    ctx.save();
-    if (this.isInvincible()) {
-      const blink = Math.floor(Date.now() / 100) % 2 === 0;
-      ctx.globalAlpha = blink ? 1 : 0.3;
-    }
-
-    // ----------------------------
-    // MAZE MODE, PLATFORM MODE, and PLANET/SPACE MODE (full body) share
-    // the same drawing pipeline. The only differences are how
-    // `orientation`/`visualPos` are derived, and an extra uniform scale
-    // for the maze's/platform interior's smaller size — the mirror math
-    // below (which reflects about the axis at angle `orientation`
-    // through this.pos) reduces to a plain left/right flip when
-    // orientation = 0, which is exactly the "always face left or right,
-    // up/down never rotates him" behavior wanted in both the maze and
-    // platform interiors (neither has a gravity-direction/surface-
-    // normal concept the way planet surfaces do). facingDirection
-    // itself is only ever changed by horizontal movement (see move()),
-    // so vertical-only movement (climbing a ladder, say) naturally
-    // keeps whichever way he was last facing.
-    // ----------------------------
-    let orientation;
-    let visualPos;
-    let modeScale = 1;
-
-    if (this.mode === "maze") {
-      orientation = 0; // always upright; no gravity/surface concept here
-      visualPos = this.pos; // no ground-offset concept in the maze
-      modeScale = this.mazeBodyScale;
-    } else if (this.mode === "platform") {
-      orientation = 0; // same reasoning as maze — no rotation concept in a tile-based interior
-      visualPos = this.pos;
-      modeScale = this.platformBodyScale;
-    } else {
-      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-      let downDir = new Vector2(0, 1);
-      if (planet) {
-        if (planet.isRoundedRect) {
-          const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
-          downDir = surface.normal.clone().multiply(-1);
-        } else {
-          downDir = planet.pos.subtract(this.pos).normalize();
-        }
-      }
-      const downAngle = Math.atan2(downDir.y, downDir.x);
-      orientation = downAngle - Math.PI / 2;
-
-      // Shift the visual draw origin outward (away from the planet) so
-      // the boots' soles rest on the surface instead of this.pos —
-      // which marks roughly the belt — sinking into it. This only
-      // affects drawing; the physics position (this.pos) is untouched.
-      const outwardDir = downDir.multiply(-1);
-      visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
-    }
-
-    ctx.save();
-    if (this.isTeleporting) {
-      ctx.shadowColor='yellow';
-      ctx.shadowBlur=40*glow;
-    }
-
-    // Mirror the whole rig about the character's own local vertical
-    // axis (the line through this.pos at angle `orientation`) when
-    // facing left, and apply the teleport pulse (`scale`) and the maze
-    // size reduction (`modeScale`) the same way. Doing this as
-    // translate→rotate→scale→rotate-back→translate-back reflects/scales
-    // everything drawn afterward around that axis, regardless of where
-    // on the planet the character currently is — a plain ctx.scale(-1,1)
-    // would mirror around the canvas' raw x-axis instead, which isn't
-    // what we want here. Using a transform for the pulse/mode-scale
-    // (rather than temporarily inflating bodyScale, as before) keeps
-    // the pre-scaled sprite cache valid — it never needs to be
-    // regenerated mid-animation or per-mode.
-    const dirSign = this.facingDirection < 0 ? -1 : 1;
-    const totalScale = scale * modeScale;
-    ctx.translate(this.pos.x, this.pos.y);
-    ctx.rotate(orientation);
-    ctx.scale(dirSign * totalScale, totalScale);
-    ctx.rotate(-orientation);
-    ctx.translate(-this.pos.x, -this.pos.y);
-
-    this.drawFullBody(ctx, orientation, visualPos);
-    ctx.shadowBlur=0;
-    ctx.restore();
-    ctx.restore(); // matches the outer invincibility-flicker save above
-  }
-
-  // ----------------------------
-  // PIXI RENDERING (player rig — see js/render/PixiStage.js for the
-  // full context on why this is a separate render path, and
-  // Planetoid.js's own createPixiSprites/updatePixiSprites for the
-  // same pattern applied there first). draw()/drawFullBody()/
-  // drawLimb() above are completely untouched — every value computed
-  // below mirrors their exact math, just applied to Pixi sprite
-  // properties instead of ctx calls, so this stays directly auditable
-  // against the original.
-  //
-  // Known, deliberate gaps for this first pass — flagged rather than
-  // silently dropped: the death animation's own drop-shadow glow and
-  // the teleport pulse's shadow-blur glow both use Canvas2D's
-  // shadowBlur, which has no direct Container equivalent — doing this
-  // properly needs a Pixi filter (e.g. a glow/blur filter), real added
-  // complexity for what's a comparatively minor polish detail on top
-  // of everything else here. The death animation itself currently just
-  // hides the rig rather than reproducing drawBoot()'s own spinning-
-  // scale-down effect. Both worth a follow-up pass.
-  // ----------------------------
-
-  // Lazily builds the six body-part sprites (leftboot, leftarm, body,
-  // rightboot, rightarm, head — same six keys as scaledParts, same
-  // z-order as drawFullBody's own sequence of draw calls) as children
-  // of a single mirrorContainer. anchor is set ONCE here, not every
-  // frame — it's a scale-invariant fraction (see the per-part math
-  // below), so it never needs recomputing after creation.
-  createPixiRig(playerLayer) {
-    if (this.pixiRig) return;
-    // Actually TRIGGERS the bake, matching drawFullBody()'s own
-    // `if (!this.scaledPartsReady) this.initScaledAssets();` — this
-    // used to only CHECK the flag and bail, which was the actual bug
-    // behind the player never rendering at all: nothing else calls
-    // initScaledAssets() now that draw()/drawFullBody() are disabled
-    // (see game.js's own commented-out state.player.draw()), so the
-    // flag was never getting set by anything, and this returned early
-    // every single frame, forever, with no error to show for it.
-    if (!this.scaledPartsReady) this.initScaledAssets();
-    if (!this.scaledPartsReady) return; // still not ready somehow (e.g. character images themselves not yet loaded) — try again next frame
-
-    const mirrorContainer = new Container();
-    playerLayer.addChild(mirrorContainer);
-
-    const cfg = this.bodyPartsConfig;
-    const s = this.bodyScale;
-    const parts = {};
-
-    // jointX/jointY (bodyPartsConfig) are in the SOURCE IMAGE's own
-    // native pixel space — drawLimb's own drawImage call places the
-    // sprite so that point lands exactly at the origin
-    // (drawImage(canvas, -jointX*s, -jointY*s, displayWidth,
-    // displayHeight)), which is precisely what Pixi's anchor (a 0-1
-    // fraction of the sprite's own size) describes: anchor =
-    // (jointX*s)/displayWidth. The bodyScale (s) cancels out of this
-    // fraction algebraically (displayWidth is itself
-    // naturalWidth*bodyScale), so it's genuinely scale-invariant, not
-    // just "doesn't change much" — safe to compute once here rather
-    // than in the per-frame update below.
-    const limbConfigs = {
-      leftboot: { jx: cfg.leftBootJointX, jy: cfg.leftBootJointY },
-      rightboot: { jx: cfg.rightBootJointX, jy: cfg.rightBootJointY },
-      leftarm: { jx: cfg.leftArmJointX, jy: cfg.leftArmJointY },
-      rightarm: { jx: cfg.rightArmJointX, jy: cfg.rightArmJointY },
-    };
-
-    for (const key of ['leftboot', 'leftarm', 'body', 'rightboot', 'rightarm', 'head']) {
-      const cached = this.scaledParts[key];
-      if (!cached) continue;
-      const sprite = new Sprite(Texture.from(cached.canvas));
-      // Explicit width/height, not the texture's own native pixel
-      // size — the baked canvas is deliberately higher-resolution than
-      // "zoom=1" needs (see initScaledAssets/makeScaledSprite's own
-      // comments), so it stays crisp when Pixi's own GPU scaling zooms
-      // in, same reasoning as the existing Canvas2D drawImage calls
-      // already passing displayWidth/Height explicitly rather than
-      // relying on the canvas's own pixel size.
-      sprite.width = cached.displayWidth;
-      sprite.height = cached.displayHeight;
-
-      if (limbConfigs[key]) {
-        const { jx, jy } = limbConfigs[key];
-        sprite.anchor.set((jx * s) / cached.displayWidth, (jy * s) / cached.displayHeight);
-      } else if (key === 'body') {
-        sprite.anchor.set(0.5, 0.5);
-      } else if (key === 'head') {
-        // pivotY = displayHeight * headPivotFraction in drawFullBody,
-        // so the fraction IS headPivotFraction directly — no further
-        // division needed.
-        sprite.anchor.set(0.5, this.headPivotFraction);
-      }
-
-      mirrorContainer.addChild(sprite);
-      parts[key] = sprite;
-    }
-
-    this.pixiRig = { mirrorContainer, parts };
-  }
-
-  // Called every frame in place of draw() once migrated. playerLayer
-  // is the Pixi Container this rig's mirrorContainer should live in
-  // (passed through to createPixiRig on first call).
-  updatePixiRig(playerLayer) {
-    if (!this.pixiRig) {
-      this.createPixiRig(playerLayer);
-      if (!this.pixiRig) return; // still not ready
-    }
-
-    const { mirrorContainer, parts } = this.pixiRig;
-
-    // Death animation: hidden for now rather than reproducing
-    // drawBoot()'s own spinning-scale-down-with-glow effect — see this
-    // section's own header comment on known, deliberate gaps.
-    if (this.isDying) {
-      mirrorContainer.visible = false;
-      return;
-    }
-    mirrorContainer.visible = true;
-
-    let scale = 1;
-    // teleportGlow (the shadowBlur glow itself) deliberately not
-    // reproduced here yet — see this section's own header comment.
-    if (this.isTeleporting) {
-      scale = this.teleportScale;
-    }
-
-    mirrorContainer.alpha = this.isInvincible()
-      ? (Math.floor(Date.now() / 100) % 2 === 0 ? 1 : 0.3)
-      : 1;
-
-    // ----------------------------
-    // Mode/orientation/visualPos — identical branching to draw()'s own
-    // copy of this logic.
-    // ----------------------------
-    let orientation;
-    let visualPos;
-    let modeScale = 1;
-
-    if (this.mode === "maze") {
-      orientation = 0;
-      visualPos = this.pos;
-      modeScale = this.mazeBodyScale;
-    } else if (this.mode === "platform") {
-      orientation = 0;
-      visualPos = this.pos;
-      modeScale = this.platformBodyScale;
-    } else {
-      let planet = this.onSurface ? this.currentPlanet : this.lastInfluencePlanet;
-      let downDir = new Vector2(0, 1);
-      if (planet) {
-        if (planet.isRoundedRect) {
-          const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
-          downDir = surface.normal.clone().multiply(-1);
-        } else {
-          downDir = planet.pos.subtract(this.pos).normalize();
-        }
-      }
-      const downAngle = Math.atan2(downDir.y, downDir.x);
-      orientation = downAngle - Math.PI / 2;
-      const outwardDir = downDir.multiply(-1);
-      visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
-    }
-
-    // ----------------------------
-    // Mirror transform — reflects everything drawn below about the
-    // axis through this.pos at angle `orientation`, exactly matching
-    // draw()'s own translate→rotate→scale→rotate→translate sequence.
-    // Built in REVERSE call order compared to that Canvas2D sequence —
-    // verified numerically (not assumed) that Pixi's Matrix composes
-    // sequential translate/rotate/scale calls in the OPPOSITE order
-    // ctx.translate/rotate/scale calls do, before writing this.
-    // ----------------------------
-    const dirSign = this.facingDirection < 0 ? -1 : 1;
-    const totalScale = scale * modeScale;
-    const mirrorMatrix = new Matrix();
-    mirrorMatrix.translate(-this.pos.x, -this.pos.y);
-    mirrorMatrix.rotate(-orientation);
-    mirrorMatrix.scale(dirSign * totalScale, totalScale);
-    mirrorMatrix.rotate(orientation);
-    mirrorMatrix.translate(this.pos.x, this.pos.y);
-    mirrorContainer.setFromMatrix(mirrorMatrix);
-
-    // ----------------------------
-    // drawFullBody's own logic, identical branching/math, from here on.
-    // ----------------------------
-    const cfg = this.bodyPartsConfig;
-    const s = this.bodyScale;
-    const cosO = Math.cos(orientation);
-    const sinO = Math.sin(orientation);
-    const inMaze = this.mode === "maze";
-
-    const mazeRecentlyMoved = inMaze && (Date.now() - this.lastMoveTime) < this.mazeMoveIdleThreshold;
-    const platformWalking = this.mode === "platform" && this.onGround && this.isWalking;
-    const walkAngle = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) * 0.6 : 0;
-    const walkBobT = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime) ** 2 : 0;
-    const walkBobAmount = walkBobT * this.walkBobStrength;
-    const originPos = new Vector2(
-      visualPos.x + -sinO * walkBobAmount,
-      visualPos.y + cosO * walkBobAmount
-    );
-
-    let leftBootAngle = walkAngle;
-    let rightBootAngle = -walkAngle;
-    let leftArmAngle, rightArmAngle;
-    let rightArmFlipped = false;
-
-    if (inMaze) {
-      const swayAngle = walkAngle * this.armSwingScale;
-      leftArmAngle = swayAngle;
-      rightArmAngle = swayAngle;
-    } else {
-      const aimAngle = this.computeLeftArmAimAngle(orientation, dirSign, originPos);
-      if (this.mouseIdle && !this.pullTarget) {
-        const swayAngle = (platformWalking || (this.onSurface && this.isWalking))
-          ? walkAngle * this.armSwingScale
-          : Math.sin(Date.now() * 0.0015) * 0.15;
-        leftArmAngle = swayAngle;
-        rightArmAngle = swayAngle;
-      } else {
-        leftArmAngle = aimAngle;
-        rightArmAngle = walkAngle * this.armSwingScale;
-      }
-    }
-
-    if (!inMaze && !this.onSurface) {
+    if (!this.onSurface && poseBlend <= 0) {
       leftBootAngle = -0.7;
       rightBootAngle = 0.7;
       const raisedWorldAngle = -Math.PI / 2 - (Math.PI * 0.75) * dirSign;
@@ -2244,50 +1643,678 @@ export class Player extends Entity {
       rightArmFlipped = true;
     }
 
-    // Limb sprites: position/rotation follow drawLimb's own wx/wy
-    // rotation-of-a-raw-offset formula exactly. flipHorizontal (right
-    // arm only, in the airborne pose above) negates scale.x — anchor
-    // was already set at creation time and doesn't need touching here,
-    // since flipping around an anchor point that's already correctly
-    // placed mirrors the art in place rather than shifting it.
-    const limbAngles = {
-      leftboot: { offsetX: cfg.leftBootX, offsetY: cfg.leftBootY, angle: leftBootAngle, flip: false },
-      leftarm: { offsetX: cfg.leftArmX, offsetY: cfg.leftArmY, angle: leftArmAngle, flip: false },
-      rightboot: { offsetX: cfg.rightBootX, offsetY: cfg.rightBootY, angle: rightBootAngle, flip: false },
-      rightarm: { offsetX: cfg.rightArmX, offsetY: cfg.rightArmY, angle: rightArmAngle, flip: rightArmFlipped },
-    };
-    for (const key of ['leftboot', 'leftarm', 'rightboot', 'rightarm']) {
-      const sprite = parts[key];
-      if (!sprite) continue;
-      const { offsetX, offsetY, angle, flip } = limbAngles[key];
-      const wx = offsetX * cosO - offsetY * sinO;
-      const wy = offsetX * sinO + offsetY * cosO;
-      sprite.position.set(originPos.x + wx * s, originPos.y + wy * s);
-      sprite.rotation = orientation + angle;
-      sprite.scale.x = flip ? -Math.abs(sprite.scale.x) : Math.abs(sprite.scale.x);
+    // Swim stroke: a brief one-shot sweep overriding whatever pose came
+    // before it. Both arms sweep the SAME WORLD angle together, from
+    // horizontal-out to straight overhead and back — converted to local
+    // rotation for EACH arm separately (their local-angle conventions
+    // differ), so they look like a matched pair.
+    if (this.swimStrokeTimer > 0) {
+      const progress = 1 - (this.swimStrokeTimer / this.swimStrokeDuration);
+      const swingT = Math.sin(progress * Math.PI); // 0 -> 1 -> 0 across the stroke
+      const overheadWorldAngle = -Math.PI / 2;
+      const outWorldAngle = dirSign > 0 ? 0 : Math.PI;
+      const strokeWorldAngle = outWorldAngle + (overheadWorldAngle - outWorldAngle) * swingT;
+      leftArmAngle = this.worldAngleToLocalRotation(strokeWorldAngle, orientation, dirSign);
+      rightArmAngle = this.worldAngleToLocalRotation(strokeWorldAngle, orientation, dirSign);
+      rightArmFlipped = false;
     }
 
-    const bodySprite = parts.body;
-    if (bodySprite) {
-      // Body's own offset is (0, cfg.bodyY) in the same raw-offset
-      // space drawLimb's offsetX/offsetY parameters use — reuses the
-      // identical wx/wy rotation formula rather than needing a
-      // separate derivation.
-      const bodyWX = -cfg.bodyY * sinO;
-      const bodyWY = cfg.bodyY * cosO;
-      bodySprite.position.set(originPos.x + bodyWX * s, originPos.y + bodyWY * s);
-      bodySprite.rotation = orientation;
+    this.drawLimb(images.leftboot, cfg.leftBootX, cfg.leftBootY, cfg.leftBootJointX, cfg.leftBootJointY, leftBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(images.leftarm, cfg.leftArmX, cfg.leftArmY, cfg.leftArmJointX, cfg.leftArmJointY, leftArmAngle, orientation, originPos, cosO, sinO);
+
+    if (images.body) {
+      const [bodyW, bodyH] = images.body.getDimensions();
+      love.graphics.push();
+      love.graphics.translate(originPos.x, originPos.y);
+      love.graphics.rotate(orientation);
+      love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
+      love.graphics.pop();
     }
 
-    const headSprite = parts.head;
-    if (headSprite) {
+    this.drawLimb(images.rightboot, cfg.rightBootX, cfg.rightBootY, cfg.rightBootJointX, cfg.rightBootJointY, rightBootAngle, orientation, originPos, cosO, sinO);
+    this.drawLimb(images.rightarm, cfg.rightArmX, cfg.rightArmY, cfg.rightArmJointX, cfg.rightArmJointY, rightArmAngle, orientation, originPos, cosO, sinO, rightArmFlipped);
+
+    if (images.head) {
+      const [headW, headH] = images.head.getDimensions();
       const headWX = -cfg.headY * sinO;
       const headWY = cfg.headY * cosO;
-      const headBob = (mazeRecentlyMoved || platformWalking || (this.onSurface && this.isWalking)) ? Math.sin(this.walkTime * 2) * 0.03 : 0;
-      const headLookTilt = (inMaze || this.mouseIdle) ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+      const headBob = (poseBlend <= 0 && this.onSurface && this.isWalking) ? (Math.sin(this.walkTime * 2) * 0.03) : 0;
+      const normalHeadLookTilt = this.mouseIdle ? 0 : this.computeHeadLookTilt(orientation, dirSign);
+      const headLookTilt = normalHeadLookTilt * (1 - poseBlend);
       const headTilt = headBob + headLookTilt;
-      headSprite.position.set(originPos.x + headWX * s, originPos.y + headWY * s);
-      headSprite.rotation = orientation + headTilt;
+      const pivotY = headH * s * this.headPivotFraction;
+
+      love.graphics.push();
+      love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
+      love.graphics.rotate(orientation + headTilt);
+      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      love.graphics.pop();
     }
   }
+
+  // White morph-ball body split by three spokes into equal wedges —
+  // spoke positions are offset by this.ballRollAngle (see move()'s own
+  // rolling-without-slipping update), so they visibly sweep around as he
+  // travels. orientation keeps the pattern aligned with gravity.
+  drawBallMode(orientation) {
+    const r = this.radius;
+
+    love.graphics.push();
+    love.graphics.translate(this.pos.x, this.pos.y);
+    love.graphics.rotate(orientation + this.ballRollAngle);
+
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.circle('fill', 0, 0, r);
+
+    love.graphics.setColor(BALL_LINE_COLOR);
+    const prevLineWidth = love.graphics.getLineWidth();
+    love.graphics.setLineWidth(Math.max(1, r * 0.12 - 1));
+    for (let i = 0; i <= 2; i++) {
+      const a = i * (Math.PI * 2 / 3);
+      love.graphics.line(0, 0, Math.cos(a) * r, Math.sin(a) * r);
+    }
+    love.graphics.circle('line', 0, 0, r);
+
+    // Small center "eye" — same section-line gray for its own outline.
+    const centerR = r * BALL_CENTER_RADIUS_FRACTION;
+    love.graphics.setColor(BALL_CENTER_FILL_COLOR);
+    love.graphics.circle('fill', 0, 0, centerR);
+    love.graphics.setColor(BALL_LINE_COLOR);
+    love.graphics.circle('line', 0, 0, centerR);
+
+    love.graphics.setLineWidth(prevLineWidth);
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.pop();
+
+    this.drawBallShading();
+  }
+
+  // The ball's own share of the sun shading (see BODY_SHADING). The ball
+  // is plain drawn shapes, with no image for the rig's shader to read,
+  // so it's shaded the direct way: the same shadow and highlight, as two
+  // soft discs laid over it. Drawn outside the ball's own roll rotation —
+  // the markings spin, the light doesn't.
+  drawBallShading() {
+    if (!HERO_SHADING_ENABLED) return;
+    const toSunX = (state.sceneWidth ?? 0) / 2 - this.pos.x;
+    const toSunY = (state.sceneHeight ?? 0) / 2 - this.pos.y;
+    if (toSunX === 0 && toSunY === 0) return;
+    const sunAngle = Math.atan2(toSunY, toSunX);
+
+    const [shadow, highlight] = getBallShadingMeshes();
+    const r = this.radius;
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.draw(shadow, this.pos.x, this.pos.y, sunAngle, r, r);
+    love.graphics.setBlendMode('add', 'alphamultiply');
+    love.graphics.draw(highlight, this.pos.x, this.pos.y, sunAngle, r, r);
+    love.graphics.setBlendMode('alpha');
+    love.graphics.setColor(1, 1, 1, 1);
+  }
+
+  // Scale/glow "blip" pulse during a Beam.js teleport: pulse = sin(t*pi),
+  // scale = 1 + pulse*1.2, glow intensity = pulse. ONLY plays over the
+  // "out" half (departing) — the arrival gets the invincibility flicker
+  // instead. Returns [scale, glow] — [1, 0] whenever he isn't departing.
+  getTeleportPulse() {
+    if (this.teleportState !== 'out') return [1, 0];
+    const elapsed = TELEPORT_OUT_TICKS - this.teleportTimer;
+    const t = (TELEPORT_OUT_TICKS > 0) ? Math.max(0, Math.min(1, elapsed / TELEPORT_OUT_TICKS)) : 1;
+    const pulse = Math.sin(t * Math.PI);
+    return [1 + pulse * 1.2, pulse];
+  }
+
+  // Any Beam.js teleporter currently close enough to interact with, plus
+  // how close, as a 0..1 proximity fraction (1 right at the beam's own
+  // planted base, fading linearly to 0 at its own interactRadius).
+  // Returns [beam, proximity] — [null, 0] when none is in range.
+  getNearbyBeam() {
+    if (!state.beams) return [null, 0];
+    let best = null, bestProximity = 0;
+    for (const beam of state.beams) {
+      const dx = this.pos.x - beam.pos.x, dy = this.pos.y - beam.pos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist <= beam.interactRadius) {
+        const proximity = 1 - dist / beam.interactRadius;
+        if (!best || proximity > bestProximity) {
+          best = beam;
+          bestProximity = proximity;
+        }
+      }
+    }
+    return [best, bestProximity];
+  }
+
+  draw() {
+    // Gone for the death pause — only his death burst is on screen. And
+    // not seen while he's inside a cannon's barrel.
+    if (this.isDying || this.inCannon) return;
+
+    const [scale, pulseGlow] = this.getTeleportPulse();
+
+    // Outer glow hugging his own real silhouette (SilhouetteGlow.js)
+    // whenever he's close enough to a beam to interact with it, tinted
+    // to match THAT beam's own color, fading with distance and boosted
+    // during the departure pulse. The mask drawFn applies the SAME scale
+    // transform the real draw below uses, so the glow follows his body
+    // ballooning up through the pulse.
+    const [nearbyBeam, proximity] = this.getNearbyBeam();
+    if (nearbyBeam) {
+      SilhouetteGlow.draw(
+        this.pos.x, this.pos.y,
+        this.radius * 4 * scale, 14,
+        nearbyBeam.color, 0.8 * proximity * (1 + pulseGlow * 0.6),
+        () => {
+          if (scale === 1) {
+            this.drawRig();
+            return;
+          }
+          love.graphics.push();
+          love.graphics.translate(this.pos.x, this.pos.y);
+          love.graphics.scale(scale, scale);
+          love.graphics.translate(-this.pos.x, -this.pos.y);
+          this.drawRig();
+          love.graphics.pop();
+        });
+    }
+
+    // Post-arrival invincibility flicker — a hard on/off blink (skip
+    // drawing him entirely on the "off" beat): drawRig sets its own
+    // opaque colors, so an alpha around the whole call would just get
+    // overwritten. Real-time rate, not slowed by V.A.T.S.
+    if (this.isInvincible()) {
+      const phase = Math.floor(love.timer.getTime() / INVINCIBLE_FLICKER_INTERVAL) % 2;
+      if (phase !== 0) return;
+    }
+
+    // Sun shading on every piece of the rig — see getBodyShadingShader.
+    const shadingShader = this.applyBodyShading();
+
+    if (scale === 1) {
+      this.drawRig();
+    } else {
+      love.graphics.push();
+      love.graphics.translate(this.pos.x, this.pos.y);
+      love.graphics.scale(scale, scale);
+      love.graphics.translate(-this.pos.x, -this.pos.y);
+      this.drawRig();
+      love.graphics.pop();
+    }
+
+    if (shadingShader) love.graphics.setShader();
+  }
+
+  // Turns the body-shading shader on for whatever's drawn next, pointed
+  // at wherever the sun is from him right now. Returns the shader, or
+  // null if shading is switched off.
+  applyBodyShading() {
+    if (!HERO_SHADING_ENABLED) return null;
+    const toSunX = (state.sceneWidth ?? 0) / 2 - this.pos.x;
+    const toSunY = (state.sceneHeight ?? 0) / 2 - this.pos.y;
+    const dist = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+    if (dist < 1) return null;
+
+    const shader = getBodyShadingShader();
+    shader.send('lightDir', [toSunX / dist, toSunY / dist]);
+    love.graphics.setShader(shader);
+    return shader;
+  }
+
+  // Everything that actually draws him (draw() is a thin wrapper that
+  // applies the teleport pulse and shading around this).
+  drawRig() {
+    const planet = (this.onSurface && this.currentPlanet) || this.lastInfluencePlanet;
+    const downDir = this.visualDownDirection(planet);
+    const downAngle = Math.atan2(downDir.y, downDir.x);
+    const orientation = downAngle - Math.PI / 2;
+
+    if (this.morphState) {
+      this.drawBallMorphTransition(orientation);
+      return;
+    }
+
+    if (this.isBall) {
+      this.drawBallMode(orientation);
+      return;
+    }
+
+    const outwardDir = downDir.multiply(-1);
+    const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
+
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+
+    love.graphics.push();
+    love.graphics.translate(this.pos.x, this.pos.y);
+    love.graphics.rotate(orientation);
+    love.graphics.scale(dirSign, 1);
+    love.graphics.rotate(-orientation);
+    love.graphics.translate(-this.pos.x, -this.pos.y);
+
+    this.drawFullBody(orientation, visualPos);
+
+    love.graphics.pop();
+  }
+
+  // ----------------------------------------------------------------
+  // Pull target
+  // ----------------------------------------------------------------
+
+  trySelectPullTarget(explicitTarget) {
+    if (this.mode !== 'space' || this.isBall || this.isTeleporting || this.isDying) return;
+    if (this.isCannonRiding()) return;
+
+    let best = null;
+    if (explicitTarget) {
+      for (const p of state.planetoids) {
+        if (p === explicitTarget && !explicitTarget.isPullExempt) {
+          best = explicitTarget;
+          break;
+        }
+      }
+    } else {
+      const cam = state.camera ?? { x: 0, y: 0 };
+      const zoom = state.zoom ?? 1;
+      const mouse = state.mouse ?? { x: this.pos.x, y: this.pos.y };
+      const worldX = mouse.x / zoom + cam.x;
+      const worldY = mouse.y / zoom + cam.y;
+
+      let bestDistSq = Infinity;
+      for (const planet of state.planetoids) {
+        if (!planet.isPullExempt) {
+          let hit = false;
+          if (planet.containsPoint) {
+            hit = planet.containsPoint(worldX, worldY);
+          } else {
+            const dx = worldX - planet.pos.x;
+            const dy = worldY - planet.pos.y;
+            hit = (dx * dx + dy * dy) <= (planet.radius ?? 0) * (planet.radius ?? 0);
+          }
+
+          if (hit) {
+            const [ax, ay] = this.getPullAnchor(planet);
+            const adx = worldX - ax;
+            const ady = worldY - ay;
+            const distSq = adx * adx + ady * ady;
+            if (distSq < bestDistSq) {
+              bestDistSq = distSq;
+              best = planet;
+            }
+          }
+        }
+      }
+    }
+
+    if (best) {
+      if (this.onSurface && this.currentPlanet) {
+        const launchDir = this.getOutwardLaunchDirection();
+        this.vel = launchDir.multiply(constants.JUMP_STRENGTH);
+      }
+      this.pullTarget = best;
+      this.onSurface = false;
+      this.currentPlanet = null;
+      state.vatsActive = false;
+    }
+  }
+
+  clearPullTarget() {
+    this.pullTarget = null;
+  }
+
+  applyPullForce() {
+    if (this.onSurface) { this.pullTarget = null; return; }
+    if (!this.pullTarget) return;
+    // Curling into a ball drops any pull in progress outright — a ball
+    // has no pull beam at all.
+    if (this.isBall) { this.pullTarget = null; return; }
+    // Same for mid-teleport or dying.
+    if (this.isTeleporting || this.isDying) { this.pullTarget = null; return; }
+
+    if (!state.planetoids.includes(this.pullTarget)) {
+      this.pullTarget = null;
+      return;
+    }
+
+    const [tx, ty] = this.getPullAnchor(this.pullTarget);
+    const dx = tx - this.pos.x;
+    const dy = ty - this.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1e-6) return;
+
+    const dirX = dx / dist, dirY = dy / dist;
+
+    const radialSpeed = this.vel.x * dirX + this.vel.y * dirY;
+    const tangentX = this.vel.x - radialSpeed * dirX;
+    const tangentY = this.vel.y - radialSpeed * dirY;
+    const tangentRetention = (1 - this.pullTangentialDamping) ** state.timeScale;
+    this.vel.x -= tangentX * (1 - tangentRetention);
+    this.vel.y -= tangentY * (1 - tangentRetention);
+
+    this.vel.x += dirX * this.pullAccel * state.timeScale;
+    this.vel.y += dirY * this.pullAccel * state.timeScale;
+
+    const speed = this.vel.length();
+    if (speed > this.pullMaxSpeed) {
+      this.vel = this.vel.multiply(this.pullMaxSpeed / speed);
+    }
+  }
+
+  // World position of the blaster's own muzzle — the hole at the end of
+  // his arm — given where the arm is currently aimed (aimShoulderPos/
+  // aimWorldAngle, set whenever he is drawn). Fireballs and the pull beam
+  // both start here. Falls back to his own position before he has ever
+  // been drawn. Returns [x, y].
+  getMuzzlePosition() {
+    // Exact muzzle pixel within leftarm.png (602x256).
+    const MUZZLE_PX_X = 530, MUZZLE_PX_Y = 120;
+
+    let originX, originY;
+    if (this.aimShoulderPos) {
+      const cfg = this.bodyPartsConfig;
+      const s = this.bodyScale;
+      const dirSign = this.facingDirection < 0 ? -1 : 1;
+      const aimWorldAngle = this.aimWorldAngle ?? 0;
+
+      // Raw offset (world units) from the arm's own joint pivot to the
+      // muzzle pixel, still in the image's own unrotated local space.
+      const vx = (MUZZLE_PX_X - cfg.leftArmJointX) * s;
+      const vy = (MUZZLE_PX_Y - cfg.leftArmJointY) * s;
+
+      let worldVX, worldVY;
+      if (dirSign > 0) {
+        // Facing right (unmirrored): the arm's world rotation is exactly
+        // aimWorldAngle.
+        const c = Math.cos(aimWorldAngle), sn = Math.sin(aimWorldAngle);
+        worldVX = vx * c - vy * sn;
+        worldVY = vx * sn + vy * c;
+      } else {
+        // Facing left: the whole rig is additionally mirrored by
+        // drawRig's outer scale(dirSign,1); the composed transform
+        // reduces to flipping this local offset horizontally, then
+        // rotating by (aimWorldAngle - pi).
+        const rot = aimWorldAngle - Math.PI;
+        const c = Math.cos(rot), sn = Math.sin(rot);
+        const fx = -vx, fy = vy;
+        worldVX = fx * c - fy * sn;
+        worldVY = fx * sn + fy * c;
+      }
+
+      originX = this.aimShoulderPos.x + worldVX;
+      originY = this.aimShoulderPos.y + worldVY;
+    } else {
+      originX = this.pos.x;
+      originY = this.pos.y;
+    }
+
+    return [originX, originY];
+  }
+
+  shootFireball() {
+    if (this.mode !== 'space' && this.mode !== 'platform') return;
+    if (this.isBall || this.isTeleporting || this.isDying) return;
+    if (this.isCannonRiding()) return;
+    if (state.vatsActive) return;
+
+    const now = love.timer.getTime();
+    this.lastShotTime = this.lastShotTime ?? 0;
+    this.fireCooldown = this.fireCooldown ?? 0.15;
+    if (now - this.lastShotTime < this.fireCooldown) return;
+    this.lastShotTime = now;
+
+    let angle = this.aimWorldAngle ?? 0;
+    if (this.blasterAngleOffset) angle += this.blasterAngleOffset;
+
+    const [originX, originY] = this.getMuzzlePosition();
+
+    state.fireballs = state.fireballs ?? [];
+    state.fireballs.push(Fireball.new(originX, originY, angle));
+  }
+
+  // ----------------------------
+  // HARD LOCK (gamepad R1 = next/clockwise, L1 = previous/counter-
+  // clockwise, Circle = release) — see GamePadInput.js for the button
+  // wiring and js/systems/TargetLock.js for the candidate logic.
+  // Both cycle from wherever the blaster is currently aimed, and are
+  // mirror images of each other, so R1 then L1 reads as a genuine undo.
+  // ----------------------------
+  tryLockTargetNext() {
+    if (this.mode !== 'space' || this.isDying || this.isTeleporting || this.isBall) return;
+    const originPos = this.aimShoulderPos ?? this.pos;
+    const referenceAngle = this.aimWorldAngle ?? 0;
+    this.lockedTarget = TargetLock.selectNextLockTarget(this.lockedTarget, referenceAngle, originPos);
+  }
+
+  tryLockTargetPrevious() {
+    if (this.mode !== 'space' || this.isDying || this.isTeleporting || this.isBall) return;
+    const originPos = this.aimShoulderPos ?? this.pos;
+    const referenceAngle = this.aimWorldAngle ?? 0;
+    this.lockedTarget = TargetLock.selectPreviousLockTarget(this.lockedTarget, referenceAngle, originPos);
+  }
+
+  clearLockTarget() {
+    this.lockedTarget = null;
+  }
+
+  // Lethal contact (Spikey, FireBar, Ooomba — CollisionSystem.js calls
+  // this every frame contact continues; the isDying check makes that a
+  // single death). Ignored while invincible or mid-teleport. He vanishes
+  // in a burst right where he was hit, stays gone for DEATH_TICKS, then
+  // reappears at state.respawnPoint (see respawn).
+  startDeath() {
+    if (this.isDying || this.isTeleporting || this.isInvincible()) return;
+
+    this.isDying = true;
+    this.deathTimer = DEATH_TICKS;
+    // Decided now, from where he actually died. null (no DeathZone here)
+    // falls back to state.respawnPoint.
+    this.deathZoneRespawn = null;
+    for (const zone of state.deathZones ?? []) {
+      if (this.pos.x >= zone.x && this.pos.x <= zone.x + zone.width
+        && this.pos.y >= zone.y && this.pos.y <= zone.y + zone.height) {
+        this.deathZoneRespawn = { x: zone.respawnX, y: zone.respawnY };
+        break;
+      }
+    }
+    this.vel.x = 0;
+    this.vel.y = 0;
+    this.pullTarget = null;
+    this.lockedTarget = null;
+
+    state.explosions = state.explosions ?? [];
+    state.explosions.push(Explosion.new(this.pos.x, this.pos.y));
+    if (state.audioManager) state.audioManager.playDeath();
+  }
+
+  updateDeath(ts) {
+    this.deathTimer -= ts;
+    if (this.deathTimer <= 0) this.respawn();
+  }
+
+  // Puts him back at state.respawnPoint (the Space Shelter's doorway) —
+  // or, if he died inside a Tiled "DeathZone", at that zone's own
+  // respawn point — standing, with everything transient about wherever
+  // he died cleared, and the same brief invincibility a beam arrival gets.
+  respawn() {
+    const point = this.deathZoneRespawn ?? state.respawnPoint;
+    this.deathZoneRespawn = null;
+    // Any trip through a portal is called off, and so is being in or
+    // fired from a cannon.
+    this.portalTransit = null;
+    this.portalDown = null;
+    this.inCannon = null;
+    this.cannonFlight = null;
+    if (point) {
+      this.pos.x = point.x;
+      this.pos.y = point.y;
+      if (point.planet) {
+        this.onSurface = true;
+        this.currentPlanet = point.planet;
+        this.lastInfluencePlanet = point.planet;
+        // On a round planet his place on it IS this angle (from its
+        // centre). Flat surfaces (the dome's deck) don't use it.
+        if (point.planet.isRoundedRect) {
+          this.angle = -Math.PI / 2;
+        } else {
+          this.angle = Math.atan2(point.y - point.planet.pos.y, point.x - point.planet.pos.x);
+        }
+      } else {
+        // A DeathZone's own respawn point names no surface — he's left
+        // airborne there and lands through the ordinary collision pass.
+        this.onSurface = false;
+        this.currentPlanet = null;
+      }
+    }
+    // Without this, this frame's swept collision checks would see a
+    // single-frame "travel" all the way from where he died to here.
+    this.prevPos = this.pos.clone();
+    this.vel.x = 0;
+    this.vel.y = 0;
+
+    this.isBall = false;
+    this.radius = this.baseRadius;
+    this.morphState = null;
+    this.morphElapsed = 0;
+    this.isGroundPounding = false;
+    this.wasGroundPounding = false;
+    this.groundPoundImpactTimer = 0;
+    this.groundPoundPoseTime = 0;
+    this.isWallSliding = false;
+    this.touchingWall = null;
+    this.wallContactNormal = null;
+    this.wallClimbDir = null;
+    this.wallClimbDirPlanet = null;
+    this.wallJumpLockTimer = 0;
+    this.wallJumpLockBlockedDir = null;
+    // Cleared directly so dying underwater doesn't play a "left the
+    // water" splash at the shelter.
+    this.submergedIn = null;
+    this.bubbles = [];
+
+    this.isDying = false;
+    this.deathTimer = 0;
+    this.invincibleTimer = INVINCIBLE_TICKS;
+
+    // A respawn point can name a pinball table (point.pinball, a
+    // PinballInterior) to put him straight onto its plunger as a ball.
+    this.inPinball = null;
+    if (point && point.pinball) point.pinball.onEnter(this);
+  }
 }
+
+// ------------------------------------------------------------------
+// Pose tables and shading meshes (module-level, used by the methods above)
+// ------------------------------------------------------------------
+
+// Wall-slide pose, authored with paperdoll.html against the actual
+// bodyPartsConfig/drawLimb numbers. Authored facing RIGHT with the wall
+// on the left — facing AWAY from the wall, back braced against it —
+// which is what update() forces facingDirection to do for the whole
+// slide. jointX/jointY are unchanged from bodyPartsConfig.
+const WALL_SLIDE_POSE = {
+  leftBootX: 41.64, leftBootY: 313.37, leftBootAngle: 34 * Math.PI / 180,
+  leftArmAngle: 49 * Math.PI / 180,
+  rightBootX: -138.98, rightBootY: 204.81, rightBootAngle: 0,
+  rightArmAngle: 166 * Math.PI / 180,
+  headY: -125.87, headAngle: 13 * Math.PI / 180,
+};
+
+// Neutral standing pose — what the curl-in animation blends FROM (and
+// the stand-back-up animation blends BACK TO).
+const BALL_MORPH_STANDING_POSE = {
+  leftBootX: 111, leftBootY: 241, leftBootAngle: 0,
+  leftArmX: 136, leftArmY: 9, leftArmAngle: 0,
+  bodyY: 115,
+  rightBootX: -142, rightBootY: 241, rightBootAngle: 0,
+  rightArmX: -186, rightArmY: -14, rightArmAngle: 0,
+  headY: -150, headAngle: 0,
+};
+
+// Curl-in keyframes, authored with paperdoll.html. Played STANDING ->
+// FRAME_1 -> FRAME_2 -> (cut to the actual ball) when curling in, and
+// the reverse when standing back up.
+const BALL_MORPH_FRAME_1 = {
+  leftBootX: 111, leftBootY: 241, leftBootAngle: 0,
+  leftArmX: 143.01, leftArmY: 131.67, leftArmAngle: 40 * Math.PI / 180,
+  bodyY: 206.13,
+  rightBootX: -142, rightBootY: 241, rightBootAngle: 0,
+  rightArmX: -182.5, rightArmY: 98.16, rightArmAngle: -31 * Math.PI / 180,
+  headY: 18.24, headAngle: 0,
+};
+const BALL_MORPH_FRAME_2 = {
+  leftBootX: 111, leftBootY: 195.44, leftBootAngle: 32 * Math.PI / 180,
+  leftArmX: -130.37, leftArmY: 163.22, leftArmAngle: 40 * Math.PI / 180,
+  bodyY: 328.8,
+  rightBootX: -134.99, rightBootY: 167.4, rightBootAngle: -9 * Math.PI / 180,
+  rightArmX: -143.95, rightArmY: 213.82, rightArmAngle: -43 * Math.PI / 180,
+  headY: 312.65, headAngle: 25 * Math.PI / 180,
+};
+
+// Ground-pound pose, authored with paperdoll.html: both boots swung up
+// and forward, blaster arm tucked slightly back, right arm thrown up
+// overhead. Drawn by drawBallMorphPose. A fixed pose, cut to directly.
+const GROUND_POUND_POSE = {
+  leftBootX: 111, leftBootY: 241, leftBootAngle: -100 * Math.PI / 180,
+  leftArmX: 136, leftArmY: 9, leftArmAngle: -20 * Math.PI / 180,
+  bodyY: 115,
+  rightBootX: -142, rightBootY: 241, rightBootAngle: -109 * Math.PI / 180,
+  rightArmX: -186, rightArmY: -14, rightArmAngle: 117 * Math.PI / 180,
+  headY: -150, headAngle: 0,
+};
+
+let groundPoundSeatDrop = null;
+
+function lerpNum(a, b, t) { return a + (b - a) * t; }
+
+// Blends every field of two ball-morph pose tables.
+function lerpBallMorphPose(a, b, t) {
+  const out = {};
+  for (const key of Object.keys(a)) out[key] = lerpNum(a[key], b[key], t);
+  return out;
+}
+
+const BALL_LINE_COLOR = [0x9C / 255, 0x9B / 255, 0x9B / 255]; // #9C9B9B — outline + section-spoke color
+const BALL_CENTER_FILL_COLOR = [0x6A / 255, 0xE7 / 255, 0xEB / 255]; // #6AE7EB
+const BALL_CENTER_RADIUS_FRACTION = 1 / 3;
+
+let ballShadowMesh = null, ballHighlightMesh = null;
+function getBallShadingMeshes() {
+  if (ballShadowMesh) return [ballShadowMesh, ballHighlightMesh];
+  const s = BODY_SHADING;
+  const segments = 48, rings = 10;
+
+  // Both are unit discs built for a light shining from +x; drawing them
+  // rotated to the sun's actual direction puts the light where it is.
+  const disc = (alphaAt, r, g, b) => {
+    const vertices = [];
+    const vertex = (angle, t) => {
+      const x = Math.cos(angle) * t, y = Math.sin(angle) * t;
+      return [x, y, 0, 0, r, g, b, alphaAt(x, y)];
+    };
+    for (let ring = 1; ring <= rings; ring++) {
+      const t0 = (ring - 1) / rings, t1 = ring / rings;
+      for (let i = 0; i < segments; i++) {
+        const a0 = (i / segments) * Math.PI * 2, a1 = ((i + 1) / segments) * Math.PI * 2;
+        vertices.push(vertex(a0, t0), vertex(a0, t1), vertex(a1, t1));
+        vertices.push(vertex(a0, t0), vertex(a1, t1), vertex(a1, t0));
+      }
+    }
+    return love.graphics.newMesh(vertices, 'triangles', 'static');
+  };
+
+  // How much darker each point is than its own color — the same formula
+  // as the shader, written as an amount of black to lay on top.
+  ballShadowMesh = disc((x, y) => {
+    const dx = x - s.shadowOffset, dy = y;
+    const lit = Math.max(0, Math.min(1, 1 - Math.sqrt(dx * dx + dy * dy) / s.shadowReach));
+    const shade = (1 + (lit - 1) * s.strength) * (1 - s.overallDarken * s.strength);
+    return 1 - shade;
+  }, 0, 0, 0);
+
+  ballHighlightMesh = disc((x, y) => {
+    const dx = x - s.highlightOffset, dy = y;
+    const h = Math.max(0, Math.min(1, 1 - Math.sqrt(dx * dx + dy * dy) / s.highlightSize));
+    return h * h * s.highlightAlpha;
+  }, 1, 0.98, 0.92);
+
+  return [ballShadowMesh, ballHighlightMesh];
+}
+
+export default Player;

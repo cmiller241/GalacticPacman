@@ -14,8 +14,12 @@ local utils = require("lua.utils")
 local worldGen = {}
 
 worldGen.CELL_SIZE = 3000
-worldGen.GRID_SIZE = 20
-worldGen.CENTER_CELL = { col = 10, row = 10 }
+-- 40 cells a side (doubled from 20): the sun's always the world's middle
+-- (see worldGen.sunPos), and the belt and every landmark are placed
+-- relative to it (see main.lua), so growing this only adds open space
+-- all round the outside of what was there.
+worldGen.GRID_SIZE = 40
+worldGen.CENTER_CELL = { col = worldGen.GRID_SIZE / 2, row = worldGen.GRID_SIZE / 2 }
 worldGen.CELL_CHECK_INTERVAL = 30
 
 worldGen.BELT_INNER_CELLS = 2
@@ -863,7 +867,10 @@ local function cullDistantObjects(activeCellKeys, focusX, focusY)
       local a = state.asteroids[i]
       local cell = worldGen.cellCoordFor(a.pos.x, a.pos.y)
       local key = worldGen.cellKey(cell.col, cell.row)
-      if not activeCellKeys[key] then
+      -- (Not a cannon gauntlet's: they're laid well ahead of him, out in
+      -- cells not yet active, and cleared away by the cannon itself once
+      -- the ride's over — see lua/world/Cannon.lua.)
+      if not activeCellKeys[key] and not a.isGauntlet then
         table.remove(state.asteroids, i)
       end
     end

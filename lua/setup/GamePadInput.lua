@@ -240,6 +240,15 @@ local function pollGamepad(dt)
     return
   end
 
+  -- Riding a cannon (see Player:isCannonRiding), he does nothing at all:
+  -- every action below is skipped — no jumping, curling or uncurling,
+  -- firing, pulling, portals, recall, locking on, V.A.T.S., interacting
+  -- or switching weapons. (Each button's last-pressed state still
+  -- updates, so one held through the end of the ride isn't then read as
+  -- a fresh press.) Walking input is already ignored in flight (see
+  -- main.lua), and zooming the camera isn't him, so it still works.
+  local riding = state.player and state.player:isCannonRiding()
+
   -- --- Left stick: walk left/right ---
   local leftX = gp:getGamepadAxis("leftx") or 0
   if leftX < -STICK_DEADZONE then
@@ -282,8 +291,8 @@ local function pollGamepad(dt)
   -- same as P on the keyboard; see WeaponModes.lua) ---
   local dpadLeftPressed = gp:isGamepadDown(BUTTON_DPAD_LEFT)
   local dpadRightPressed = gp:isGamepadDown(BUTTON_DPAD_RIGHT)
-  if dpadRightPressed and not lastDpadRightPressed then WeaponModes.cycle(1) end
-  if dpadLeftPressed and not lastDpadLeftPressed then WeaponModes.cycle(-1) end
+  if dpadRightPressed and not lastDpadRightPressed and not riding then WeaponModes.cycle(1) end
+  if dpadLeftPressed and not lastDpadLeftPressed and not riding then WeaponModes.cycle(-1) end
   lastDpadLeftPressed, lastDpadRightPressed = dpadLeftPressed, dpadRightPressed
 
   -- --- X (Cross): jump / wall jump / swim stroke / ground pound —
@@ -295,7 +304,7 @@ local function pollGamepad(dt)
   -- "this button performs a jump," as opposed to the ground-pound
   -- fallback for mid-air with nothing to jump off of (or swim in).
   local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
-  if xPressed and not lastXPressed and state.player then
+  if xPressed and not lastXPressed and state.player and not riding then
     if state.player.inPinball then
       state.player.inPinball:triggerJumpAction(state.player)
     elseif state.player.mode ~= "maze" and not state.introLocked then
@@ -312,7 +321,9 @@ local function pollGamepad(dt)
   -- Analog trigger, thresholded — see this file's own header comment.
   local r2Pressed = (gp:getGamepadAxis("triggerright") or 0) > TRIGGER_PRESS_THRESHOLD
   state.gamepadSprayHeld = false
-  if state.portalMode then
+  if riding then
+    state.gamepadFireHeld = false
+  elseif state.portalMode then
     -- Portal mode: one blue portal per press, no fireballs.
     if r2Pressed and not lastR2Pressed then PortalGun.fire(state.player, "blue") end
     state.gamepadFireHeld = false
@@ -339,13 +350,13 @@ local function pollGamepad(dt)
   -- whichever of the two makes sense for where he currently is."
   local trianglePressed = gp:isGamepadDown(BUTTON_TRIANGLE)
   if state.player and state.player.mode == "space" then
-    if trianglePressed and not lastTrianglePressed then
+    if trianglePressed and not lastTrianglePressed and not riding then
       state.vatsActive = not state.vatsActive
     end
   elseif state.vatsActive then
     state.vatsActive = false
   end
-  if trianglePressed and not lastTrianglePressed and state.player
+  if trianglePressed and not lastTrianglePressed and state.player and not riding
      and state.player.mode ~= "space" and state.player.mode ~= "maze" and not state.introLocked then
     if state.player.isBall then state.player:exitBallMode() else state.player:enterBallMode() end
   end
@@ -367,7 +378,7 @@ local function pollGamepad(dt)
     if lastSquareTapTime and now - lastSquareTapTime <= SQUARE_DOUBLE_TAP_SECONDS then
       lastSquareTapTime = nil
       local player = state.player
-      if player and player.mode ~= "maze" and not player.inPinball then
+      if player and player.mode ~= "maze" and not player.inPinball and not riding then
         if player.isBall then
           player:exitBallMode()
         elseif not state.introLocked then
@@ -382,14 +393,14 @@ local function pollGamepad(dt)
 
   -- --- R1: hard lock, next --- / --- L1: hard lock, previous ---
   local r1Pressed = gp:isGamepadDown(BUTTON_R1)
-  if r1Pressed and not lastR1Pressed and state.player then
+  if r1Pressed and not lastR1Pressed and state.player and not riding then
     maybeAutoEnterVats()
     state.player:tryLockTargetNext()
   end
   lastR1Pressed = r1Pressed
 
   local l1Pressed = gp:isGamepadDown(BUTTON_L1)
-  if l1Pressed and not lastL1Pressed and state.player then
+  if l1Pressed and not lastL1Pressed and state.player and not riding then
     maybeAutoEnterVats()
     state.player:tryLockTargetPrevious()
   end
@@ -404,7 +415,7 @@ local function pollGamepad(dt)
   -- or lock-related would be active for anyway, so the two uses don't
   -- meaningfully collide in practice.
   local circlePressed = gp:isGamepadDown(BUTTON_CIRCLE)
-  if circlePressed and not lastCirclePressed and state.player then
+  if circlePressed and not lastCirclePressed and state.player and not riding then
     state.player:clearLockTarget()
     state.vatsActive = false
     -- No talking to NPCs or pulling levers while curled into a ball —
@@ -443,7 +454,9 @@ local function pollGamepad(dt)
   -- --- L2: pull beam ---
   -- Analog trigger, thresholded — same reasoning as R2 above.
   local l2Pressed = (gp:getGamepadAxis("triggerleft") or 0) > TRIGGER_PRESS_THRESHOLD
-  if state.portalMode then
+  if riding then
+    -- (Nothing — see `riding` above.)
+  elseif state.portalMode then
     -- Portal mode: one red portal per press, no pull beam.
     if l2Pressed and not lastL2Pressed then PortalGun.fire(state.player, "red") end
   elseif state.waterMode or state.recallMode then
@@ -460,7 +473,7 @@ local function pollGamepad(dt)
     end
   end
   lastL2Pressed = l2Pressed
-  state.gamepadPullHeld = l2Pressed and not state.portalMode and not state.waterMode and not state.recallMode
+  state.gamepadPullHeld = l2Pressed and not riding and not state.portalMode and not state.waterMode and not state.recallMode
 
   -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
   -- own on-screen cursor instead — see that file) ---

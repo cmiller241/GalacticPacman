@@ -1,64 +1,41 @@
 // js/utils.js
-import { state } from './state.js';
-import { Vector2 } from './vector2.js';
-import { Particle } from './entities/Particle.js';
+//
+// Small shared helpers with no better home of their own.
 
-export function checkMazeDots() {
-  if (state.player.mode != "maze") return;
-  const interior = state.player.currentInterior;
-  for (let i = interior.dots.length - 1; i >= 0; i--) {
-    const d = interior.dots[i];
-    if (d.x === state.player.mazeCol && d.y === state.player.mazeRow) {
-      state.audioManager.playEatDot();
-      interior.dots.splice(i, 1);
-      state.score += 10;
-    }
+import state from './state.js';
+
+const utils = {};
+
+// True if a circle at (x, y) with the given radius intersects the
+// camera's current visible rect, expanded by `margin` world units on
+// every side (default 0) so objects don't visibly pop in/out right at
+// the screen edge. Used to skip per-frame update/draw work for objects
+// that are nowhere near what's actually on screen right now — this
+// game can have hundreds of active planetoids/fire bars alive at once
+// in the streamed 3x3 cell neighborhood, almost all of them off-screen
+// at any given moment.
+utils.isOnScreen = function (x, y, radius, margin = 0) {
+  const cam = state.camera;
+  if (!cam) return true; // camera not set up yet (e.g. the very first frame) — don't cull blind
+  const minX = cam.x - radius - margin;
+  const maxX = cam.x + (state.visibleWidth ?? 0) + radius + margin;
+  const minY = cam.y - radius - margin;
+  const maxY = cam.y + (state.visibleHeight ?? 0) + radius + margin;
+  return x >= minX && x <= maxX && y >= minY && y <= maxY;
+};
+
+// A single bounding-circle radius for anything drawable in this game,
+// regardless of which shape convention it actually uses: a plain
+// `radius` if it has one (Planetoid, Asteroid, SkyDomePlanetoid, which
+// all set this directly even when isRoundedRect), otherwise derived
+// from `halfWidth`/`halfHeight` (Ooomba). Used by TargetLock.js
+// (viewport/candidate checks) and the lock-on/VATS effects.
+utils.boundingRadius = function (obj) {
+  if (obj.radius) return obj.radius;
+  if (obj.halfWidth && obj.halfHeight) {
+    return Math.sqrt(obj.halfWidth * obj.halfWidth + obj.halfHeight * obj.halfHeight);
   }
-  for (let i = interior.powerPellets.length - 1; i >= 0; i--) {
-    const p = interior.powerPellets[i];
-    if (p.x === state.player.mazeCol && p.y === state.player.mazeRow) {
-      state.audioManager.playEatDot();
-      interior.powerPellets.splice(i, 1);
-      state.score += 50;
-    }
-  }
-}
+  return 0;
+};
 
-export function createParticles(atPos, count) {
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = Math.random() * 4 + 2;
-    const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-    state.particles.push(new Particle(atPos, vel));
-  }
-}
-
-export function createDeathParticles(atPos, count = 30) {
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = Math.random() * 6 + 3;
-    const vel = new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-    const particle = new Particle(atPos, vel);
-    particle.color = `hsl(${Math.random() * 60 + 20}, 100%, 50%)`; // Fiery oranges/yellows
-    state.particles.push(particle);
-  }
-}
-
-// Resize listener. World size (state.sceneWidth/sceneHeight) is now a
-// FIXED constant tied to the cell grid (see game.js), independent of
-// the browser window — so resizing only ever touches the canvas'
-// pixel dimensions, never the world itself. The starfield is a small
-// tileable pattern (see game.js) rather than one canvas sized to the
-// whole world, so it doesn't need regenerating on resize either.
-export function initResizeListener() {
-  window.addEventListener('resize', () => {
-    state.canvas.width = window.innerWidth;
-    state.canvas.height = window.innerHeight;
-  });
-}
-
-export function angleDiff(a, b) {
-  let diff = (a - b + Math.PI) % (2 * Math.PI);
-  if (diff < 0) diff += 2 * Math.PI; // ensure positive
-  return Math.abs(diff - Math.PI);   // now in [0, PI]
-}
+export default utils;

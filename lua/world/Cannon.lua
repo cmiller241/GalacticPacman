@@ -38,6 +38,9 @@ local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local CameraShake = require("lua.effects.CameraShake")
 local TiledTerrain = require("lua.world.TiledTerrain")
 local PinballInterior = require("lua.interiors.PinballInterior")
+local Planetoid = require("lua.world.Planetoid")
+local Explosion = require("lua.entities.Explosion")
+local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
 local constants = require("lua.constants")
 local utils = require("lua.utils")
@@ -51,15 +54,17 @@ Cannon.__index = Cannon
 
 -- Shape, world units. The barrel pivots PIVOT_HEIGHT above the surface,
 -- and reaches BARREL_LENGTH past that to its mouth (BARREL_BACK behind).
-local BASE_HALF_WIDTH = 36
-local BASE_TOP_HALF_WIDTH = 20
-local PIVOT_HEIGHT = 34
-local BARREL_LENGTH = 80
-local BARREL_BACK = 24
-local BARREL_HALF_WIDTH = 15    -- at the breech; it tapers a little toward the mouth
-local MUZZLE_HALF_WIDTH = 18    -- the flared lip round the mouth
+-- (The barrel's a little wider than he is as a ball — 30 * 0.792, about
+-- 24 — so he can believably go in it.)
+local BASE_HALF_WIDTH = 50
+local BASE_TOP_HALF_WIDTH = 30
+local PIVOT_HEIGHT = 42
+local BARREL_LENGTH = 100
+local BARREL_BACK = 32
+local BARREL_HALF_WIDTH = 26
+local MUZZLE_HALF_WIDTH = 30    -- the flared lip round the mouth
 
-local CAPTURE_RADIUS = 34       -- the size of the "in here" rings pulsing round the mouth
+local CAPTURE_RADIUS = 48       -- the size of the "in here" rings pulsing round the mouth
 
 -- Timings, seconds (game time — V.A.T.S. slow-mo slows them too).
 local LOAD_SECONDS = 0.35
@@ -112,6 +117,11 @@ local LOOP_LEAD = 600
 -- out along it (see drawRails). Kept under half of LOOP_SPACING plus the
 -- ring's radius, so two loops' tails don't meet.
 local LOOP_TAIL = 200
+-- How fast he's flung out of a corkscrew's last ring (a corner's `fling`
+-- — see buildTrack), world units/frame: well past LAUNCH_SPEED, easing
+-- back down to it after.
+local CORKSCREW_FLING_SPEED = 170
+local FLING_EASE = 0.9 -- how quickly he eases back down to LAUNCH_SPEED after (lower, the longer it lasts)
 
 -- Bumpers (a corner's `bumper` — see makeBumper): the same red-and-
 -- white pinball bumper as the pinball table's (see PinballInterior),
@@ -128,6 +138,42 @@ local BUMPER_SPEED = 75
 local BUMPER_SHAKE_STRENGTH = 14
 local BUMPER_SHAKE_SECONDS = 0.25
 local BUMPER_RING_SECONDS = 0.4  -- the ring flying off it when he hits
+
+-- An ordinary planetoid or asteroid in the shot's way is blown apart
+-- before he hits it (see clearTheWay) — with this jolt of the screen.
+local OBSTACLE_SHAKE_STRENGTH = 22
+local OBSTACLE_SHAKE_SECONDS = 0.35
+
+-- Hit-stop: when he hits a bumper, the whole game all but freezes for
+-- an instant (see Cannon.timeFactor, which main.lua scales the frame's
+-- time by) — the trick fighting and pinball games use to make an impact
+-- land. Real time; the screen still shakes through it.
+local HIT_STOP_SECONDS = 0.06
+local HIT_STOP_TIME_FACTOR = 0.03
+
+-- A corner's `gauntlet` (see buildRoute): the straight into it lined
+-- with asteroids for him to smash through, one after another (see
+-- spawnGauntlet) — this far apart, this far clear of the straight's
+-- ends, this big, and nudged at most this far (a fraction of each one's
+-- radius) either side of his line, so every one's still in his way.
+local GAUNTLET_SPACING = 600
+local GAUNTLET_END_MARGIN = 700
+local GAUNTLET_MIN_RADIUS = 22
+local GAUNTLET_MAX_RADIUS = 46
+local GAUNTLET_SIDE_NUDGE = 0.5
+
+-- Speed lines (see Cannon.drawSpeedLines): streaks rushing past the
+-- edges of the screen, opposite to the way he's flying — strongest at
+-- full speed, gone by the time he's slowed to a rail's pace.
+local SPEED_LINES_PER_SECOND = 70
+local SPEED_LINE_SECONDS = 0.35
+local SPEED_LINE_ALPHA = 0.35
+
+-- Afterimages (see Cannon.drawFlightTrail): faint copies of the ball
+-- left along his path, fading out.
+local AFTERIMAGE_COUNT = 5
+local AFTERIMAGE_SPACING = 70    -- world units along his path between one and the next
+local AFTERIMAGE_ALPHA = 0.28    -- the nearest one; each further one fainter
 
 -- Coins down the straight stretches between the rails (see placeCoins)
 -- — off for now (true puts them back): how far apart, and how far
@@ -155,6 +201,23 @@ local COLOR_BRASS_LIGHT = { 1.0, 0.88, 0.55 }
 local COLOR_HINT = { 0.45, 0.9, 1.0 }
 local COLOR_FIRE = { 1.0, 0.6, 0.2 }
 
+-- Exits off a track (see Cannon.newExit): a pinball flipper across the
+-- straight, raised for as long as the jump button's held. Holding it
+-- as he reaches it, he bounces off it down the exit; not holding it,
+-- it's lying out of his way and he carries straight on.
+local FLIPPER_LENGTH = 560
+local FLIPPER_THICKNESS = 46      -- at the pivot (the tip's narrower)
+local FLIPPER_CONTACT_AT = 0.45   -- how far along it (from the pivot) he hits it
+local FLIPPER_CONTACT_RADIUS = 24 -- his own radius, as a ball
+local FLIPPER_REST_ANGLE = 0.45   -- at rest: radians off the straight, pointing on ahead and away from his path
+local FLIPPER_SWING_RATE = 22     -- how fast it swings (higher, snappier)
+local FLIPPER_MIN_SPEED = 90      -- he leaves it at least this fast
+
+-- Until when (real time) the hit-stop holds — see HIT_STOP_SECONDS.
+local hitStopUntil = 0
+local COLOR_FLIPPER = { 0.95, 0.35, 0.4 }
+local COLOR_FLIPPER_LIGHT = { 1.0, 0.75, 0.75 }
+
 ----------------------------------------------------------------------
 
 local function smoothstep(t)
@@ -180,11 +243,18 @@ end
 --   bumper      true: a pinball bumper there instead of a curved rail —
 --               he bounces off it (see makeBumper)
 --   bumperRadius  its bumper's radius, instead of BUMPER_RADIUS
-function Cannon.new(planet, mountAngle, target, corners)
+--   gauntlet    true: the straight into it lined with asteroids he
+--               smashes through, one after another (see spawnGauntlet)
+-- merge (optional, instead of a target — pass nil for target): the
+-- route ends by merging onto a track partway along one of its straights,
+-- instead of at a planet (see Cannon.trackMergeAt, which works it out,
+-- and buildRoute). merge.radius optionally sets the on-ramp curve's own.
+function Cannon.new(planet, mountAngle, target, corners, merge)
   local self = setmetatable({}, Cannon)
   self.planet = planet
   self.mountAngle = mountAngle
   self.target = target
+  self.merge = merge
   self.restAngle = mountAngle       -- the barrel, at rest, points straight out
   self.barrelAngle = mountAngle
   self.state = "idle"
@@ -272,10 +342,31 @@ local function makeBumper(at, inX, inY, outX, outY, radius)
   }
 end
 
--- The route: the corner points (the pivot first, the target's middle
--- last, with `corners` in between) — self.points — and from them, the
--- whole path he flies, in order, as self.pieces: straight lines, and the
--- rails' arcs between them.
+-- A route's corner, copied with everything a corner can have (see
+-- Cannon.new for what each means).
+local function copyCorner(c)
+  return { c[1], c[2], loops = c.loops, radius = c.radius, loopRadius = c.loopRadius,
+    loopGap = c.loopGap, fling = c.fling, loopsFirst = c.loopsFirst,
+    bumper = c.bumper, bumperRadius = c.bumperRadius, gauntlet = c.gauntlet }
+end
+
+local function dirBetween(a, b)
+  local dx, dy = b[1] - a[1], b[2] - a[2]
+  local len = math.sqrt(dx * dx + dy * dy)
+  return dx / len, dy / len, len
+end
+
+-- A track: from a list of points, the whole path he flies, in order, as
+-- owner.pieces — straight lines, and the rails' arcs (or bumpers'
+-- bounces) between them — plus owner.rails and owner.bumpers, for
+-- drawing.
+--
+-- Open (closed = false): points[1] is where it starts (a cannon's pivot)
+-- and points[#points] where it ends (a target planet's middle); every
+-- point in between is a corner. Closed (closed = true): every point is a
+-- corner, the last joined back round to the first — a loop with no end
+-- (see Cannon.newTrack); its pieces start at the end of the first
+-- corner's curve, and the last of them brings him back there.
 --
 -- At each corner, a curve: the circular arc of radius TURN_RADIUS that
 -- meets the legs either side exactly tangent (a fillet). It starts `t`
@@ -295,43 +386,32 @@ end
 -- the corner (see makeBumper). The leg runs right up to the corner, he
 -- bounces off it there, and the next leg starts from the same point.
 --
--- self.pieces[i]  { kind = "line", from, to, dir }, { kind = "arc", rail }
---                 or { kind = "bounce", bumper }
--- self.bumpers    every bumper, for drawing
--- self.rails      every rail (curves and loops), for drawing — each with
---                 its centre cx/cy, radius, where it starts round that
---                 centre (phi0), which way it goes round (sign), how far
---                 (sweep, radians), its length, its ends (entry/exit) and
---                 the directions in and out.
-function Cannon:buildRoute(corners)
-  local px, py = self:pivot()
-  local points = { { px, py } }
-  for _, c in ipairs(corners) do
-    points[#points + 1] = { c[1], c[2], loops = c.loops, radius = c.radius, loopRadius = c.loopRadius,
-      bumper = c.bumper, bumperRadius = c.bumperRadius }
-  end
-  points[#points + 1] = { self.target.pos.x, self.target.pos.y }
-  self.points = points
-
-  local function dirBetween(a, b)
-    local dx, dy = b[1] - a[1], b[2] - a[2]
-    local len = math.sqrt(dx * dx + dy * dy)
-    return dx / len, dy / len, len
-  end
+-- owner.pieces[i]  { kind = "line", from, to, dir }, { kind = "arc", rail }
+--                  or { kind = "bounce", bumper }
+-- owner.bumpers    every bumper
+-- owner.rails      every rail (curves and loops) — each with its centre
+--                  cx/cy, radius, where it starts round that centre
+--                  (phi0), which way it goes round (sign), how far (sweep,
+--                  radians), its length, its ends (entry/exit) and the
+--                  directions in and out.
+local function buildTrack(owner, points, closed)
+  local n = #points
+  local function before(i) return (closed and i == 1) and points[n] or points[i - 1] end
+  local function after(i) return (closed and i == n) and points[1] or points[i + 1] end
 
   -- The curve at each corner (keyed by its index in points) — or, for a
   -- `bumper` corner, its bumper (see makeBumper).
   local turns, bumpers = {}, {}
-  self.bumpers = {}
-  for i = 2, #points - 1 do
-    local inX, inY, lenIn = dirBetween(points[i - 1], points[i])
-    local outX, outY, lenOut = dirBetween(points[i], points[i + 1])
+  owner.bumpers = {}
+  for i = closed and 1 or 2, closed and n or n - 1 do
+    local inX, inY, lenIn = dirBetween(before(i), points[i])
+    local outX, outY, lenOut = dirBetween(points[i], after(i))
     local turn = math.acos(math.max(-1, math.min(1, inX * outX + inY * outY)))
     local sign = (inX * outY - inY * outX) >= 0 and 1 or -1
     if points[i].bumper then
       bumpers[i] = makeBumper(points[i], inX, inY, outX, outY, points[i].bumperRadius or BUMPER_RADIUS)
       bumpers[i].sign = sign
-      self.bumpers[#self.bumpers + 1] = bumpers[i]
+      owner.bumpers[#owner.bumpers + 1] = bumpers[i]
     else
       -- (Tighter where the legs either side are too short for the full
       -- radius — each curve may use at most 45% of either leg.)
@@ -344,9 +424,17 @@ function Cannon:buildRoute(corners)
     end
   end
 
-  self.pieces, self.rails = {}, {}
+  -- The legs, in the order he flies them: into every corner from the
+  -- second on (and, open, into the end) — and, closed, round into the
+  -- first corner again.
+  local order = {}
+  for i = 2, n do order[#order + 1] = i end
+  if closed then order[#order + 1] = 1 end
   local cursor = points[1]
-  for i = 2, #points do
+  if closed then cursor = turns[1] and turns[1].exit or points[1] end
+
+  owner.pieces, owner.rails = {}, {}
+  for _, i in ipairs(order) do
     local turn, bumper = turns[i], bumpers[i]
     -- (A bumper's leg runs right up to the corner itself — that's where
     -- he meets it.)
@@ -358,39 +446,225 @@ function Cannon:buildRoute(corners)
     local loops = points[i].loops or 0
     if loops > 0 then
       local loopR = points[i].loopRadius or LOOP_RADIUS
-      local gap = loopR * 2 + LOOP_SPACING
+      -- (From one ring's touch point to the next: well apart, unless the
+      -- corner gives its own loopGap — a corkscrew's, much less than a
+      -- ring's width, so they overlap like a stretched-out spring.)
+      local gap = points[i].loopGap or (loopR * 2 + LOOP_SPACING)
       local lead = loopR + LOOP_LEAD
       local fits = math.floor((len - lead - loopR - LOOP_LEAD) / gap) + 1
       if fits < loops then
         print(string.format("Cannon.lua: only room for %d of the %d loops on the leg into corner %d — make that leg longer.",
-          math.max(0, fits), loops, i - 1))
+          math.max(0, fits), loops, i))
         loops = math.max(0, fits)
       end
       local side = (turn and turn.sign) or (bumper and bumper.sign) or 1
+      -- (Where the first ring goes: the end of the leg, unless the corner
+      -- has loopsFirst — then the start, so the rest of the leg's a long
+      -- straight run after them, as a corkscrew's fling needs.)
+      local legStart = cursor
       for k = 1, loops do
-        local back = lead + (loops - k) * gap
-        local touch = { legEnd[1] - dx * back, legEnd[2] - dy * back }
-        self.pieces[#self.pieces + 1] = { kind = "line", from = cursor, to = touch, dir = { dx, dy } }
+        local touch
+        if points[i].loopsFirst then
+          local ahead = lead + (k - 1) * gap
+          touch = { legStart[1] + dx * ahead, legStart[2] + dy * ahead }
+        else
+          local back = lead + (loops - k) * gap
+          touch = { legEnd[1] - dx * back, legEnd[2] - dy * back }
+        end
+        owner.pieces[#owner.pieces + 1] = { kind = "line", from = cursor, to = touch, dir = { dx, dy } }
         local ring = makeRail(touch, dx, dy, loopR, side, math.pi * 2, true)
         ring.tail = LOOP_TAIL
-        self.pieces[#self.pieces + 1] = { kind = "arc", rail = ring }
-        self.rails[#self.rails + 1] = ring
+        -- (A corkscrew's last ring flings him out of it — see
+        -- Cannon.updateFlight.)
+        if points[i].fling and k == loops then ring.fling = true end
+        owner.pieces[#owner.pieces + 1] = { kind = "arc", rail = ring }
+        owner.rails[#owner.rails + 1] = ring
         cursor = touch
       end
     end
 
-    self.pieces[#self.pieces + 1] = { kind = "line", from = cursor, to = legEnd, dir = { dx, dy } }
+    -- (The leg's last straight — after any loops on it — is the one a
+    -- `gauntlet` corner lines with asteroids.)
+    owner.pieces[#owner.pieces + 1] = { kind = "line", from = cursor, to = legEnd, dir = { dx, dy },
+      gauntlet = points[i].gauntlet }
     if turn then
-      self.pieces[#self.pieces + 1] = { kind = "arc", rail = turn }
-      self.rails[#self.rails + 1] = turn
+      owner.pieces[#owner.pieces + 1] = { kind = "arc", rail = turn }
+      owner.rails[#owner.rails + 1] = turn
       cursor = turn.exit
     elseif bumper then
-      self.pieces[#self.pieces + 1] = { kind = "bounce", bumper = bumper }
+      owner.pieces[#owner.pieces + 1] = { kind = "bounce", bumper = bumper }
       cursor = points[i]
     end
   end
+end
 
+-- A cannon's route: from its pivot, round `corners`, to either its
+-- target planet's middle (where he crashes into it) — or, merging onto a
+-- track (self.merge — see Cannon.trackMergeAt), to a point on one of
+-- that track's straights, where one last curve (the on-ramp: just
+-- another rail, its "out" being the straight's own direction) lines him
+-- up exactly with the straight. From the end of that curve on he's on
+-- the track itself (see Cannon.updateFlight), so the route stops there.
+function Cannon:buildRoute(corners)
+  local px, py = self:pivot()
+  local points = { { px, py } }
+  for _, c in ipairs(corners) do points[#points + 1] = copyCorner(c) end
+  local m = self.merge
+  if m then
+    points[#points + 1] = { m.at[1], m.at[2], radius = m.radius }
+    points[#points + 1] = { m.at[1] + m.dir[1] * m.ahead, m.at[2] + m.dir[2] * m.ahead }
+  else
+    points[#points + 1] = { self.target.pos.x, self.target.pos.y }
+  end
+  buildTrack(self, points, false)
+  if m then
+    -- (The straight past the on-ramp's curve is the track's own.)
+    table.remove(self.pieces)
+    table.remove(points)
+  end
+  self.points = points
   self:placeCoins()
+end
+
+-- A track that's a loop with no end — the galactic expressway (see
+-- main.lua): `corners` all the way round (each can be anything a
+-- cannon's route corner can be: a rail, with loops on the leg into it,
+-- a bumper, a gauntlet), the last joined back to the first. Nothing
+-- fires him onto it itself; cannons merge onto it (see trackMergeAt),
+-- and once he's on, he goes round and round (see Cannon.updateFlight).
+-- It's drawn, updated and kept clear like a cannon's route — it just has
+-- no cannon (self.isTrack) and no target.
+function Cannon.newTrack(corners)
+  local self = setmetatable({}, Cannon)
+  self.isTrack, self.closed = true, true
+  self.time = 0
+  self.particles = {}
+  self.railParticles = {}
+  self.coins, self.coinPops = {}, {}
+  local points = {}
+  for _, c in ipairs(corners) do points[#points + 1] = copyCorner(c) end
+  self.points = points
+  buildTrack(self, points, true)
+  return self
+end
+
+-- Where a cannon's route can merge onto `track` near (x, y): the
+-- nearest point on any of its straights, that straight's direction and
+-- piece index, and how far on along it the straight still runs — the
+-- `merge` to give Cannon.new. (Best somewhere along the middle of a long
+-- straight, so there's room for the on-ramp's curve to finish on it.)
+function Cannon.trackMergeAt(track, x, y)
+  local best
+  for i, piece in ipairs(track.pieces) do
+    if piece.kind == "line" then
+      local fx, fy, tx, ty = piece.from[1], piece.from[2], piece.to[1], piece.to[2]
+      local dx, dy = tx - fx, ty - fy
+      local lenSq = dx * dx + dy * dy
+      local t = lenSq > 0 and math.max(0, math.min(1, ((x - fx) * dx + (y - fy) * dy) / lenSq)) or 0
+      local px, py = fx + dx * t, fy + dy * t
+      local d = (x - px) ^ 2 + (y - py) ^ 2
+      if not best or d < best.d then
+        best = { d = d, piece = i, at = { px, py }, dir = { piece.dir[1], piece.dir[2] },
+          ahead = math.sqrt(lenSq) * (1 - t) }
+      end
+    end
+  end
+  return { track = track, piece = best.piece, at = best.at, dir = best.dir, ahead = best.ahead }
+end
+
+-- An exit off `track`: a route of its own (`points` — the first on one
+-- of the track's straights, piece `pieceIndex`: where he hits the
+-- flipper; then any corners, out to the last, the landing point)
+-- ending in `target`, where he crashes like at the end of any cannon
+-- shot.
+--
+-- At its start, a pinball flipper across the straight (see
+-- Cannon.flipperHeld). If the button's held as he reaches it, he
+-- bounces off it there, like off a bumper — straight off down the
+-- exit's first leg, at whatever angle that leaves the straight (see
+-- Cannon.updateFlight); if not, it's lying out of his way and he
+-- carries on round the track. It's drawn and kept clear like any other
+-- route (main.lua puts it in state.cannons).
+function Cannon.newExit(track, pieceIndex, points, target)
+  local self = setmetatable({}, Cannon)
+  self.isTrack, self.isExit, self.closed = true, true, false
+  self.time = 0
+  self.particles = {}
+  self.railParticles = {}
+  self.coins, self.coinPops = {}, {}
+  self.target = target
+  self.points = points
+  buildTrack(self, points, false)
+
+  local piece = track.pieces[pieceIndex]
+  self.fromTrack = track
+  self.at = { points[1][1], points[1][2] }
+  local dx, dy = piece.dir[1], piece.dir[2]
+  local ox, oy = self.pieces[1].dir[1], self.pieces[1].dir[2]
+  self.dir, self.outDir = { dx, dy }, { ox, oy }
+  -- (Which side of the straight he's batted off to.)
+  self.side = (dx * oy - dy * ox) >= 0 and 1 or -1
+  local sx, sy = -dy * self.side, dx * self.side
+
+  -- The flipper, raised: its face square to the bounce — facing back
+  -- half-way between where he's coming from and where he's going
+  -- (normal), so he leaves it exactly down the exit — touching him right
+  -- at the straight's point. It runs out from its pivot, back on the
+  -- side away from the exit, across his path toward the exit's side.
+  local nx, ny = ox - dx, oy - dy
+  local nLen = math.sqrt(nx * nx + ny * ny)
+  nx, ny = nx / nLen, ny / nLen
+  self.normal = { nx, ny }
+  local tx, ty = -ny, nx
+  if tx * sx + ty * sy < 0 then tx, ty = -tx, -ty end
+  local reach = FLIPPER_CONTACT_RADIUS + FLIPPER_THICKNESS * 0.4
+  local cx, cy = self.at[1] - nx * reach, self.at[2] - ny * reach
+  self.pivot = { cx - tx * FLIPPER_LENGTH * FLIPPER_CONTACT_AT, cy - ty * FLIPPER_LENGTH * FLIPPER_CONTACT_AT }
+  self.upAngle = math.atan2(ty, tx)
+  -- At rest: swung back from that, about its pivot, until it's pointing
+  -- on ahead and angled away from his path.
+  local rx, ry = dx * math.cos(FLIPPER_REST_ANGLE) - sx * math.sin(FLIPPER_REST_ANGLE),
+    dy * math.cos(FLIPPER_REST_ANGLE) - sy * math.sin(FLIPPER_REST_ANGLE)
+  self.restAngle = math.atan2(ry, rx)
+  self.flip = 0 -- 0 at rest, 1 fully raised
+
+  piece.exits = piece.exits or {}
+  table.insert(piece.exits, self)
+  return self
+end
+
+-- The jump button, held (Space, or the gamepad's X/A) — what raises
+-- every exit's flipper.
+function Cannon.flipperHeld()
+  return (state.keys and state.keys[' ']) or state.gamepadJumpHeld or false
+end
+
+-- An exit's flipper as it stands right now: its pivot, and the
+-- direction to its tip — swung between rest and raised (see newExit).
+function Cannon:flipperPose()
+  local a = lerpAngle(self.restAngle, self.upAngle, self.flip)
+  return self.pivot[1], self.pivot[2], math.cos(a), math.sin(a)
+end
+
+-- Bounced off an exit's flipper: sparks off its face, the hit-stop and
+-- shake a bumper gives, and its smack.
+function Cannon:hitFlipper()
+  self.flippedAt = self.time
+  self.flip = 1
+  local x, y = self.at[1], self.at[2]
+  local base = math.atan2(self.normal[2], self.normal[1])
+  for _ = 1, 26 do
+    local a = base + (math.random() - 0.5) * 2.2
+    local speed = 500 + math.random() * 1000
+    local life = 0.25 + math.random() * 0.35
+    self.railParticles[#self.railParticles + 1] = {
+      kind = "spark", x = x, y = y, vx = math.cos(a) * speed, vy = math.sin(a) * speed,
+      life = life, maxLife = life, size = 1.6 + math.random() * 1.4,
+    }
+  end
+  CameraShake.start(BUMPER_SHAKE_STRENGTH, BUMPER_SHAKE_SECONDS)
+  hitStopUntil = love.timer.getTime() + HIT_STOP_SECONDS
+  if state.audioManager then state.audioManager:playGoombaStomp() end
 end
 
 -- Coins strung down every straight stretch of the route, COIN_SPACING
@@ -407,7 +681,7 @@ function Cannon:placeCoins()
     if piece.kind == "line" then
       local len = math.sqrt((piece.to[1] - piece.from[1]) ^ 2 + (piece.to[2] - piece.from[2]) ^ 2)
       local startAt = COIN_END_MARGIN + (i == 1 and BARREL_LENGTH or 0)
-      local endAt = len - COIN_END_MARGIN - (i == #self.pieces and self.target.radius or 0)
+      local endAt = len - COIN_END_MARGIN - ((i == #self.pieces and self.target) and self.target.radius or 0)
       if endAt > startAt then
         -- (Centred in the room there is, so the gaps at both ends match.)
         local count = math.floor((endAt - startAt) / COIN_SPACING) + 1
@@ -550,6 +824,10 @@ function Cannon:capture(player)
   player.inCannon = self
   player.cannonFlight = nil
   player.pullTarget = nil
+  -- The ride's his whole world now: no V.A.T.S. slow-mo dragging it out
+  -- (he couldn't turn it off — see Player:isCannonRiding), no lock-on.
+  player.lockedTarget = nil
+  state.vatsActive = false
   player.onSurface = false
   player.currentPlanet = nil
   player.lastInfluencePlanet = self.planet
@@ -577,7 +855,10 @@ function Cannon:launch(player)
   -- piece: which piece of the route he's on (see buildRoute); railS: on
   -- a rail, how far round it; speed: how fast he's going right now —
   -- see Cannon.updateFlight.
-  player.cannonFlight = { cannon = self, target = self.target, piece = 1, railS = 0, speed = LAUNCH_SPEED, trail = {} }
+  -- track: whose pieces he's following — this cannon's route at first,
+  -- then (if it merges onto one) the track's (see Cannon.updateFlight).
+  player.cannonFlight = { cannon = self, track = self, target = self.target, piece = 1, railS = 0,
+    speed = LAUNCH_SPEED, trail = {} }
 
   -- Every coin down the route back, for this run.
   for _, coin in ipairs(self.coins) do coin.collected = false end
@@ -593,6 +874,17 @@ end
 function Cannon:update(player, ts)
   local dt = ts / 60
   self.time = self.time + dt
+  -- (A track — see Cannon.newTrack — has no cannon: just its rails'
+  -- glow and sparks to keep moving.)
+  if self.isTrack then
+    self:updateParticles(dt)
+    if self.isExit then
+      -- (Its flipper, swinging up or back down after the button.)
+      local goal = Cannon.flipperHeld() and 1 or 0
+      self.flip = goal + (self.flip - goal) * math.exp(-FLIPPER_SWING_RATE * dt)
+    end
+    return
+  end
   self.timer = self.timer + dt
   if self.flashTimer then
     self.flashTimer = self.flashTimer - dt
@@ -710,6 +1002,115 @@ local function railSparks(cannon, rail, s, player, riding)
   end
 end
 
+-- Whether `p` (a planetoid) is just an ordinary field planetoid — the
+-- only kind a cannon shot will blow out of its way (see clearTheWay):
+-- a plain Planetoid, not anything built on one with its own look (a
+-- Sphere, the mining planet, a water planet...), not anything permanent
+-- (the cannons' own planets, every other landmark), and never the
+-- shot's own target.
+local function isMundane(p, target)
+  return p ~= target and getmetatable(p) == Planetoid and rawget(p, "draw") == nil
+    and not p.isPermanent and not p.isImmovable and not p.isWaterPlanet
+end
+
+-- Blowing `thing` (a planetoid or an asteroid) apart: the game's own
+-- fiery explosion (more of them for a bigger one, scattered over it),
+-- a bang, and a jolt of the screen.
+local function blowUp(thing)
+  state.explosions = state.explosions or {}
+  local bursts = math.max(1, math.floor(thing.radius / 25))
+  for k = 1, bursts do
+    local a, d = math.random() * math.pi * 2, (k == 1) and 0 or math.random() * thing.radius * 0.7
+    table.insert(state.explosions, Explosion.new(thing.pos.x + math.cos(a) * d, thing.pos.y + math.sin(a) * d))
+  end
+  CameraShake.start(OBSTACLE_SHAKE_STRENGTH, OBSTACLE_SHAKE_SECONDS)
+  if state.audioManager then state.audioManager:playBang("large", Vector2.new(thing.pos.x, thing.pos.y)) end
+end
+
+-- Anything ordinary in his way, blown apart before he hits it, so the
+-- shot never stops short: any mundane planetoid (see isMundane) or
+-- asteroid within reach of the stretch he's covered since last frame —
+-- or will cover by next frame (so it goes up just as he gets there, not
+-- after he's already landed on it). A planetoid's coins go with it, and
+-- so does a lock-on he had on it.
+local function clearTheWay(player, flight, ts)
+  local ax, ay = (player.prevPos or player.pos).x, (player.prevPos or player.pos).y
+  local bx, by = player.pos.x + player.vel.x * ts, player.pos.y + player.vel.y * ts
+  local dx, dy = bx - ax, by - ay
+  local lenSq = dx * dx + dy * dy
+  local function inTheWay(thing)
+    local t = lenSq > 0 and math.max(0, math.min(1, ((thing.pos.x - ax) * dx + (thing.pos.y - ay) * dy) / lenSq)) or 0
+    local reach = thing.radius + player.radius
+    return (thing.pos.x - (ax + dx * t)) ^ 2 + (thing.pos.y - (ay + dy * t)) ^ 2 <= reach * reach
+  end
+
+  for i = #state.planetoids, 1, -1 do
+    local p = state.planetoids[i]
+    if isMundane(p, flight.target) and inTheWay(p) then
+      table.remove(state.planetoids, i)
+      for k = #(state.coins or {}), 1, -1 do
+        if state.coins[k].planet == p then table.remove(state.coins, k) end
+      end
+      if player.lockedTarget == p then player.lockedTarget = nil end
+      if player.lastInfluencePlanet == p then player.lastInfluencePlanet = nil end
+      blowUp(p)
+    end
+  end
+  for i = #(state.asteroids or {}), 1, -1 do
+    local a = state.asteroids[i]
+    if inTheWay(a) then
+      table.remove(state.asteroids, i)
+      if player.lockedTarget == a then player.lockedTarget = nil end
+      blowUp(a)
+    end
+  end
+end
+
+-- How much of the frame's time the game should take right now (main.lua
+-- scales state.timeScale by it): all but none during a hit-stop.
+function Cannon.timeFactor()
+  if love.timer.getTime() < hitStopUntil then return HIT_STOP_TIME_FACTOR end
+  return 1
+end
+
+-- The asteroids a gauntlet's laid out (see spawnGauntlet), so whatever's
+-- left of them once the ride's over can be cleared away.
+local gauntletRocks = {}
+
+-- Laying out a gauntlet: asteroids all down `piece` (a straight he's
+-- just started along), GAUNTLET_SPACING apart, still and spinning, each
+-- nudged a little off his line but never out of his way — so he smashes
+-- through every one (see clearTheWay). Laid out as he starts down it,
+-- rather than when the route's built: asteroids out in space are culled
+-- once the world's no longer generating round them, which these are
+-- spared (isGauntlet — see WorldGen's culling) only until the ride ends.
+local function spawnGauntlet(piece)
+  local len = math.sqrt((piece.to[1] - piece.from[1]) ^ 2 + (piece.to[2] - piece.from[2]) ^ 2)
+  local nx, ny = -piece.dir[2], piece.dir[1]
+  state.asteroids = state.asteroids or {}
+  for d = GAUNTLET_END_MARGIN, len - GAUNTLET_END_MARGIN, GAUNTLET_SPACING do
+    local radius = GAUNTLET_MIN_RADIUS + math.random() * (GAUNTLET_MAX_RADIUS - GAUNTLET_MIN_RADIUS)
+    local side = (math.random() * 2 - 1) * radius * GAUNTLET_SIDE_NUDGE
+    local rock = Asteroid.new(piece.from[1] + piece.dir[1] * d + nx * side, piece.from[2] + piece.dir[2] * d + ny * side, radius)
+    rock.vel = Vector2.new(0, 0)
+    rock.isGauntlet = true
+    table.insert(state.asteroids, rock)
+    table.insert(gauntletRocks, rock)
+  end
+end
+
+-- Whatever's left of a gauntlet once the ride's over (he landed early,
+-- died, was pulled away...) — gone, so it doesn't sit out there forever.
+local function clearGauntlet()
+  if #gauntletRocks == 0 then return end
+  local mine = {}
+  for _, rock in ipairs(gauntletRocks) do mine[rock] = true end
+  for i = #(state.asteroids or {}), 1, -1 do
+    if mine[state.asteroids[i]] then table.remove(state.asteroids, i) end
+  end
+  gauntletRocks = {}
+end
+
 -- He's just bounced off `bumper`: it pops and blinks (see drawRails),
 -- throws off a ring and a burst of sparks from where he hit it, the
 -- screen jolts, and it goes boing.
@@ -728,6 +1129,7 @@ function Cannon:hitBumper(bumper)
     }
   end
   CameraShake.start(BUMPER_SHAKE_STRENGTH, BUMPER_SHAKE_SECONDS)
+  hitStopUntil = love.timer.getTime() + HIT_STOP_SECONDS
   if state.audioManager then state.audioManager:playGoombaStomp() end
 end
 
@@ -736,6 +1138,14 @@ local function placeOnRail(player, rail, s, speed)
   local x, y, dx, dy = railPoint(rail, s, 0)
   player.pos.x, player.pos.y = x, y
   player.vel.x, player.vel.y = dx * speed, dy * speed
+end
+
+-- The piece after piece `i` of `track` — round to the first again on a
+-- closed loop (see Cannon.newTrack); nil past the end of an open route.
+local function nextPieceIndex(track, i)
+  if i < #track.pieces then return i + 1 end
+  if track.closed then return 1 end
+  return nil
 end
 
 -- Once a tick, after the player's own update (which has already moved
@@ -753,7 +1163,10 @@ end
 -- takes charge of him first: the pull beam, a portal, dying, a teleport.
 function Cannon.updateFlight(player, ts)
   local flight = player and player.cannonFlight
-  if not flight then return end
+  if not flight then
+    clearGauntlet()
+    return
+  end
   if player.onSurface then
     crashLanding(player)
     player.cannonFlight = nil
@@ -765,9 +1178,41 @@ function Cannon.updateFlight(player, ts)
     return
   end
 
-  local cannon = flight.cannon
-  local piece = cannon.pieces[flight.piece]
+  -- (Whose pieces he's on: the cannon's own route, or — once it's merged
+  -- onto one — a track's, round and round if it's a closed loop.)
+  local track = flight.track
+  local piece = track.pieces[flight.piece]
   local dt = ts / 60
+
+  -- Reaching an exit's flipper with the button held (see
+  -- Cannon.newExit): he bounces off it right there, like off a bumper —
+  -- straight off down the exit's first leg (however far past it he got
+  -- this frame), never slower than FLIPPER_MIN_SPEED.
+  if piece.kind == "line" and piece.exits and flight.lastX and Cannon.flipperHeld() then
+    for _, exit in ipairs(piece.exits) do
+      local dx, dy = exit.dir[1], exit.dir[2]
+      local before = (flight.lastX - exit.at[1]) * dx + (flight.lastY - exit.at[2]) * dy
+      local now = (player.pos.x - exit.at[1]) * dx + (player.pos.y - exit.at[2]) * dy
+      if before < 0 and now >= 0 then
+        local ox, oy = exit.outDir[1], exit.outDir[2]
+        flight.track, flight.piece, flight.target = exit, 1, exit.target
+        track, piece = exit, exit.pieces[1]
+        flight.speed = math.max(flight.speed, FLIPPER_MIN_SPEED)
+        player.pos.x, player.pos.y = exit.at[1] + ox * now, exit.at[2] + oy * now
+        player.vel.x, player.vel.y = ox * flight.speed, oy * flight.speed
+        exit:hitFlipper()
+        break
+      end
+    end
+  end
+  flight.lastX, flight.lastY = player.pos.x, player.pos.y
+
+  -- Just started down a gauntlet's straight: lay it out ahead of him
+  -- (every time round, on a loop).
+  if flight.onPiece ~= piece then
+    flight.onPiece = piece
+    if piece.kind == "line" and piece.gauntlet then spawnGauntlet(piece) end
+  end
   if piece.kind == "arc" then
     -- Riding a rail: easing down to RAIL_SPEED.
     local rail = piece.rail
@@ -775,22 +1220,38 @@ function Cannon.updateFlight(player, ts)
     flight.railS = flight.railS + flight.speed * ts
     if flight.railS < rail.length then
       placeOnRail(player, rail, flight.railS, flight.speed)
-      railSparks(cannon, rail, flight.railS, player, flight.speed)
-      rail.glowAt = cannon.time
+      railSparks(track, rail, flight.railS, player, flight.speed)
+      rail.glowAt = track.time
     else
       -- Off its end, down the line after it — however far past the end
-      -- he got.
+      -- he got. (The end of a cannon's on-ramp: onto the track it
+      -- merges with, partway along one of its straights.)
       local over = flight.railS - rail.length
       local dir = rail.outDir
+      if rail.fling then
+        -- Out of a corkscrew: flung off it, faster than he ever goes
+        -- otherwise (easing back to LAUNCH_SPEED down the straight after).
+        flight.speed = CORKSCREW_FLING_SPEED
+        CameraShake.start(BUMPER_SHAKE_STRENGTH, BUMPER_SHAKE_SECONDS)
+        if state.audioManager then state.audioManager:playBang("medium", Vector2.new(player.pos.x, player.pos.y)) end
+      end
       player.pos.x, player.pos.y = rail.exit[1] + dir[1] * over, rail.exit[2] + dir[2] * over
       player.vel.x, player.vel.y = dir[1] * flight.speed, dir[2] * flight.speed
-      flight.piece = flight.piece + 1
+      local nextI = nextPieceIndex(track, flight.piece)
+      if nextI then
+        flight.piece = nextI
+      elseif track.merge then
+        flight.track, flight.piece = track.merge.track, track.merge.piece
+      end
     end
   else
-    -- A straight stretch: back up to LAUNCH_SPEED.
-    flight.speed = LAUNCH_SPEED + (flight.speed - LAUNCH_SPEED) * math.exp(-LINE_BOOST * dt)
+    -- A straight stretch: back up to LAUNCH_SPEED — or, flung faster
+    -- than that (out of a corkscrew), only slowly back down to it.
+    local ease = flight.speed > LAUNCH_SPEED and FLING_EASE or LINE_BOOST
+    flight.speed = LAUNCH_SPEED + (flight.speed - LAUNCH_SPEED) * math.exp(-ease * dt)
     player.vel.x, player.vel.y = piece.dir[1] * flight.speed, piece.dir[2] * flight.speed
-    local nextPiece = cannon.pieces[flight.piece + 1]
+    local nextI = nextPieceIndex(track, flight.piece)
+    local nextPiece = nextI and track.pieces[nextI]
     if nextPiece and nextPiece.kind == "bounce" then
       -- Heading for a bumper: reached it yet? Then off it, straight down
       -- the next leg (however far past it he got), at BUMPER_SPEED.
@@ -801,18 +1262,18 @@ function Cannon.updateFlight(player, ts)
         flight.speed = BUMPER_SPEED
         player.pos.x, player.pos.y = bumper.at[1] + out[1] * past, bumper.at[2] + out[2] * past
         player.vel.x, player.vel.y = out[1] * flight.speed, out[2] * flight.speed
-        flight.piece = flight.piece + 2
-        cannon:hitBumper(bumper)
+        flight.piece = nextPieceIndex(track, nextI)
+        track:hitBumper(bumper)
       end
     elseif nextPiece then
       -- Heading for a rail: reached the end of this line yet?
       local past = (player.pos.x - piece.to[1]) * piece.dir[1] + (player.pos.y - piece.to[2]) * piece.dir[2]
       if past >= 0 then
         local rail = nextPiece.rail
-        flight.piece = flight.piece + 1
+        flight.piece = nextI
         flight.railS = past
         placeOnRail(player, rail, past, flight.speed)
-        rail.glowAt = cannon.time
+        rail.glowAt = track.time
         if state.audioManager then state.audioManager:playBang("small", Vector2.new(player.pos.x, player.pos.y)) end
       end
     else
@@ -823,7 +1284,28 @@ function Cannon.updateFlight(player, ts)
       local t = flight.target
       local dx, dy = player.pos.x - t.pos.x, player.pos.y - t.pos.y
       local dist = math.sqrt(dx * dx + dy * dy)
-      if dist <= t.radius + player.radius then
+      if t.isRoundedRect then
+        -- (A rounded-rectangle target — the fisherman's, the pinball
+        -- planet: onto whichever face he's reached, the same way an
+        -- ordinary landing puts him there — see CollisionSystem.)
+        local surface = t:nearestSurfacePoint(player.pos.x, player.pos.y)
+        if t:containsPoint(player.pos.x, player.pos.y) or surface.distance <= player.radius then
+          player.pos.x = surface.point.x + surface.normal.x * player.radius
+          player.pos.y = surface.point.y + surface.normal.y * player.radius
+          player.prevPos = player.pos:clone()
+          player.vel.x, player.vel.y = 0, 0
+          player.onSurface = true
+          player.currentPlanet = t
+          player.lastInfluencePlanet = t
+          if t.arcPositionForWorldPoint then
+            player.surfaceArcPos = t:arcPositionForWorldPoint(player.pos.x, player.pos.y, true)
+          end
+          player.angle = -math.pi / 2
+          crashLanding(player)
+          player.cannonFlight = nil
+          return
+        end
+      elseif dist <= t.radius + player.radius then
         local ux, uy = dx / math.max(dist, 1e-6), dy / math.max(dist, 1e-6)
         if dist < 1e-6 then ux, uy = -piece.dir[1], -piece.dir[2] end
         player.pos.x = t.pos.x + ux * (t.radius + player.radius)
@@ -841,8 +1323,20 @@ function Cannon.updateFlight(player, ts)
     end
   end
 
+  -- (Last: wherever this frame's left him, and wherever he's headed.)
+  clearTheWay(player, flight, ts)
+
   table.insert(flight.trail, 1, { x = player.pos.x, y = player.pos.y })
   if #flight.trail > TRAIL_LENGTH then table.remove(flight.trail) end
+
+  -- Afterimages: a new one each time he's come AFTERIMAGE_SPACING since
+  -- the last (so they sit evenly along his path, whatever his speed).
+  flight.ghosts = flight.ghosts or {}
+  local last = flight.ghosts[1]
+  if not last or (player.pos.x - last.x) ^ 2 + (player.pos.y - last.y) ^ 2 >= AFTERIMAGE_SPACING ^ 2 then
+    table.insert(flight.ghosts, 1, { x = player.pos.x, y = player.pos.y })
+    if #flight.ghosts > AFTERIMAGE_COUNT + 1 then table.remove(flight.ghosts) end
+  end
 end
 
 ----------------------------------------------------------------------
@@ -1112,6 +1606,8 @@ function Cannon:drawRails()
   end
   love.graphics.setBlendMode("alpha")
 
+  if self.isExit then self:drawFlipper() end
+
   -- Sparks off the rails.
   love.graphics.setBlendMode("add")
   for _, p in ipairs(self.railParticles) do
@@ -1121,6 +1617,57 @@ function Cannon:drawRails()
     love.graphics.line(p.x, p.y, p.x - p.vx * 0.02, p.y - p.vy * 0.02)
   end
   love.graphics.pop()
+end
+
+-- An exit's flipper (see Cannon.newExit): a fat pinball flipper on a
+-- brass pivot, across the straight — glowing while it's up, and
+-- flashing when he's just bounced off it.
+function Cannon:drawFlipper()
+  local px, py, tx, ty = self:flipperPose()
+  if not utils.isOnScreen(px, py, FLIPPER_LENGTH + 200, 50) then return end
+  local nx, ny = -ty, tx
+  local rp, rt = FLIPPER_THICKNESS / 2, FLIPPER_THICKNESS * 0.3
+  local ex, ey = px + tx * FLIPPER_LENGTH, py + ty * FLIPPER_LENGTH
+  local flash = self.flippedAt and math.max(0, 1 - (self.time - self.flippedAt) / 0.5) or 0
+  local lit = math.max(self.flip, flash)
+
+  local function shape(grow)
+    local a, b = rp + grow, rt + grow
+    love.graphics.polygon("fill", px + nx * a, py + ny * a, ex + nx * b, ey + ny * b,
+      ex - nx * b, ey - ny * b, px - nx * a, py - ny * a)
+    love.graphics.circle("fill", px, py, a)
+    love.graphics.circle("fill", ex, ey, b)
+  end
+
+  -- Glow, while it's up.
+  if lit > 0.02 then
+    love.graphics.setBlendMode("add")
+    for k = 3, 1, -1 do
+      love.graphics.setColor(COLOR_FLIPPER[1], COLOR_FLIPPER[2], COLOR_FLIPPER[3], 0.12 * lit)
+      shape(k * 14)
+    end
+    love.graphics.setBlendMode("alpha")
+  end
+  love.graphics.setColor(COLOR_OUTLINE)
+  shape(4)
+  local r, g, b = COLOR_FLIPPER[1], COLOR_FLIPPER[2], COLOR_FLIPPER[3]
+  local k = 0.7 + 0.3 * lit
+  love.graphics.setColor(r * k + flash * 0.3, g * k + flash * 0.3, b * k + flash * 0.3, 1)
+  shape(0)
+  -- (A highlight down its length.)
+  love.graphics.setColor(COLOR_FLIPPER_LIGHT[1], COLOR_FLIPPER_LIGHT[2], COLOR_FLIPPER_LIGHT[3], 0.55 + 0.4 * lit)
+  love.graphics.setLineWidth(5)
+  love.graphics.line(px + nx * rp * 0.45 + tx * rp, py + ny * rp * 0.45 + ty * rp,
+    ex + nx * rt * 0.45, ey + ny * rt * 0.45)
+  -- The pivot.
+  love.graphics.setColor(COLOR_OUTLINE)
+  love.graphics.circle("fill", px, py, rp * 0.55)
+  love.graphics.setColor(COLOR_BRASS)
+  love.graphics.circle("fill", px, py, rp * 0.42)
+  love.graphics.setColor(COLOR_BRASS_LIGHT)
+  love.graphics.circle("fill", px - rp * 0.12, py - rp * 0.12, rp * 0.16)
+
+  love.graphics.setColor(1, 1, 1, 1)
 end
 
 -- The streak behind him in flight. Call before drawing him.
@@ -1141,6 +1688,87 @@ function Cannon.drawFlightTrail(player)
     love.graphics.setLineWidth(player.radius * 0.5 * k + 1)
     love.graphics.line(a.x, a.y, b.x, b.y)
   end
+
+  -- Afterimages: faint copies of the ball (its white body, grey rim and
+  -- cyan middle — see Player:drawBallMode) at the spots he's just left,
+  -- each further one fainter. (The newest spot is where he is now, under
+  -- him — skipped.)
+  love.graphics.setBlendMode("alpha")
+  local ghosts = flight.ghosts or {}
+  local r = player.radius
+  love.graphics.setLineWidth(math.max(1, r * 0.12 - 1))
+  for i = #ghosts, 2, -1 do
+    local g = ghosts[i]
+    local a = AFTERIMAGE_ALPHA * (1 - (i - 2) / AFTERIMAGE_COUNT)
+    love.graphics.setColor(1, 1, 1, a)
+    love.graphics.circle("fill", g.x, g.y, r)
+    love.graphics.setColor(0.61, 0.61, 0.61, a)
+    love.graphics.circle("line", g.x, g.y, r)
+    love.graphics.setColor(0.42, 0.91, 0.92, a)
+    love.graphics.circle("fill", g.x, g.y, r / 3)
+  end
+  love.graphics.pop()
+end
+
+-- Speed lines: streaks rushing past the edges of the screen, the
+-- opposite way to the way he's flying — so it reads as the world
+-- streaming past. Strongest at full speed on a straight; thinning out as
+-- he slows on a rail, gone at a rail's own pace (and on the ground).
+-- Screen space: call after the world's drawn (and its camera transform
+-- undone), before the HUD.
+local speedLines = {}
+local speedLineBudget = 0
+
+function Cannon.drawSpeedLines(player)
+  local dt = math.min(love.timer.getDelta(), 1 / 20)
+  local w, h = love.graphics.getDimensions()
+  local flight = player and player.cannonFlight
+
+  -- How strong, from 0 (a rail's pace or slower) to 1 (full speed).
+  local k, dirX, dirY = 0, 1, 0
+  if flight then
+    local speed = math.sqrt(player.vel.x ^ 2 + player.vel.y ^ 2)
+    if speed > 1e-3 then dirX, dirY = player.vel.x / speed, player.vel.y / speed end
+    k = math.max(0, math.min(1, (flight.speed - RAIL_SPEED) / (LAUNCH_SPEED - RAIL_SPEED)))
+    k = k * k
+  end
+
+  -- New ones, at random spots round the edges (never in the middle,
+  -- where he is).
+  speedLineBudget = speedLineBudget + SPEED_LINES_PER_SECOND * k * dt
+  while speedLineBudget >= 1 do
+    speedLineBudget = speedLineBudget - 1
+    local x, y
+    for _ = 1, 8 do
+      x, y = math.random() * w, math.random() * h
+      local ex, ey = (x - w / 2) / (w * 0.3), (y - h / 2) / (h * 0.3)
+      if ex * ex + ey * ey > 1 then break end
+    end
+    speedLines[#speedLines + 1] = {
+      x = x, y = y, vx = -dirX, vy = -dirY,
+      speed = 2200 + math.random() * 1600, length = 70 + math.random() * 120,
+      life = SPEED_LINE_SECONDS, strength = k,
+    }
+  end
+
+  love.graphics.push("all")
+  love.graphics.setBlendMode("add")
+  love.graphics.setLineStyle("smooth")
+  for i = #speedLines, 1, -1 do
+    local s = speedLines[i]
+    s.life = s.life - dt
+    if s.life <= 0 then
+      table.remove(speedLines, i)
+    else
+      s.x = s.x + s.vx * s.speed * dt
+      s.y = s.y + s.vy * s.speed * dt
+      local fade = s.life / SPEED_LINE_SECONDS
+      local a = SPEED_LINE_ALPHA * s.strength * math.sin(math.pi * fade)
+      love.graphics.setColor(0.85, 0.93, 1, a)
+      love.graphics.setLineWidth(1.5)
+      love.graphics.line(s.x, s.y, s.x - s.vx * s.length, s.y - s.vy * s.length)
+    end
+  end
   love.graphics.pop()
 end
 
@@ -1148,140 +1776,123 @@ end
 -- Drawing
 ----------------------------------------------------------------------
 
--- Built once (they never change): the barrel and base's shaded faces —
--- steel lit along one side (local -y), dark along the other.
-local barrelMeshes, baseMesh = nil, nil
+-- PLACEHOLDER ART: a simple brushed-metal cannon — a rounded dome of a
+-- base, and a barrel with a rounded breech — standing in until it gets
+-- its own drawn art. (Same size and pivot as the real one will need:
+-- see the BARREL_ and BASE_ sizes above.)
+--
+-- The metal: bands of light and dark across each part (a bright streak
+-- toward the lit side, darkening off to both edges), built once as
+-- meshes in the part's own local space.
+local METAL_BANDS = {           -- { position across, -1 to 1; shade }
+  { -1.0, 0.22 }, { -0.75, 0.55 }, { -0.4, 0.92 }, { -0.25, 0.8 },
+  { 0.1, 0.5 }, { 0.6, 0.34 }, { 1.0, 0.16 },
+}
+local METAL_TINT = { 0.78, 0.82, 0.9 }
+local METAL_SLICES = 18
 
-local function makeQuadMesh(x0, h0, x1, h1, top, mid, bottom)
-  local verts = {
-    { x0, -h0, 0, 0, top[1], top[2], top[3], 1 },
-    { x1, -h1, 0, 0, top[1], top[2], top[3], 1 },
-    { x1, 0, 0, 0, mid[1], mid[2], mid[3], 1 },
-    { x0, 0, 0, 0, mid[1], mid[2], mid[3], 1 },
-    { x0, 0, 0, 0, mid[1], mid[2], mid[3], 1 },
-    { x1, 0, 0, 0, mid[1], mid[2], mid[3], 1 },
-    { x1, h1, 0, 0, bottom[1], bottom[2], bottom[3], 1 },
-    { x0, h0, 0, 0, bottom[1], bottom[2], bottom[3], 1 },
-  }
-  local mesh = love.graphics.newMesh(verts, "triangles", "static")
-  mesh:setVertexMap(1, 2, 3, 1, 3, 4, 5, 6, 7, 5, 7, 8)
-  return mesh
+local function metalShade(u)
+  for i = 1, #METAL_BANDS - 1 do
+    local a, b = METAL_BANDS[i], METAL_BANDS[i + 1]
+    if u <= b[1] then
+      local t = (u - a[1]) / (b[1] - a[1])
+      local v = a[2] + (b[2] - a[2]) * t
+      return METAL_TINT[1] * v, METAL_TINT[2] * v, METAL_TINT[3] * v
+    end
+  end
+  local v = METAL_BANDS[#METAL_BANDS][2]
+  return METAL_TINT[1] * v, METAL_TINT[2] * v, METAL_TINT[3] * v
 end
 
-local function getMeshes()
-  if barrelMeshes then return barrelMeshes, baseMesh end
-  local tipHalf = BARREL_HALF_WIDTH * 0.8
-  barrelMeshes = {
-    body = makeQuadMesh(-BARREL_BACK + 8, BARREL_HALF_WIDTH, BARREL_LENGTH - 10, tipHalf,
-      COLOR_STEEL_LIGHT, COLOR_STEEL, COLOR_STEEL_DARK),
-    lip = makeQuadMesh(BARREL_LENGTH - 10, MUZZLE_HALF_WIDTH, BARREL_LENGTH, MUZZLE_HALF_WIDTH,
-      COLOR_STEEL_LIGHT, COLOR_STEEL, COLOR_STEEL_DARK),
-  }
-  -- The base: a trapezoid from the surface up to the pivot, lit from its
-  -- top. Drawn with local -y pointing away from the planet.
-  local t, m, d = COLOR_STEEL_LIGHT, COLOR_STEEL, COLOR_STEEL_DARK
-  baseMesh = love.graphics.newMesh({
-    { -BASE_TOP_HALF_WIDTH, -PIVOT_HEIGHT, 0, 0, t[1], t[2], t[3], 1 },
-    { BASE_TOP_HALF_WIDTH, -PIVOT_HEIGHT, 0, 0, m[1], m[2], m[3], 1 },
-    { BASE_HALF_WIDTH, 4, 0, 0, d[1], d[2], d[3], 1 },
-    { -BASE_HALF_WIDTH, 4, 0, 0, m[1], m[2], m[3], 1 },
-  }, "fan", "static")
-  return barrelMeshes, baseMesh
+-- A strip of metal across `slices` steps of u from -1 to 1: each step's
+-- two ends from span(u) (x0, y0, x1, y1), shaded by u.
+local function metalStrip(span)
+  local verts = {}
+  for i = 0, METAL_SLICES do
+    local u = -1 + 2 * i / METAL_SLICES
+    local x0, y0, x1, y1 = span(u)
+    local r, g, b = metalShade(u)
+    verts[#verts + 1] = { x0, y0, 0, 0, r, g, b, 1 }
+    verts[#verts + 1] = { x1, y1, 0, 0, r, g, b, 1 }
+  end
+  return love.graphics.newMesh(verts, "strip", "static")
 end
 
--- Half the barrel's width at x along it (for the bands round it).
-local function halfWidthAt(x)
-  local t = (x - (-BARREL_BACK + 8)) / ((BARREL_LENGTH - 10) - (-BARREL_BACK + 8))
-  return BARREL_HALF_WIDTH + (BARREL_HALF_WIDTH * 0.8 - BARREL_HALF_WIDTH) * t
+local cannonArt = nil
+local function getCannonArt()
+  if cannonArt then return cannonArt end
+  cannonArt = {}
+  -- The barrel: shaded across its width (u along local y); its back end
+  -- rounded off into a half-circle.
+  local H, back = BARREL_HALF_WIDTH, -BARREL_BACK
+  cannonArt.barrel = metalStrip(function(u)
+    local y = u * H
+    return back + H - math.sqrt(math.max(0, H * H - y * y)), y, BARREL_LENGTH - 12, y
+  end)
+  -- The lip round the mouth: a little wider, with rounded corners.
+  local M = MUZZLE_HALF_WIDTH
+  cannonArt.lip = metalStrip(function(u)
+    local y = u * M
+    local round = math.max(0, math.abs(y) - (M - 4))
+    local cut = 4 - math.sqrt(math.max(0, 16 - round * round))
+    return BARREL_LENGTH - 14 + cut, y, BARREL_LENGTH - cut, y
+  end)
+  -- The base: a dome, from the surface up to just over the pivot,
+  -- shaded across its width (u along local x).
+  local W, top = BASE_HALF_WIDTH, PIVOT_HEIGHT + 8
+  cannonArt.base = metalStrip(function(u)
+    local x = u * W
+    return x, 4, x, -top * math.sqrt(math.max(0, 1 - u * u))
+  end)
+  -- The base's outline, round its dome.
+  local baseLine = {}
+  for i = 0, 24 do
+    local u = -1 + 2 * i / 24
+    baseLine[#baseLine + 1] = u * W
+    baseLine[#baseLine + 1] = -top * math.sqrt(math.max(0, 1 - u * u))
+  end
+  cannonArt.baseLine = baseLine
+  return cannonArt
 end
+
+local COLOR_METAL_OUTLINE = { 0.08, 0.09, 0.11 }
 
 function Cannon:drawBase()
-  local _, base = getMeshes()
+  local art = getCannonArt()
   local c, s = math.cos(self.mountAngle), math.sin(self.mountAngle)
   local sx, sy = self.planet.pos.x + c * self.planet.radius, self.planet.pos.y + s * self.planet.radius
-  love.graphics.push()
+  love.graphics.push("all")
   love.graphics.translate(sx, sy)
   love.graphics.rotate(self.mountAngle + math.pi / 2)   -- local -y: away from the planet
-  love.graphics.setColor(COLOR_OUTLINE)
-  love.graphics.polygon("fill", -BASE_TOP_HALF_WIDTH - 2, -PIVOT_HEIGHT - 2, BASE_TOP_HALF_WIDTH + 2, -PIVOT_HEIGHT - 2,
-    BASE_HALF_WIDTH + 2.5, 6, -BASE_HALF_WIDTH - 2.5, 6)
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(base)
-  -- A brass band, and bolts along the foot.
-  love.graphics.setColor(COLOR_BRASS)
-  love.graphics.rectangle("fill", -BASE_TOP_HALF_WIDTH - 3, -PIVOT_HEIGHT * 0.55, (BASE_TOP_HALF_WIDTH + 3) * 2, 5)
-  love.graphics.setColor(COLOR_BRASS_LIGHT)
-  love.graphics.rectangle("fill", -BASE_TOP_HALF_WIDTH - 3, -PIVOT_HEIGHT * 0.55, (BASE_TOP_HALF_WIDTH + 3) * 2, 1.5)
-  for i = -2, 2 do
-    love.graphics.setColor(COLOR_OUTLINE)
-    love.graphics.circle("fill", i * BASE_HALF_WIDTH * 0.4, -1, 2.6)
-    love.graphics.setColor(COLOR_STEEL_LIGHT)
-    love.graphics.circle("fill", i * BASE_HALF_WIDTH * 0.4 - 0.5, -1.5, 1.6)
-  end
+  love.graphics.draw(art.base)
+  love.graphics.setColor(COLOR_METAL_OUTLINE)
+  love.graphics.setLineWidth(2.5)
+  love.graphics.setLineJoin("bevel")
+  love.graphics.line(art.baseLine)
   love.graphics.pop()
 end
 
 function Cannon:drawBarrel()
-  local meshes = getMeshes()
+  local art = getCannonArt()
   local px, py = self:pivot()
-  -- Trembling while it charges.
-  if self.state == "charging" then
-    local k = self.timer / CHARGE_SECONDS
-    px = px + (math.random() - 0.5) * 2.5 * k
-    py = py + (math.random() - 0.5) * 2.5 * k
-  end
-  love.graphics.push()
+  love.graphics.push("all")
   love.graphics.translate(px, py)
   love.graphics.rotate(self.barrelAngle)
   love.graphics.translate(-self:recoilOffset(), 0)
-
-  -- Outline, then the steel.
-  love.graphics.setColor(COLOR_OUTLINE)
-  love.graphics.circle("fill", -BARREL_BACK + 9, 0, BARREL_HALF_WIDTH + 2.5)
-  love.graphics.polygon("fill",
-    -BARREL_BACK + 8, -BARREL_HALF_WIDTH - 2.5, BARREL_LENGTH - 10, -BARREL_HALF_WIDTH * 0.8 - 2.5,
-    BARREL_LENGTH - 10, BARREL_HALF_WIDTH * 0.8 + 2.5, -BARREL_BACK + 8, BARREL_HALF_WIDTH + 2.5)
-  love.graphics.rectangle("fill", BARREL_LENGTH - 12, -MUZZLE_HALF_WIDTH - 2.5, 14.5, (MUZZLE_HALF_WIDTH + 2.5) * 2, 3, 3)
-  love.graphics.setColor(COLOR_STEEL)
-  love.graphics.circle("fill", -BARREL_BACK + 9, 0, BARREL_HALF_WIDTH)
-  love.graphics.setColor(COLOR_STEEL_LIGHT)
-  love.graphics.circle("fill", -BARREL_BACK + 7, -4, BARREL_HALF_WIDTH * 0.45)
+  local H = BARREL_HALF_WIDTH
+  -- Outline first (a size bigger all round), then the metal over it.
+  love.graphics.setColor(COLOR_METAL_OUTLINE)
+  love.graphics.circle("fill", -BARREL_BACK + H, 0, H + 2)
+  love.graphics.rectangle("fill", -BARREL_BACK + H, -H - 2, BARREL_LENGTH - 12 + BARREL_BACK - H, (H + 2) * 2)
+  love.graphics.rectangle("fill", BARREL_LENGTH - 16, -MUZZLE_HALF_WIDTH - 2, 18, (MUZZLE_HALF_WIDTH + 2) * 2, 5, 5)
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(meshes.body)
-  love.graphics.draw(meshes.lip)
-
-  -- Brass bands.
-  for _, bx in ipairs({ 6, 34 }) do
-    local h = halfWidthAt(bx) + 1.5
-    love.graphics.setColor(COLOR_BRASS)
-    love.graphics.rectangle("fill", bx, -h, 6, h * 2)
-    love.graphics.setColor(COLOR_BRASS_LIGHT)
-    love.graphics.rectangle("fill", bx, -h, 6, 2)
-    love.graphics.setColor(COLOR_OUTLINE[1], COLOR_OUTLINE[2], COLOR_OUTLINE[3], 0.6)
-    love.graphics.rectangle("line", bx, -h, 6, h * 2)
-  end
-
-  -- The mouth: a dark opening in the lip — glowing hot while it charges.
-  love.graphics.setColor(0.03, 0.03, 0.04, 1)
-  love.graphics.ellipse("fill", BARREL_LENGTH - 1, 0, 4, MUZZLE_HALF_WIDTH - 4)
-  if self.state == "charging" then
-    local k = smoothstep(self.timer / CHARGE_SECONDS)
-    love.graphics.setBlendMode("add")
-    love.graphics.setColor(COLOR_FIRE[1], COLOR_FIRE[2], COLOR_FIRE[3], 0.9 * k)
-    love.graphics.ellipse("fill", BARREL_LENGTH - 1, 0, 4, (MUZZLE_HALF_WIDTH - 4) * k)
-    love.graphics.setBlendMode("alpha")
-  end
+  love.graphics.draw(art.barrel)
+  love.graphics.draw(art.lip)
+  -- (The mouth.)
+  love.graphics.setColor(0.04, 0.04, 0.05, 1)
+  love.graphics.ellipse("fill", BARREL_LENGTH - 1, 0, 3, MUZZLE_HALF_WIDTH - 5)
   love.graphics.pop()
-
-  -- The pivot hub over it: a bolted cap.
-  love.graphics.setColor(COLOR_OUTLINE)
-  love.graphics.circle("fill", px, py, 11.5)
-  love.graphics.setColor(COLOR_BRASS)
-  love.graphics.circle("fill", px, py, 9)
-  love.graphics.setColor(COLOR_BRASS_LIGHT)
-  love.graphics.circle("fill", px - 2, py - 2, 4)
-  love.graphics.setColor(COLOR_OUTLINE)
-  love.graphics.circle("fill", px, py, 2)
 end
 
 function Cannon:draw()

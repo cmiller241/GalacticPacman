@@ -330,6 +330,8 @@ end
 -- things (the pinball bumpers, see PinballInterior.lua) can share the
 -- planetoids' exact look. mix (optional, 0..1, default 1) softens it:
 -- how much of the shading and highlight shows over the body's own colors.
+local SUN_SHADING_REACH = math.sqrt(60000 * 60000 * 2) / 2
+
 function Planetoid.applySunShadingAt(x, y, radius, padding, mix)
   local sunX = state.sceneWidth / 2
   local sunY = state.sceneHeight / 2
@@ -337,7 +339,11 @@ function Planetoid.applySunShadingAt(x, y, radius, padding, mix)
   local toSunY = sunY - y
   local distToSun = math.sqrt(toSunX * toSunX + toSunY * toSunY)
 
-  local maxDist = math.sqrt(state.sceneWidth * state.sceneWidth + state.sceneHeight * state.sceneHeight) / 2
+  -- How far out the sun's shading reaches before it's gone: a fixed
+  -- distance (the original 60000-unit map's half-diagonal), not the map's
+  -- own size — so making the map bigger doesn't change how anything
+  -- already out there is lit.
+  local maxDist = SUN_SHADING_REACH
   local strength = 1 - math.min(distToSun / maxDist, 1)
   if strength <= 0.01 or distToSun < 1 then return nil end
 

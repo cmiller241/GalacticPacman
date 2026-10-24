@@ -114,13 +114,18 @@ end
 -- Everything Recall can rewind: the planetoids, and anything else that's
 -- asked to be (state.recallables — e.g. a rock let fall from its rope, see
 -- lua/world/RopeRock.lua: pos, vel, radius, and containsPoint for aiming).
+-- (And the belt outposts' missiles in flight — see
+-- lua/world/MissileOutpost.lua: recalled, one flies back to the cannon
+-- that fired it.)
 local targets = {}
 local function recallTargets()
   local extra = state.recallables
-  if not extra or #extra == 0 then return state.planetoids or {} end
+  local missiles = state.missiles
+  if (not extra or #extra == 0) and (not missiles or #missiles == 0) then return state.planetoids or {} end
   for i = #targets, 1, -1 do targets[i] = nil end
   for _, p in ipairs(state.planetoids or {}) do targets[#targets + 1] = p end
-  for _, p in ipairs(extra) do targets[#targets + 1] = p end
+  for _, p in ipairs(extra or {}) do targets[#targets + 1] = p end
+  for _, p in ipairs(missiles or {}) do targets[#targets + 1] = p end
   return targets
 end
 

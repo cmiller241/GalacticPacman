@@ -1,196 +1,165 @@
 // js/effects/VatsOverlay.js
-import { state } from '../state.js';
-import { getBoundingRadius } from '../systems/Raycast.js';
-
-const OVERLAY_COLOR = 'rgba(0, 0, 0, 0.55)'; // max darkness, reached once fully into V.A.T.S.
-const CUTOUT_PADDING = 14; // slightly beyond LockOutline.js's own OUTLINE_PADDING (8), so the cutout comfortably surrounds the yellow outline rather than clipping it
-
-// VHS/CRT-style scan lines drawn on top of the base dark fill — see
-// drawVatsOverlay's own comment for where these get applied and why
-// the cutout removes them from the locked target's own area too.
 //
-// Real, ALTERNATING light/dark bands, baked directly into the tile —
-// not a single faint line relying on absolute brightness, which is
-// what the first version of this did and why it was invisible: a
-// space scene is already mostly dark, with a dark overlay on top of
-// THAT, so a ~5%-alpha white line had nothing to contrast against.
-// What actually reads as "scan lines" is the CONTRAST between an
-// explicit lighter band and an explicit darker band sitting right next
-// to each other, not how bright either one is in isolation.
-const SCANLINE_SPACING = 5; // px per full light+dark cycle
-const SCANLINE_LIGHT_ALPHA = 0.15; // the lighter band — strong enough to read clearly against a dark scene
-const SCANLINE_DARK_ALPHA = 0; // the darker band — extra black ON TOP of the base overlay, for contrast against the light band right next to it
-const SCANLINE_FLICKER_MIN = 0.8; // flicker only ever dims the WHOLE pattern down to this fraction of its baked-in alpha, never further — keeps it consistently visible rather than fading in and out to nothing
-const SCANLINE_DRIFT_SPEED = 0.015; // px/ms — a slow vertical roll, like an old tape's vertical hold drifting, not a fast scroll
+// Draws a full-viewport dark overlay with VHS-style scan lines while
+// V.A.T.S. is active, with a hole cut out around state.player.lockedTarget
+// (if any) so the locked object stays at full brightness — reinforced
+// further by the yellow LockOutline.js ring still drawn on top of it.
+
+import love from '../love/index.js';
+import lua from '../love/lua.js';
+import state from '../state.js';
+import utils from '../utils.js';
+
+const OVERLAY_ALPHA = 0.55; // max darkness, reached once fully into V.A.T.S.
+const CUTOUT_PADDING = 14;  // slightly beyond LockOutline.js's own OUTLINE_PADDING (8), so the cutout comfortably surrounds the yellow outline rather than clipping it
+
+// Real, ALTERNATING light/dark bands baked into a small repeating tile —
+// a single faint line relying on absolute brightness is invisible
+// against an already-dark scene with a dark overlay on top of THAT.
+// What reads as "scan lines" is the CONTRAST between an explicit lighter
+// band and an explicit darker (here: fully transparent) band sitting
+// right next to each other.
+const SCANLINE_SPACING = 5;        // px per full light+dark cycle
+const SCANLINE_LIGHT_ALPHA = 0.15; // the lighter band
+const SCANLINE_FLICKER_MIN = 0.8;  // flicker only ever dims the WHOLE pattern down to this fraction, never further
+const SCANLINE_FLICKER_RATE = 10;
+const SCANLINE_DRIFT_SPEED = 15;   // px/second — a slow vertical roll, like an old tape's vertical hold drifting
+
+const VatsOverlay = {};
 
 // Built once and reused across frames — a 1px-wide, SCANLINE_SPACING-
-// tall tile with its own top half baked as the light band and bottom
-// half as the dark band, repeated via CanvasRenderingContext2D's own
-// pattern-fill (cheaper and simpler than manually looping drawImage
-// calls for something this small).
-let scanlinePattern = null;
-function getScanlinePattern(ctx) {
-  if (scanlinePattern) return scanlinePattern;
-  const tile = document.createElement('canvas');
-  tile.width = 1;
-  tile.height = SCANLINE_SPACING;
-  const tileCtx = tile.getContext('2d');
-  const half = SCANLINE_SPACING / 2;
-  tileCtx.fillStyle = `rgba(255, 255, 255, ${SCANLINE_LIGHT_ALPHA})`;
-  tileCtx.fillRect(0, 0, 1, half);
-  tileCtx.fillStyle = `rgba(0, 0, 0, ${SCANLINE_DARK_ALPHA})`;
-  tileCtx.fillRect(0, half, 1, half);
-  scanlinePattern = ctx.createPattern(tile, 'repeat');
-  return scanlinePattern;
+// tall tile with its top half baked as the light band and bottom half
+// left fully transparent, tiled via setWrap('repeat') + an oversized
+// Quad rather than manually looping rectangle draws.
+let scanlineTile = null;
+function getScanlineTile() {
+  if (scanlineTile) return scanlineTile;
+  scanlineTile = love.graphics.newCanvas(1, SCANLINE_SPACING);
+  scanlineTile.setWrap('repeat', 'repeat');
+  scanlineTile.setFilter('nearest', 'nearest');
+
+  // push/origin: this is built lazily on VatsOverlay.draw()'s first
+  // call, which happens while the outer world-space zoom/translate
+  // transform is already active — without resetting to identity first,
+  // the fill below would be drawn through THAT transform instead of in
+  // the tile's own pixel grid.
+  love.graphics.push();
+  love.graphics.origin();
+  love.graphics.setCanvas(scanlineTile);
+  love.graphics.clear(0, 0, 0, 0);
+  love.graphics.setColor(1, 1, 1, SCANLINE_LIGHT_ALPHA);
+  love.graphics.rectangle('fill', 0, 0, 1, SCANLINE_SPACING / 2);
+  love.graphics.setCanvas();
+  love.graphics.setColor(1, 1, 1, 1);
+  love.graphics.pop();
+
+  return scanlineTile;
 }
 
 // Built once and reused across frames (resized only when the needed
-// dimensions actually change, not recreated every single frame) — see
-// drawVatsOverlay's own comment for why this has to be a SEPARATE
-// canvas rather than compositing directly onto the main one.
+// dimensions actually change) — a SEPARATE canvas from the main
+// framebuffer, so the cutout below only ever erases THIS layer's own
+// pixels (the dark fill + scan lines drawn into it moments ago) rather
+// than anything already on screen.
 let overlayCanvas = null;
-let overlayCtx = null;
-
-function getOverlayLayer(width, height) {
-  const w = Math.max(1, Math.ceil(width));
-  const h = Math.max(1, Math.ceil(height));
-  if (!overlayCanvas) {
-    overlayCanvas = document.createElement('canvas');
-    overlayCtx = overlayCanvas.getContext('2d');
+function getOverlayLayer(w, h) {
+  w = Math.max(1, Math.ceil(w));
+  h = Math.max(1, Math.ceil(h));
+  if (!overlayCanvas || overlayCanvas.getWidth() !== w || overlayCanvas.getHeight() !== h) {
+    overlayCanvas = love.graphics.newCanvas(w, h);
   }
-  if (overlayCanvas.width !== w || overlayCanvas.height !== h) {
-    overlayCanvas.width = w;
-    overlayCanvas.height = h;
-  }
-  return { canvas: overlayCanvas, ctx: overlayCtx };
+  return overlayCanvas;
 }
 
-// Draws a full-viewport dark overlay while V.A.T.S. is active, with a
-// hole cut out around state.player.lockedTarget (if any) so the locked
-// object stays at full brightness — reinforced further by the yellow
-// LockOutline.js ring still drawn on top of it — while everything else
-// dims.
-//
-// Built on a SEPARATE, dedicated offscreen canvas, then composited onto
-// the main one with normal (source-over) blending — NOT drawn as a dark
-// rect plus a destination-out cutout directly on the main canvas, which
-// is what this used to do and was the actual bug behind "a dark navy
-// circle covers the selected planet." destination-out doesn't
-// distinguish "what THIS fillRect call just drew" from everything else
-// already accumulated on the canvas — it erases from the WHOLE current
-// pixel buffer. Applied directly to the main canvas, which by this
-// point already has the planet itself painted onto it from an earlier
-// draw call the same frame, the cutout wasn't just erasing the dark
-// overlay — it was erasing the PLANET too, punching an actually
-// transparent hole straight through to whatever's behind the canvas
-// element itself (its page background) — which is exactly what a
-// bigger cutout radius made look like a BIGGER dark shape, backwards
-// from what a working reveal should do, and the tell that gave this
-// away. Building the overlay on its own isolated layer first — where
-// nothing but the overlay's own pixels exist for destination-out to
-// touch — and compositing that finished result onto the main canvas
-// normally sidesteps this entirely: normal blending can only ever ADD
-// darkness on top of what's already there, never remove it.
-//
-// The cutout's shape detection mirrors LockOutline.js's own (rotated
-// rounded-rect vs. plain circle) exactly, so the hole matches the
-// outline rather than being a generic circle regardless of the
-// target's real shape.
-//
-// Opacity tracks state.timeScale's own progress toward
+// Opacity tracks state.vatsMultiplier's own progress toward
 // state.vatsTimeScale (0 at normal speed, 1 once fully slowed) rather
-// than snapping on/off with state.vatsActive directly — game.js eases
-// timeScale toward its target gradually, and tying the overlay to that
-// same curve keeps the darkening and the slowdown reading as one
-// cohesive transition instead of a mismatched "instant overlay, gradual
-// slowdown" combination. Applied as the alpha of the final composite
-// step below, not baked into the layer's own fill — the cutout region
-// is fully transparent (alpha 0) within the layer regardless, and
-// zero times any progress value is still zero, so the hole itself
-// stays completely unaffected by the fade either way.
+// than snapping on/off with state.vatsActive directly — main.js eases
+// vatsMultiplier toward its target gradually, and tying the overlay to
+// that same curve keeps the darkening and the slowdown reading as one
+// cohesive transition.
 //
-// Called every frame from gameLoop, inside the same zoom/camera-
-// transformed block as everything else in world space.
-export function drawVatsOverlay() {
-  const denom = 1 - state.vatsTimeScale;
-  const progress = denom > 0 ? (1 - state.timeScale) / denom : 0;
+// Deliberately state.vatsMultiplier, NOT state.timeScale: timeScale is
+// vatsMultiplier multiplied by frameNorm (this frame's real-time
+// normalization factor), which jitters slightly around 1 every frame
+// even while VATS is fully off — using it here made the whole screen
+// strobe. vatsMultiplier is the clean easing value.
+//
+// Called every frame from love.draw(), inside the same zoom/camera-
+// transformed push() block as everything else in world space.
+VatsOverlay.draw = function () {
+  const vatsTimeScale = state.vatsTimeScale ?? 0.05;
+  const denom = 1 - vatsTimeScale;
+  const progress = denom > 0 ? ((1 - (state.vatsMultiplier ?? 1)) / denom) : 0;
   if (progress <= 0) return;
 
-  const mainCtx = state.ctx;
-  const cam = state.camera || { x: 0, y: 0 };
-  const vw = state.visibleWidth || 0;
-  const vh = state.visibleHeight || 0;
-  if (vw <= 0 || vh <= 0) return;
+  const cam = state.camera ?? { x: 0, y: 0 };
+  const zoom = state.zoom ?? 1;
 
-  const { canvas: layer, ctx } = getOverlayLayer(vw, vh);
-  ctx.clearRect(0, 0, layer.width, layer.height);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = OVERLAY_COLOR;
-  ctx.fillRect(0, 0, layer.width, layer.height);
+  // Built at real SCREEN pixel dimensions, NOT world units — the visible
+  // world span grows without bound as the player zooms out, eventually
+  // requesting a texture wider than the GPU's own max size. Screen
+  // pixels are bounded by the window regardless of zoom. See the
+  // composite draw at the bottom for the explicit 1/zoom scale that
+  // goes with this.
+  const sw = love.graphics.getWidth(), sh = love.graphics.getHeight();
+  if (sw <= 0 || sh <= 0) return;
 
-  // VHS-style scan lines — drawn on top of the base dark fill but
-  // still BEFORE the cutout below, so the cutout removes them from the
-  // locked target's own area too, same as the base darkening. A slow
-  // vertical drift (via translate, before the pattern fill — patterns
-  // tile relative to wherever the canvas origin currently is) plus a
-  // gentle alpha flicker sells the "old tape" feel without being
-  // distracting; the fillRect deliberately overshoots the layer's own
-  // bounds on both ends so the translated pattern still fully covers
-  // it regardless of the current drift offset. The flicker only ever
-  // scales the WHOLE pattern (both bands together, preserving their
-  // contrast with each other) between SCANLINE_FLICKER_MIN and 1 — a
-  // floor, not a fade to nothing, since the goal is a lively texture
-  // that's always clearly there, not one that periodically vanishes.
-  const flickerT = (Math.sin(Date.now() * 0.01) + 1) / 2; // 0..1
+  const layer = getOverlayLayer(sw, sh);
+  const tile = getScanlineTile();
+  const lw = layer.getWidth(), lh = layer.getHeight();
+
+  // push/origin: identity transform for everything drawn INTO layer.
+  love.graphics.push();
+  love.graphics.origin();
+
+  love.graphics.setCanvas(layer);
+  love.graphics.clear(0, 0, 0, 0);
+  love.graphics.setBlendMode('alpha');
+  love.graphics.setColor(0, 0, 0, OVERLAY_ALPHA);
+  love.graphics.rectangle('fill', 0, 0, lw, lh);
+
+  // Scan lines, on top of the base dark fill but still BEFORE the
+  // cutout below, so the cutout removes them from the locked target's
+  // own area too. A slow drift (via the quad's own texture-space
+  // offset, which wraps automatically) plus a gentle alpha flicker
+  // sells the "old tape" feel.
+  const now = love.timer.getTime();
+  const flickerT = (Math.sin(now * SCANLINE_FLICKER_RATE) + 1) / 2;
   const flicker = SCANLINE_FLICKER_MIN + (1 - SCANLINE_FLICKER_MIN) * flickerT;
-  ctx.save();
-  const driftY = (Date.now() * SCANLINE_DRIFT_SPEED) % SCANLINE_SPACING;
-  ctx.translate(0, driftY);
-  ctx.globalAlpha = flicker;
-  ctx.fillStyle = getScanlinePattern(ctx);
-  ctx.fillRect(0, -SCANLINE_SPACING - driftY, layer.width, layer.height + SCANLINE_SPACING * 2);
-  ctx.restore();
+  const driftY = lua.mod(now * SCANLINE_DRIFT_SPEED, SCANLINE_SPACING);
+  const quad = love.graphics.newQuad(0, -driftY, lw, lh, tile.getWidth(), tile.getHeight());
+  love.graphics.setColor(1, 1, 1, flicker);
+  love.graphics.draw(tile, quad, 0, 0);
 
+  // Cutout: punches a hole (fully transparent, alpha 0) in THIS
+  // layer's own pixels around the locked target — same shape
+  // detection LockOutline.js uses, so the hole matches the outline.
+  // "replace" blend mode overwrites destination pixels outright
+  // (including alpha) instead of blending.
   const target = state.player && state.player.lockedTarget;
   if (target) {
-    // Local to THIS layer — world position minus the viewport's own
-    // top-left corner, since this canvas only spans the current
-    // visible area, not the whole world.
-    const localX = target.pos.x - cam.x;
-    const localY = target.pos.y - cam.y;
+    const localX = (target.pos.x - cam.x) * zoom;
+    const localY = (target.pos.y - cam.y) * zoom;
+    const radius = (utils.boundingRadius(target) + CUTOUT_PADDING) * zoom;
 
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = 'rgba(0,0,0,1)'; // only the alpha channel matters for destination-out; color is irrelevant
-
-    if (target.isRoundedRect) {
-      ctx.save();
-      ctx.translate(localX, localY);
-      ctx.rotate(target.rotationAngle);
-      const w = target.halfWidth + CUTOUT_PADDING;
-      const h = target.halfHeight + CUTOUT_PADDING;
-      ctx.beginPath();
-      ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + CUTOUT_PADDING);
-      ctx.fill();
-      ctx.restore();
-    } else {
-      const radius = getBoundingRadius(target) + CUTOUT_PADDING;
-      ctx.beginPath();
-      ctx.arc(localX, localY, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    love.graphics.setBlendMode('replace', 'premultiplied');
+    love.graphics.setColor(0, 0, 0, 0);
+    love.graphics.circle('fill', localX, localY, radius);
+    love.graphics.setBlendMode('alpha');
   }
 
-  // Composite the finished overlay (dark rect with its hole already
-  // punched out of ITS OWN pixels, nothing else's) onto the main
-  // canvas with normal blending, scaled by the overall V.A.T.S. fade
-  // progress. mainCtx is already under the same zoom/translate
-  // transform as everything else in this draw pass, so drawing at
-  // (cam.x, cam.y) with size (vw, vh) — the same world-space rectangle
-  // this layer represents — lines up automatically.
-  mainCtx.save();
-  mainCtx.globalAlpha = progress;
-  mainCtx.globalCompositeOperation = 'source-over';
-  mainCtx.drawImage(layer, cam.x, cam.y, vw, vh);
-  mainCtx.restore();
-}
+  love.graphics.setCanvas();
+  love.graphics.pop();
+
+  // Composite the finished overlay onto the main framebuffer with
+  // normal blending, scaled by the overall V.A.T.S. fade progress.
+  // Still under the outer zoom/translate transform — drawing at (cam.x,
+  // cam.y) lines the layer's own (0,0) pixel up with real screen (0,0),
+  // and the explicit 1/zoom draw-scale cancels that outer transform's
+  // own scale(zoom, zoom).
+  love.graphics.setColor(1, 1, 1, progress);
+  love.graphics.draw(layer, cam.x, cam.y, 0, 1 / zoom, 1 / zoom);
+  love.graphics.setColor(1, 1, 1, 1);
+};
+
+export default VatsOverlay;

@@ -541,9 +541,20 @@ local BALL_MODE_ENABLED = true
 -- (state.dialogueActive — movement/jumping are already frozen then, see
 -- Player:move/jump, and starting a morph mid-conversation would be the
 -- same kind of "moving" while supposedly standing still talking).
+-- Whether he's riding a cannon: loaded in one, or fired from one and
+-- still on the way (see lua/world/Cannon.lua). He can't do anything at
+-- all then — curl or uncurl, jump, fire, pull, interact, switch weapons
+-- — it's purely a ride. Checked here by his own actions, and by the
+-- input handlers before they'd even try (InputHandlers.lua,
+-- GamePadInput.lua).
+function Player:isCannonRiding()
+  return self.inCannon ~= nil or self.cannonFlight ~= nil
+end
+
 function Player:enterBallMode()
   if not BALL_MODE_ENABLED then return end
   if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
+  if self:isCannonRiding() then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   self.morphState = "toBall"
   self.morphElapsed = 0
@@ -574,7 +585,7 @@ function Player:exitBallMode()
   if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   if self.inPinball then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inPinball first)
-  if self.inCannon then return end -- curled up in a cannon's barrel until it fires (see lua/world/Cannon.lua)
+  if self:isCannonRiding() then return end -- curled up for the whole ride, barrel and flight (see lua/world/Cannon.lua)
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -615,6 +626,7 @@ end
 -- nothing stops some OTHER future caller from reaching this directly.
 function Player:startTeleport(origin, destination)
   if self.isTeleporting or self.isDying or self.morphState or state.dialogueActive then return end
+  if self:isCannonRiding() then return end
   if not destination then return end
   self.isTeleporting = true
   self.teleportState = "out"
@@ -967,6 +979,7 @@ end
 --     time and it's a jump the moment he does; if not, it's the ground
 --     pound mid-air presses have always been (see updateJumpGraces).
 function Player:pressJump()
+  if self:isCannonRiding() then return end
   if self.onSurface or self.touchingWall or self.submergedIn or self:canCoyoteJump() then
     self:jump()
   else
@@ -2605,7 +2618,7 @@ end
 
 function Player:trySelectPullTarget(explicitTarget)
   if self.mode ~= "space" or self.isBall or self.isTeleporting or self.isDying then return end
-  if self.inCannon then return end
+  if self:isCannonRiding() then return end
 
   local best = nil
   if explicitTarget then
@@ -2779,6 +2792,7 @@ end
 function Player:shootFireball()
   if self.mode ~= "space" and self.mode ~= "platform" then return end
   if self.isBall or self.isTeleporting or self.isDying then return end
+  if self:isCannonRiding() then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
 
   local now = love.timer.getTime()

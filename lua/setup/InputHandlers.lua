@@ -127,6 +127,9 @@ local function attachInputHandlers()
     if state.titleScreen then return end -- no shooting/pulling on the title screen
     if PauseMenu.isOpen() then return end -- ...or while paused
     if tryRestartOrAdvance() then return end  -- same early-return as the original
+    -- ...or riding a cannon (see Player:isCannonRiding): no shooting,
+    -- pulling, portals or recall at all.
+    if state.player and state.player:isCannonRiding() then return end
     if state.portalMode then
       if button == 1 then PortalGun.fire(state.player, "red")
       elseif button == 2 then PortalGun.fire(state.player, "blue") end
@@ -206,7 +209,13 @@ local function attachInputHandlers()
 
     state.keys[key] = true
 
-    if key == ' ' then
+    -- Riding a cannon (see Player:isCannonRiding), he does nothing at
+    -- all — no jumping, curling or uncurling, interacting or switching
+    -- weapons. Only what isn't him: zooming the camera (read as held
+    -- keys, each frame, in main.lua) and the debug toggles below.
+    local riding = state.player and state.player:isCannonRiding()
+
+    if key == ' ' and not riding then
       if state.player and state.player.inPinball then
         -- Plunger/flippers instead of an ordinary jump while inside
         -- the pinball planet — see PinballInterior:triggerJumpAction.
@@ -219,7 +228,7 @@ local function attachInputHandlers()
       end
     end
 
-    if key == 'ArrowDown' and state.player and state.player.mode ~= "maze" then
+    if key == 'ArrowDown' and not riding and state.player and state.player.mode ~= "maze" then
       -- MazeInterior/BeamPlanetoid aren't ported yet — lua/world/BeamPlanetoid.lua
       -- and lua/interiors/ don't exist at all, only their old JS
       -- originals (js/world/BeamPlanetoid.js etc). require() throws
@@ -254,14 +263,14 @@ local function attachInputHandlers()
     -- just above, which only ever fires under its own much narrower
     -- condition (standing on a BeamPlanetoid, facing its beam), so the
     -- two don't meaningfully conflict in practice.
-    if key == 'ArrowDown' and not isrepeat and state.player and state.player.mode ~= "maze" and not state.introLocked then
+    if key == 'ArrowDown' and not isrepeat and not riding and state.player and state.player.mode ~= "maze" and not state.introLocked then
       state.player:enterBallMode()
     end
-    if key == 'ArrowUp' and not isrepeat and state.player and state.player.mode ~= "maze" then
+    if key == 'ArrowUp' and not isrepeat and not riding and state.player and state.player.mode ~= "maze" then
       state.player:exitBallMode()
     end
 
-    if key == 'Enter' then
+    if key == 'Enter' and not riding then
       tryRestartOrAdvance()
       -- No talking to NPCs or pulling levers while curled into a ball —
       -- see this same guard in GamePadInput.lua's own Circle handler.
@@ -309,7 +318,7 @@ local function attachInputHandlers()
 
     -- Cycles what the blaster's buttons do: Blaster (fire + pull beam),
     -- Portal, Water (see lua/systems/WeaponModes.lua).
-    if key == 'p' and not isrepeat then
+    if key == 'p' and not isrepeat and not riding then
       WeaponModes.cycle(1)
     end
   end

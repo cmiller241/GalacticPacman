@@ -5,6 +5,9 @@
 -- at different speeds relative to the camera for a nice sense of depth.
 -- Stars wrap so the field is effectively infinite.
 
+local SkyRegions = require("lua.world.SkyRegions")
+local BackgroundAsteroids = require("lua.world.BackgroundAsteroids")
+
 local Starfield = {}
 Starfield.__index = Starfield
 
@@ -72,7 +75,10 @@ end
 -- for a slow background fade and keeps this file dependency-free.
 -- Strips overlap by 1px (stripH + 1) so there's no visible seam line
 -- between them.
-local function drawBackgroundGradient()
+-- (The colours themselves change with where the view is — see
+-- SkyRegions.skyColors; TOP_COLOR/BOTTOM_COLOR are only the fallback.)
+local function drawBackgroundGradient(top, bottom)
+  top, bottom = top or TOP_COLOR, bottom or BOTTOM_COLOR
   local w = love.graphics.getWidth()
   local h = love.graphics.getHeight()
   local stripH = h / GRADIENT_STRIPS
@@ -80,9 +86,9 @@ local function drawBackgroundGradient()
   for i = 0, GRADIENT_STRIPS - 1 do
     local t = i / (GRADIENT_STRIPS - 1)
     love.graphics.setColor(
-      TOP_COLOR[1] + (BOTTOM_COLOR[1] - TOP_COLOR[1]) * t,
-      TOP_COLOR[2] + (BOTTOM_COLOR[2] - TOP_COLOR[2]) * t,
-      TOP_COLOR[3] + (BOTTOM_COLOR[3] - TOP_COLOR[3]) * t,
+      top[1] + (bottom[1] - top[1]) * t,
+      top[2] + (bottom[2] - top[2]) * t,
+      top[3] + (bottom[3] - top[3]) * t,
       1
     )
     love.graphics.rectangle("fill", 0, i * stripH, w, stripH + 1)
@@ -92,13 +98,23 @@ local function drawBackgroundGradient()
 end
 
 function Starfield:draw(camera, visibleWidth, visibleHeight)
-  drawBackgroundGradient()
-
   -- We draw in screen space (after the camera transform has been applied
   -- in love.draw). So we need to convert the camera offset into the
   -- current view's coordinate system.
   local camX = camera and camera.x or 0
   local camY = camera and camera.y or 0
+
+  -- The sky's colour for this part of space, and the far-off scenery
+  -- (nebulae, landmarks) behind every star — see SkyRegions.lua.
+  local viewX, viewY = camX + (visibleWidth or 0) / 2, camY + (visibleHeight or 0) / 2
+  local skyTop, skyBottom = SkyRegions.skyColors(viewX, viewY)
+  drawBackgroundGradient(skyTop, skyBottom)
+  SkyRegions.draw("far", viewX, viewY)
+  -- (For the background asteroids' lit edges: which way the sun is from here.)
+  local sunX, sunY = SkyRegions.sunPos()
+  local toSunX, toSunY = sunX - viewX, sunY - viewY
+  local toSun = math.sqrt(toSunX * toSunX + toSunY * toSunY)
+  if toSun > 1000 then toSunX, toSunY = toSunX / toSun, toSunY / toSun else toSunX, toSunY = nil, nil end
 
   -- Stars are drawn in SCREEN pixels (this runs before love.draw applies
   -- the camera's own scale), so what has to be covered is the window
@@ -109,7 +125,10 @@ function Starfield:draw(camera, visibleWidth, visibleHeight)
   local screenW, screenH = love.graphics.getWidth(), love.graphics.getHeight()
   local wrap = 3000
 
-  for _, layer in ipairs(self.layers) do
+  for i, layer in ipairs(self.layers) do
+    -- (Dust lanes go in after the two furthest layers: they hide the
+    -- distant stars, but the nearer ones show in front of them.)
+    if i == 3 then SkyRegions.draw("dust", viewX, viewY) end
     local px = camX * layer.parallax
     local py = camY * layer.parallax
 
@@ -141,6 +160,10 @@ function Starfield:draw(camera, visibleWidth, visibleHeight)
       end
     end
   end
+
+  -- The background asteroids, in front of every star (see
+  -- BackgroundAsteroids.lua).
+  BackgroundAsteroids.draw(camX, camY, toSunX, toSunY)
 
   love.graphics.setColor(1, 1, 1, 1)
 end

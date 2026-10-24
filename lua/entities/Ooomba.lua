@@ -255,6 +255,11 @@ function Ooomba:update()
     return
   end
 
+  -- Something else steering it (see lua/world/MissileOutpost.lua's
+  -- gunner): sets which way it walks, how fast (0: standing still) and
+  -- its walk animation, each frame, before it moves.
+  if self.brain then self.brain(self) end
+
   local prevX, prevY = self.pos.x, self.pos.y
   local shape = self.homeShape
   local perimeter = shape:getPerimeter()
