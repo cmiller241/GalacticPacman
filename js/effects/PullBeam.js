@@ -1,356 +1,364 @@
 // js/effects/PullBeam.js
-import { state } from '../state.js';
-import { Graphics } from 'pixi.js';
+//
+// Draws the light-blue pull beam while the player is actively pulling
+// toward a planet, all of it additive light:
+//   * the beam itself (one quad through a shader): a hot white core, a
+//     cyan body of rippling plasma, flaring a little wider toward the
+//     target, with bright bands of energy streaming back down it toward
+//     Bob — it reads as pulling;
+//   * two strands twisting round it as a helix, pinned at both ends, and
+//     a flickering lightning arc;
+//   * sparks drifting back down the beam;
+//   * a flare at the blaster's muzzle;
+//   * on the target: a splash of light where the beam meets its surface,
+//     its outline, and (round targets) rotating brackets plus rings
+//     closing in on it.
+// Animated in game time (state.timeScale), so V.A.T.S. slow-mo slows it.
 
-// Parses an 'rgba(r,g,b,a)' string into {color, alpha} — needed because
-// the original code relies on Canvas2D automatically MULTIPLYING a
-// strokeStyle color's own baked-in alpha (e.g. BEAM_GLOW_COLOR's own
-// 0.35) together with a separately-set ctx.globalAlpha (e.g.
-// 0.4 + pulse*0.3) — Pixi's own stroke({alpha}) is a single value with
-// no such automatic combination, so reproducing the same visual
-// requires parsing each color's own alpha out and multiplying it by
-// the dynamic pulse value by hand wherever it's used below.
-function parseRgba(rgbaString) {
-  const match = rgbaString.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-  if (!match) return { color: 0xffffff, alpha: 1 };
-  const r = parseInt(match[1], 10);
-  const g = parseInt(match[2], 10);
-  const b = parseInt(match[3], 10);
-  const a = match[4] !== undefined ? parseFloat(match[4]) : 1;
-  return { color: (r << 16) | (g << 8) | b, alpha: a };
-}
+import love from '../love/index.js';
+import lua from '../love/lua.js';
+import state from '../state.js';
 
-const BEAM_COLOR = 'rgba(120, 210, 255, 1)';
-const BEAM_GLOW_COLOR = 'rgba(120, 210, 255, 0.35)';
-const BEAM_GLOW_WIDTH = 13;
-const BEAM_CORE_WIDTH = 4;
+// ---------------------------------------------------------------------
+// Tunables
+// ---------------------------------------------------------------------
 
-const OUTLINE_COLOR = 'rgba(120, 210, 255, 0.9)';
-const OUTLINE_GLOW_COLOR = 'rgba(120, 210, 255, 0.3)';
+const COLOR = [120 / 255, 210 / 255, 255 / 255];
+const COLOR_HOT = [215 / 255, 246 / 255, 255 / 255];
+
+const BEAM_HALF_WIDTH = 22;      // world units, at the target end (the shader's quad)
+const BEAM_START_FRACTION = 0.3; // how wide it is at the muzzle, as a fraction of that
+
 const OUTLINE_GLOW_WIDTH = 9;
 const OUTLINE_CORE_WIDTH = 3;
-const OUTLINE_PADDING = 8; // how far outside the target's own silhouette the outline sits
+const OUTLINE_PADDING = 8;
 
-// "Electricity" sine-wave strands that hug the beam. Two strands, at
-// different phase and frequency, so they don't stay perfectly mirrored
-// the whole time — that irregularity is most of what reads as
-// "electric" rather than "one clean wave."
-const WAVE_COLOR = 'rgba(215, 246, 255, 1)';
-const WAVE_GLOW_COLOR = 'rgba(215, 246, 255, 0.4)';
-const WAVE_GLOW_WIDTH = 4;
-const WAVE_CORE_WIDTH = 1.5;
-const WAVE_AMPLITUDE = 5;          // px, perpendicular to the beam
-const WAVE_FREQUENCY = 0.05;       // radians per pixel traveled along the beam
-const WAVE_FREQUENCY_2 = 0.065;    // second strand's frequency — deliberately different from the first
-const WAVE_SPEED = 0.012;          // radians per ms — how fast the pattern travels toward the target
-const WAVE_SAMPLE_SPACING = 8;     // px between sample points along the beam (smaller = smoother curve)
+const HELIX_AMPLITUDE = 11;      // world units, at the beam's middle
+const HELIX_WAVELENGTH = 90;     // world units per twist
+const HELIX_SPEED = 9;           // radians per second
+const HELIX_SAMPLE_SPACING = 6;
 
-// Parsed once at module load — these are fixed constants, not
-// per-frame values, so there's no reason to re-parse the same string
-// every frame.
-const BEAM_GLOW_PARSED = parseRgba(BEAM_GLOW_COLOR);
-const BEAM_CORE_PARSED = parseRgba(BEAM_COLOR);
-const WAVE_GLOW_PARSED = parseRgba(WAVE_GLOW_COLOR);
-const WAVE_CORE_PARSED = parseRgba(WAVE_COLOR);
-const OUTLINE_GLOW_PARSED = parseRgba(OUTLINE_GLOW_COLOR);
-const OUTLINE_CORE_PARSED = parseRgba(OUTLINE_COLOR);
+const BOLT_INTERVAL = 0.06;      // seconds between lightning re-shapes
+const BOLT_SEGMENT = 18;         // world units per jag
+const BOLT_JITTER = 9;           // world units, at the beam's middle
 
-// Builds a wavy polyline (array of {x,y}) from origin to origin+dir*beamLength,
-// offset perpendicular to the beam direction by a sine wave whose phase
-// depends on both distance-along-beam (s) and current time — the
-// "- now*speed" term is what makes the wave pattern visibly travel
-// toward the target as time advances, rather than just oscillating in
-// place. frequency/phaseOffset let two strands look distinct from
-// each other.
-function buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, frequency, phaseOffset, now) {
-  const points = [];
-  const numSamples = Math.max(2, Math.floor(beamLength / WAVE_SAMPLE_SPACING));
-  for (let i = 0; i <= numSamples; i++) {
-    const s = (i / numSamples) * beamLength;
-    const wave = WAVE_AMPLITUDE * Math.sin(s * frequency - now * WAVE_SPEED + phaseOffset);
-    points.push({
-      x: originX + dirX * s + perpX * wave,
-      y: originY + dirY * s + perpY * wave
-    });
-  }
-  return points;
+const SPARKS_PER_100_UNITS = 5;  // per second, per 100 units of beam
+const SPARK_SPEED = 260;         // world units per second, back toward Bob
+const SPARK_LIFE = 0.6;          // seconds
+
+const RING_PERIOD = 0.7;         // seconds for each closing-in ring
+const RING_START_GAP = 46;       // how far outside the outline a ring starts
+
+// ---------------------------------------------------------------------
+// Resources
+// ---------------------------------------------------------------------
+
+let beamShader = null;
+function getBeamShader() {
+  if (beamShader) return beamShader;
+  beamShader = love.graphics.newShader(`
+    extern number time;
+    extern number len;         // beam length, world units
+    extern number halfWidth;   // the quad's half-width, world units
+    extern number startFrac;   // the beam's width at the muzzle, as a fraction of that
+    extern number pulse;       // 0..1 breathing
+    extern vec3 color;
+    extern vec3 hot;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                 mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int k = 0; k < 3; k++) {
+        v += a * noise(p);
+        p = p * 2.07 + vec2(3.1, 7.7);
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    // uv.x: 0 at the muzzle .. 1 at the target; uv.y across the beam.
+    vec4 effect(vec4 vcolor, Image tex, vec2 uv, vec2 screen) {
+      float s = uv.x * len;                      // world units from the muzzle
+      float v = uv.y * 2.0 - 1.0;
+      float d = v * halfWidth;                   // world units from the axis
+      // Wobbling a little, and flaring wider toward the target.
+      d += (noise(vec2(s * 0.03 + time * 3.0, 1.7)) - 0.5) * 3.0;
+      float spread = halfWidth * mix(startFrac, 1.0, smoothstep(0.0, 1.0, uv.x));
+      float a = d / spread;                      // -1..1 across the beam, here
+
+      float core = exp(-d * d / 2.2);
+      float inner = exp(-a * a * 6.0);
+      float outer = exp(-a * a * 2.0) * (1.0 - smoothstep(0.75, 1.0, abs(a)));
+
+      // Plasma, and bands of energy, both streaming back toward the muzzle.
+      float n = fbm(vec2(s * 0.018 + time * 2.2, a * 1.8));
+      float band = pow(0.5 + 0.5 * sin(s * 0.09 + time * 16.0), 5.0);
+
+      float ends = smoothstep(0.0, min(0.2, 14.0 / max(len, 1.0)), uv.x);
+
+      vec3 rgb = color * outer * (0.3 + 0.7 * n) * (0.8 + 0.3 * pulse)
+               + color * inner * (0.4 + 0.8 * band)
+               + hot * core * (0.85 + 0.15 * pulse);
+      return vec4(rgb * ends, 1.0);
+    }
+  `);
+  return beamShader;
 }
 
-function strokePolyline(ctx, points) {
-  if (points.length < 2) return;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i].x, points[i].y);
-  }
-  ctx.stroke();
+let pixelImage = null;
+function getPixel() {
+  if (pixelImage) return pixelImage;
+  const data = love.image.newImageData(1, 1);
+  data.setPixel(0, 0, 1, 1, 1, 1);
+  pixelImage = love.graphics.newImage(data);
+  return pixelImage;
 }
 
-// Draws the light-blue "pull star" beam (straight core + two traveling
-// electric-wave strands hugging it) from the player's blaster to their
-// current pull target, plus a matching glowing outline around the
-// target itself. Called every frame from gameLoop, inside the same
-// zoom/camera-transformed block as everything else in world space — a
-// no-op whenever there's no active pull target.
-export function drawPullIndicator() {
+// A soft round glow, fading smoothly to nothing at its edge.
+const GLOW_SIZE = 64;
+let glowImage = null;
+function getGlow() {
+  if (glowImage) return glowImage;
+  const data = love.image.newImageData(GLOW_SIZE, GLOW_SIZE);
+  const half = GLOW_SIZE / 2;
+  data.mapPixel((x, y) => {
+    const d = Math.sqrt((x + 0.5 - half) ** 2 + (y + 0.5 - half) ** 2) / half;
+    const v = Math.max(0, 1 - d);
+    return [1, 1, 1, v * v];
+  });
+  glowImage = love.graphics.newImage(data);
+  glowImage.setFilter('linear', 'linear');
+  return glowImage;
+}
+
+function drawGlow(x, y, diameter, r, g, b, a) {
+  const img = getGlow();
+  love.graphics.setColor(r, g, b, a);
+  love.graphics.draw(img, x, y, 0, diameter / GLOW_SIZE, diameter / GLOW_SIZE, GLOW_SIZE / 2, GLOW_SIZE / 2);
+}
+
+// ---------------------------------------------------------------------
+// State carried between frames (only while a pull is going on)
+// ---------------------------------------------------------------------
+
+let time = 0;
+let bolt = null;  // { timer, offsets: [[u, off], ...] }
+let sparks = [];  // { u, off, life }
+let sparkBudget = 0;
+
+function reset() {
+  bolt = null;
+  sparks = [];
+  sparkBudget = 0;
+}
+
+// Strokes `points` (a flat x1, y1, x2, y2, ... list) twice: a wide faint
+// glow, then a thin bright core.
+function strokeGlowing(points, glowWidth, coreWidth, glowA, coreA) {
+  if (points.length < 4) return;
+  love.graphics.setLineWidth(glowWidth);
+  love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], glowA);
+  love.graphics.line(points);
+  love.graphics.setLineWidth(coreWidth);
+  love.graphics.setColor(COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], coreA);
+  love.graphics.line(points);
+}
+
+// How far along the beam (0..1) fades the strands/bolt in and out, so
+// they're pinned at both ends.
+function envelope(u) {
+  return Math.sin(Math.PI * u);
+}
+
+function drawPullIndicator() {
   const player = state.player;
-  if (!player || !player.pullTarget || player.mode !== "space") return;
-  const target = player.pullTarget;
-  const ctx = state.ctx;
-
-  // Gentle breathing pulse (0..1), used to vary glow strength slightly
-  // so the beam/outline read as "live energy" rather than static lines.
-  const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
-  const now = Date.now();
-
-  ctx.save();
-
-  const originX = player.aimShoulderPos ? player.aimShoulderPos.x : player.pos.x;
-  const originY = player.aimShoulderPos ? player.aimShoulderPos.y : player.pos.y;
-  const dx = target.pos.x - originX;
-  const dy = target.pos.y - originY;
-  const beamLength = Math.sqrt(dx * dx + dy * dy);
-
-  // --- Straight beam core ---
-  ctx.beginPath();
-  ctx.moveTo(originX, originY);
-  ctx.lineTo(target.pos.x, target.pos.y);
-
-  ctx.globalAlpha = 0.4 + pulse * 0.3;
-  ctx.strokeStyle = BEAM_GLOW_COLOR;
-  ctx.lineWidth = BEAM_GLOW_WIDTH;
-  ctx.stroke();
-
-  ctx.globalAlpha = 0.7 + pulse * 0.3;
-  ctx.strokeStyle = BEAM_COLOR;
-  ctx.lineWidth = BEAM_CORE_WIDTH;
-  ctx.stroke();
-
-  // --- Electric wave strands, drawn on top of the straight beam so
-  // they read as "riding along" it ---
-  if (beamLength > 1e-3) {
-    const dirX = dx / beamLength, dirY = dy / beamLength;
-    const perpX = -dirY, perpY = dirX;
-
-    const strand1 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY, 0, now);
-    const strand2 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY_2, Math.PI, now);
-
-    ctx.globalAlpha = 0.3 + pulse * 0.25;
-    ctx.strokeStyle = WAVE_GLOW_COLOR;
-    ctx.lineWidth = WAVE_GLOW_WIDTH;
-    strokePolyline(ctx, strand1);
-    strokePolyline(ctx, strand2);
-
-    ctx.globalAlpha = 0.6 + pulse * 0.3;
-    ctx.strokeStyle = WAVE_COLOR;
-    ctx.lineWidth = WAVE_CORE_WIDTH;
-    strokePolyline(ctx, strand1);
-    strokePolyline(ctx, strand2);
-  }
-
-  // --- Outline around the target planet, matching its actual shape. ---
-  if (target.isRoundedRect) {
-    ctx.save();
-    ctx.translate(target.pos.x, target.pos.y);
-    ctx.rotate(target.rotationAngle);
-    const w = target.halfWidth + OUTLINE_PADDING;
-    const h = target.halfHeight + OUTLINE_PADDING;
-    ctx.beginPath();
-    ctx.roundRect(-w, -h, w * 2, h * 2, target.cornerRadius + OUTLINE_PADDING);
-
-    ctx.globalAlpha = 0.4 + pulse * 0.4;
-    ctx.strokeStyle = OUTLINE_GLOW_COLOR;
-    ctx.lineWidth = OUTLINE_GLOW_WIDTH;
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.7 + pulse * 0.3;
-    ctx.strokeStyle = OUTLINE_COLOR;
-    ctx.lineWidth = OUTLINE_CORE_WIDTH;
-    ctx.stroke();
-    ctx.restore();
-  } else {
-    ctx.beginPath();
-    ctx.arc(target.pos.x, target.pos.y, target.radius + OUTLINE_PADDING, 0, Math.PI * 2);
-
-    ctx.globalAlpha = 0.4 + pulse * 0.4;
-    ctx.strokeStyle = OUTLINE_GLOW_COLOR;
-    ctx.lineWidth = OUTLINE_GLOW_WIDTH;
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.7 + pulse * 0.3;
-    ctx.strokeStyle = OUTLINE_COLOR;
-    ctx.lineWidth = OUTLINE_CORE_WIDTH;
-    ctx.stroke();
-  }
-
-  ctx.restore();
-}
-
-// ----------------------------
-// PIXI RENDERING — a single, global overlay tied to
-// state.player.pullTarget, not a per-entity effect the way everything
-// else in this migration has been, so there's no class/instance here
-// to attach createPixiSprite/updatePixiSprite methods to. Instead,
-// exactly one set of Graphics objects, module-level, lazily built on
-// first actual use and toggled visible/invisible based on whether a
-// pull is currently active, rather than created/destroyed repeatedly.
-// Every piece of this — beam length/direction (player moves every
-// frame), the wave strands (continuously time-driven trig across many
-// sample points), and the outline (drawn fresh for whichever target
-// happens to be active, unknown in advance) — is genuinely dynamic,
-// so unlike most of this migration there's nothing here worth baking
-// once; all eight Graphics objects below get cleared and redrawn every
-// frame, same reasoning as Explosion's own ring: cheap and short work
-// for a small, fixed, non-multiplied object count.
-// ----------------------------
-let pixiBeamGlow, pixiBeamCore;
-let pixiWave1Glow, pixiWave1Core, pixiWave2Glow, pixiWave2Core;
-let pixiOutlineGlow, pixiOutlineCore;
-
-function ensurePixiObjects(layer) {
-  if (pixiBeamGlow) return;
-  pixiBeamGlow = new Graphics();
-  pixiBeamCore = new Graphics();
-  pixiWave1Glow = new Graphics();
-  pixiWave1Core = new Graphics();
-  pixiWave2Glow = new Graphics();
-  pixiWave2Core = new Graphics();
-  pixiOutlineGlow = new Graphics();
-  pixiOutlineCore = new Graphics();
-  // Insertion order matches draw()'s own stroke order exactly: beam
-  // glow, beam core, BOTH wave strands' glow passes, THEN both
-  // strands' core passes (matching the original's own "all glows,
-  // then all cores" grouping, not glow+core per strand), outline glow,
-  // outline core.
-  layer.addChild(
-    pixiBeamGlow, pixiBeamCore,
-    pixiWave1Glow, pixiWave2Glow, pixiWave1Core, pixiWave2Core,
-    pixiOutlineGlow, pixiOutlineCore
-  );
-}
-
-function setAllVisible(visible) {
-  pixiBeamGlow.visible = visible;
-  pixiBeamCore.visible = visible;
-  pixiWave1Glow.visible = visible;
-  pixiWave1Core.visible = visible;
-  pixiWave2Glow.visible = visible;
-  pixiWave2Core.visible = visible;
-  pixiOutlineGlow.visible = visible;
-  pixiOutlineCore.visible = visible;
-}
-
-// Clears and redraws a single polyline stroke on the given Graphics
-// object — the Pixi equivalent of strokePolyline() above, since a
-// live Graphics redraw is how this migration reproduces "clear the
-// path and stroke a fresh one" for anything whose geometry changes
-// every frame.
-function strokePolylinePixi(graphics, points, width, color, alpha) {
-  graphics.clear();
-  if (points.length < 2) return;
-  graphics.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) {
-    graphics.lineTo(points[i].x, points[i].y);
-  }
-  graphics.stroke({ width, color, alpha });
-}
-
-// Called every frame in place of drawPullIndicator() once migrated.
-export function updatePullIndicator(layer) {
-  const player = state.player;
-  const active = player && player.pullTarget && player.mode === "space";
-
-  if (!active) {
-    if (pixiBeamGlow) setAllVisible(false);
+  if (!player || !player.pullTarget || player.mode !== 'space') {
+    reset();
     return;
   }
 
-  ensurePixiObjects(layer);
-  setAllVisible(true);
-
   const target = player.pullTarget;
-  const pulse = (Math.sin(Date.now() * 0.006) + 1) / 2;
-  const now = Date.now();
+  const dt = (state.timeScale ?? 1) / 60;
+  time += dt;
+  const pulse = (Math.sin(time * 6) + 1) / 2; // ~0..1 breathing
 
-  const originX = player.aimShoulderPos ? player.aimShoulderPos.x : player.pos.x;
-  const originY = player.aimShoulderPos ? player.aimShoulderPos.y : player.pos.y;
+  // Out of the blaster's own muzzle (the hole at the end of his arm),
+  // same as a fireball.
+  const [originX, originY] = player.getMuzzlePosition();
   const dx = target.pos.x - originX;
   const dy = target.pos.y - originY;
-  const beamLength = Math.sqrt(dx * dx + dy * dy);
+  const toCenter = Math.sqrt(dx * dx + dy * dy);
+  if (toCenter < 1e-3) return;
+  const dirX = dx / toCenter, dirY = dy / toCenter;
+  const perpX = -dirY, perpY = dirX;
 
-  // --- Straight beam core ---
-  pixiBeamGlow.clear();
-  pixiBeamGlow
-    .moveTo(originX, originY)
-    .lineTo(target.pos.x, target.pos.y)
-    .stroke({ width: BEAM_GLOW_WIDTH, color: BEAM_GLOW_PARSED.color, alpha: BEAM_GLOW_PARSED.alpha * (0.4 + pulse * 0.3) });
+  // The beam stops where it meets the target's surface (roughly, for a
+  // rounded rect: its shorter half-extent), not its centre.
+  const surfaceInset = target.isRoundedRect
+    ? Math.min(target.halfWidth ?? target.radius, target.halfHeight ?? target.radius)
+    : target.radius;
+  const len = Math.max(8, toCenter - surfaceInset);
+  const endX = originX + dirX * len, endY = originY + dirY * len;
+  const at = (u, off) => {
+    const s = u * len;
+    return [originX + dirX * s + perpX * off, originY + dirY * s + perpY * off];
+  };
 
-  pixiBeamCore.clear();
-  pixiBeamCore
-    .moveTo(originX, originY)
-    .lineTo(target.pos.x, target.pos.y)
-    .stroke({ width: BEAM_CORE_WIDTH, color: BEAM_CORE_PARSED.color, alpha: BEAM_CORE_PARSED.alpha * (0.7 + pulse * 0.3) });
+  love.graphics.push('all');
+  love.graphics.setBlendMode('add');
+  love.graphics.setLineStyle('smooth');
+  love.graphics.setLineJoin('bevel');
 
-  // --- Electric wave strands ---
-  if (beamLength > 1e-3) {
-    const dirX = dx / beamLength, dirY = dy / beamLength;
-    const perpX = -dirY, perpY = dirX;
+  // The beam.
+  const shader = getBeamShader();
+  shader.send('time', time);
+  shader.send('len', len);
+  shader.send('halfWidth', BEAM_HALF_WIDTH);
+  shader.send('startFrac', BEAM_START_FRACTION);
+  shader.send('pulse', pulse);
+  shader.send('color', COLOR);
+  shader.send('hot', COLOR_HOT);
+  love.graphics.setShader(shader);
+  love.graphics.setColor(1, 1, 1, 1);
+  love.graphics.draw(getPixel(), originX - perpX * BEAM_HALF_WIDTH, originY - perpY * BEAM_HALF_WIDTH,
+    Math.atan2(dirY, dirX), len, BEAM_HALF_WIDTH * 2);
+  love.graphics.setShader();
 
-    const strand1 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY, 0, now);
-    const strand2 = buildWavePoints(originX, originY, dirX, dirY, perpX, perpY, beamLength, WAVE_FREQUENCY_2, Math.PI, now);
-
-    const glowAlpha = WAVE_GLOW_PARSED.alpha * (0.3 + pulse * 0.25);
-    strokePolylinePixi(pixiWave1Glow, strand1, WAVE_GLOW_WIDTH, WAVE_GLOW_PARSED.color, glowAlpha);
-    strokePolylinePixi(pixiWave2Glow, strand2, WAVE_GLOW_WIDTH, WAVE_GLOW_PARSED.color, glowAlpha);
-
-    const coreAlpha = WAVE_CORE_PARSED.alpha * (0.6 + pulse * 0.3);
-    strokePolylinePixi(pixiWave1Core, strand1, WAVE_CORE_WIDTH, WAVE_CORE_PARSED.color, coreAlpha);
-    strokePolylinePixi(pixiWave2Core, strand2, WAVE_CORE_WIDTH, WAVE_CORE_PARSED.color, coreAlpha);
-  } else {
-    pixiWave1Glow.clear();
-    pixiWave2Glow.clear();
-    pixiWave1Core.clear();
-    pixiWave2Core.clear();
+  // Helix strands, half a twist apart, pinned at both ends.
+  const samples = Math.max(2, Math.floor(len / HELIX_SAMPLE_SPACING));
+  for (let strand = 0; strand <= 1; strand++) {
+    const points = [];
+    for (let i = 0; i <= samples; i++) {
+      const u = i / samples;
+      const phase = (u * len) / HELIX_WAVELENGTH * Math.PI * 2 + time * HELIX_SPEED + strand * Math.PI;
+      const [x, y] = at(u, Math.sin(phase) * HELIX_AMPLITUDE * envelope(u));
+      points.push(x, y);
+    }
+    strokeGlowing(points, 5, 1.5, 0.12 + 0.08 * pulse, 0.55 + 0.3 * pulse);
   }
 
-  // --- Outline around the target planet, matching its actual shape.
-  // position+rotation handle the rect case's own translate+rotate —
-  // Pixi's own transform system does this instead of computing
-  // rotated points by hand. Circles are rotationally symmetric, so
-  // rotation is just left at 0 for that case rather than needing a
-  // branch to skip setting it. ---
-  pixiOutlineGlow.position.set(target.pos.x, target.pos.y);
-  pixiOutlineCore.position.set(target.pos.x, target.pos.y);
+  // Lightning: a jagged arc down the beam, re-shaped every few frames.
+  if (!bolt || bolt.timer <= 0) {
+    const jags = Math.max(2, Math.floor(len / BOLT_SEGMENT));
+    const offsets = [];
+    for (let i = 0; i <= jags; i++) {
+      const u = i / jags;
+      offsets.push([u, (Math.random() * 2 - 1) * BOLT_JITTER * envelope(u)]);
+    }
+    bolt = { timer: BOLT_INTERVAL, offsets };
+  }
+  bolt.timer -= dt;
+  const boltPoints = [];
+  for (const o of bolt.offsets) {
+    const [x, y] = at(o[0], o[1]);
+    boltPoints.push(x, y);
+  }
+  strokeGlowing(boltPoints, 4, 1.2, 0.15, 0.4 + 0.4 * Math.random());
 
+  // Sparks, drifting back down the beam toward Bob.
+  sparkBudget += SPARKS_PER_100_UNITS * (len / 100) * dt;
+  while (sparkBudget >= 1) {
+    sparkBudget -= 1;
+    const u = 0.15 + Math.random() * 0.85;
+    sparks.push({ u, off: (Math.random() * 2 - 1) * BEAM_HALF_WIDTH * 0.5 * u, life: 1 });
+  }
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const sp = sparks[i];
+    sp.u -= SPARK_SPEED * dt / len;
+    sp.off *= (1 - 1.5 * dt);
+    sp.life -= dt / SPARK_LIFE;
+    if (sp.life <= 0 || sp.u <= 0) {
+      sparks.splice(i, 1);
+    } else {
+      const [x, y] = at(sp.u, sp.off);
+      drawGlow(x, y, 16, COLOR[0], COLOR[1], COLOR[2], 0.7 * sp.life);
+      love.graphics.setColor(COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], sp.life);
+      love.graphics.circle('fill', x, y, 1.8);
+    }
+  }
+
+  // Muzzle flare: a glow and a turning four-point star.
+  drawGlow(originX, originY, 44 + 10 * pulse, COLOR[0], COLOR[1], COLOR[2], 0.85);
+  drawGlow(originX, originY, 16, COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], 1);
+  const starA = time * 2.5;
+  const starR = 11 + 3 * pulse;
+  love.graphics.setLineWidth(1.5);
+  love.graphics.setColor(COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], 0.7);
+  for (let k = 0; k <= 1; k++) {
+    const a = starA + k * Math.PI / 2;
+    const cx = Math.cos(a) * starR, cy = Math.sin(a) * starR;
+    love.graphics.line(originX - cx, originY - cy, originX + cx, originY + cy);
+  }
+
+  // Where it meets the target: a splash of light.
+  drawGlow(endX, endY, 80 + 16 * pulse, COLOR[0], COLOR[1], COLOR[2], 0.75);
+  drawGlow(endX, endY, 26, COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], 1);
+
+  // Outline around the target
   if (target.isRoundedRect) {
-    pixiOutlineGlow.rotation = target.rotationAngle;
-    pixiOutlineCore.rotation = target.rotationAngle;
-    const w = target.halfWidth + OUTLINE_PADDING;
-    const h = target.halfHeight + OUTLINE_PADDING;
-    const cornerRadius = target.cornerRadius + OUTLINE_PADDING;
+    // A true rotated rounded-rect outline, matching the target's own
+    // actual silhouette. Each half-extent AND the corner radius all get
+    // the same OUTLINE_PADDING added, so the outline sits evenly outset
+    // from the real edge all the way around.
+    const hw = (target.halfWidth ?? target.radius) + OUTLINE_PADDING;
+    const hh = (target.halfHeight ?? target.radius) + OUTLINE_PADDING;
+    const cr = (target.cornerRadius ?? 0) + OUTLINE_PADDING;
 
-    pixiOutlineGlow.clear();
-    pixiOutlineGlow
-      .roundRect(-w, -h, w * 2, h * 2, cornerRadius)
-      .stroke({ width: OUTLINE_GLOW_WIDTH, color: OUTLINE_GLOW_PARSED.color, alpha: OUTLINE_GLOW_PARSED.alpha * (0.4 + pulse * 0.4) });
+    love.graphics.push();
+    love.graphics.translate(target.pos.x, target.pos.y);
+    love.graphics.rotate(target.rotationAngle ?? 0);
 
-    pixiOutlineCore.clear();
-    pixiOutlineCore
-      .roundRect(-w, -h, w * 2, h * 2, cornerRadius)
-      .stroke({ width: OUTLINE_CORE_WIDTH, color: OUTLINE_CORE_PARSED.color, alpha: OUTLINE_CORE_PARSED.alpha * (0.7 + pulse * 0.3) });
+    love.graphics.setLineWidth(OUTLINE_GLOW_WIDTH);
+    love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], 0.3 * (0.4 + pulse * 0.4));
+    love.graphics.rectangle('line', -hw, -hh, hw * 2, hh * 2, cr, cr);
+
+    love.graphics.setLineWidth(OUTLINE_CORE_WIDTH);
+    love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], 0.7 + pulse * 0.3);
+    love.graphics.rectangle('line', -hw, -hh, hw * 2, hh * 2, cr, cr);
+
+    love.graphics.pop();
   } else {
-    pixiOutlineGlow.rotation = 0;
-    pixiOutlineCore.rotation = 0;
-    const r = target.radius + OUTLINE_PADDING;
+    const tx = target.pos.x, ty = target.pos.y;
+    const ringR = target.radius + OUTLINE_PADDING;
 
-    pixiOutlineGlow.clear();
-    pixiOutlineGlow
-      .circle(0, 0, r)
-      .stroke({ width: OUTLINE_GLOW_WIDTH, color: OUTLINE_GLOW_PARSED.color, alpha: OUTLINE_GLOW_PARSED.alpha * (0.4 + pulse * 0.4) });
+    love.graphics.setLineWidth(OUTLINE_GLOW_WIDTH);
+    love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], 0.3 * (0.4 + pulse * 0.4));
+    love.graphics.circle('line', tx, ty, ringR);
+    love.graphics.setLineWidth(OUTLINE_CORE_WIDTH);
+    love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], 0.7 + pulse * 0.3);
+    love.graphics.circle('line', tx, ty, ringR);
 
-    pixiOutlineCore.clear();
-    pixiOutlineCore
-      .circle(0, 0, r)
-      .stroke({ width: OUTLINE_CORE_WIDTH, color: OUTLINE_CORE_PARSED.color, alpha: OUTLINE_CORE_PARSED.alpha * (0.7 + pulse * 0.3) });
+    // Three brackets turning round it, just outside the outline.
+    const bracketR = ringR + 10;
+    const spin = time * 1.6;
+    love.graphics.setLineWidth(3);
+    love.graphics.setColor(COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], 0.55 + 0.3 * pulse);
+    for (let k = 0; k <= 2; k++) {
+      const a = spin + k * Math.PI * 2 / 3;
+      love.graphics.arc('line', 'open', tx, ty, bracketR, a, a + 0.55, 12);
+    }
+
+    // Rings closing in on it — being reeled in.
+    love.graphics.setLineWidth(2);
+    for (let k = 0; k <= 1; k++) {
+      const phase = lua.mod(time / RING_PERIOD + k * 0.5, 1);
+      const r = ringR + RING_START_GAP * (1 - phase);
+      love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], 0.45 * Math.sin(Math.PI * phase));
+      love.graphics.circle('line', tx, ty, r);
+    }
   }
+
+  love.graphics.pop();
 }
+
+export default {
+  draw: drawPullIndicator,
+};

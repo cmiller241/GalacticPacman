@@ -1,79 +1,79 @@
 // js/world/RoundedRectPlanetoid.js
-import { state } from '../state.js';
-import { INFLUENCE_PADDING, PLANET_SPEED } from '../constants.js';
-import { Vector2 } from '../vector2.js';
-import { Planetoid } from './Planetoid.js';
-import { Sprite, Texture, Graphics, FillGradient } from 'pixi.js';
-
-// A rounded rectangle = a smaller "core" rectangle (half-extents
-// halfWidth-cornerRadius, halfHeight-cornerRadius) inflated by a circle
-// of radius cornerRadius. That framing gives one shared formula for
-// "nearest point on the surface": clamp the query point to the core
-// rect, then push outward from that clamped point by cornerRadius.
-// Works uniformly for flat edges AND corners, no special-casing.
 //
-// The perimeter is 4 straight edges (the core rect's sides) joined by
-// 4 quarter-circle corner arcs. Walking that perimeter by arc-length
-// gives the shape the same single-scalar "position on the surface"
-// parameterization a circle gets for free from its angle — that's what
-// lets the player and coins move along it exactly like they already do
-// on circles.
+// A rounded-rectangle planetoid the player can land on and walk all the
+// way AROUND (every edge and corner, not just the top), pull-target, and
+// bounce off of like any ordinary circular Planetoid.
 //
-// Everything is stored/rotated in the planet's own LOCAL frame
-// (unrotated, centered on the shape); every PUBLIC method takes/returns
-// WORLD coordinates, converting via rotationAngle + pos internally.
-// Callers never need to know the shape rotates.
+// Drifts and spins like any other field planetoid by default (this.vel,
+// this.rotationAngle/rotationSpeed) — whoever spawns a "this one stays
+// put" instance overrides isImmovable/isPermanent afterward.
+//
+// No influence-ring drawing — main.js's ring debug pass excludes every
+// isRoundedRect planet (a circular ring would misrepresent a rectangular
+// influence shape).
 
-export class RoundedRectPlanetoid {
+import love from '../love/index.js';
+import lua from '../love/lua.js';
+import state from '../state.js';
+import Vector2 from '../vector2.js';
+import constants from '../constants.js';
+import Planetoid from './Planetoid.js';
+
+class RoundedRectPlanetoid {
+  // x, y: world center. halfWidth/halfHeight: half-extents of the core
+  // box (before rounding). cornerRadius: clamped to never exceed either
+  // half-extent. color: [r,g,b,a] 0..1, multiplied against the shared
+  // rocky planetTexture.
+  static new(x, y, halfWidth, halfHeight, cornerRadius, color) {
+    return new RoundedRectPlanetoid(x, y, halfWidth, halfHeight, cornerRadius, color);
+  }
+
   constructor(x, y, halfWidth, halfHeight, cornerRadius, color) {
     this.pos = new Vector2(x, y);
     this.halfWidth = halfWidth;
     this.halfHeight = halfHeight;
-    this.cornerRadius = Math.min(cornerRadius, halfWidth, halfHeight);
-    this.color = color;
+    this.cornerRadius = Math.min(cornerRadius ?? 0, halfWidth, halfHeight);
+    this.color = color ?? [0.62, 0.58, 0.5, 1];
 
-    // Bounding-circle radius. NOT the true surface distance anywhere
-    // except the four corners — used only where other code expects a
-    // plain circular `.radius`: updatePlanetoids()'s scene-edge bounce,
-    // and handleElasticCollisions (planet-vs-planet bouncing). True
-    // rect-vs-circle collision response is a separate physics problem
-    // beyond nearestSurfacePoint (real contact normals, penetration
-    // resolution) — out of scope here. This planet genuinely
-    // participates in elastic bouncing with real momentum-conserving
-    // math; it's just bouncing off this circular boundary rather than
-    // the exact rounded-rect silhouette. Most noticeable near flat-edge
-    // midpoints, least noticeable near corners (which the bounding
-    // circle hugs closely). Gravity/landing/walking/orbiting all use
-    // nearestSurfacePoint()/arc-position methods instead, never this.
+    // Bounding-circle radius — NOT the true surface distance anywhere
+    // except the four corners — used only where other systems expect a
+    // plain circular .radius: scene-edge bounce and planet-vs-planet
+    // bouncing. Gravity/landing/walking/pull-targeting all use
+    // nearestSurfacePoint/the arc-position methods below instead.
     this.radius = Math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight);
     this.mass = (2 * halfWidth) * (2 * halfHeight);
-    this.influenceRadius = this.radius + INFLUENCE_PADDING;
+    this.influenceRadius = this.radius + constants.INFLUENCE_PADDING;
 
-    let direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
-    this.vel = direction.multiply(PLANET_SPEED);
+    const direction = new Vector2(Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+    this.vel = direction.multiply(constants.PLANET_SPEED);
 
-    // Slow spin. Player/coins riding the surface stay glued to it as it
-    // turns, same as they already stay glued to a drifting planet.
+    // Slow spin — every surface query goes through worldToLocal/
+    // localDirToWorld, which read rotationAngle fresh every call, so
+    // anything riding the surface stays glued to it as it turns.
     this.rotationAngle = Math.random() * Math.PI * 2;
     this.rotationSpeed = 0.0006;
 
     this.isSpikey = false;
     this.isRoundedRect = true;
-    this.offscreen = null;
-    this.offscreenPadding = 0;
-    this.ringCanvas = null;
-    this.interiorType = null;
-    this.cachedAlpha = 0.3;
-    this.lastAlphaUpdate = 0;
+
+    this.bodyCanvas = null;
+    this.bodyCanvasPadding = 0;
+    this.bodyCanvasScale = 2;
+    this.eclipseMesh = null;
+    this.sunShadingMesh = null;
 
     this._segments = this.buildSegments();
   }
 
+  // ----------------------------------------------------------------
+  // Local/world frame helpers
+  // ----------------------------------------------------------------
+
+  // Returns [lx, ly].
   worldToLocal(worldX, worldY) {
-    const dx = worldX - this.pos.x;
-    const dy = worldY - this.pos.y;
+    const dx = worldX - this.pos.x, dy = worldY - this.pos.y;
     const c = Math.cos(-this.rotationAngle), s = Math.sin(-this.rotationAngle);
-    return { x: dx * c - dy * s, y: dx * s + dy * c };
+    return [dx * c - dy * s, dx * s + dy * c];
   }
 
   localDirToWorld(lx, ly) {
@@ -88,37 +88,37 @@ export class RoundedRectPlanetoid {
     return w;
   }
 
-  // Returns { point: Vector2 (world), normal: Vector2 (world, unit,
-  // outward), distance: number >= 0 } for the nearest boundary point to
-  // the given WORLD point.
+  // ----------------------------------------------------------------
+  // Surface geometry (clamp to the core rect, push out by cornerRadius
+  // — one formula for flat edges AND corners)
+  // ----------------------------------------------------------------
+
   nearestSurfacePoint(worldX, worldY) {
-    const local = this.worldToLocal(worldX, worldY);
+    const [lx, ly] = this.worldToLocal(worldX, worldY);
     const coreHW = this.halfWidth - this.cornerRadius;
     const coreHH = this.halfHeight - this.cornerRadius;
     const cr = this.cornerRadius;
 
-    const cx = Math.max(-coreHW, Math.min(coreHW, local.x));
-    const cy = Math.max(-coreHH, Math.min(coreHH, local.y));
-    let dx = local.x - cx, dy = local.y - cy;
+    const cx = Math.max(-coreHW, Math.min(coreHW, lx));
+    const cy = Math.max(-coreHH, Math.min(coreHH, ly));
+    let dx = lx - cx, dy = ly - cy;
     let len = Math.sqrt(dx * dx + dy * dy);
 
     if (len < 1e-6) {
-      // Deep inside the core rect (shouldn't happen for a point that's
-      // actually outside/on the surface) — fall back gracefully.
-      const distV = coreHW - Math.abs(local.x), distH = coreHH - Math.abs(local.y);
-      if (distV < distH) { dx = local.x >= 0 ? 1 : -1; dy = 0; }
-      else { dx = 0; dy = local.y >= 0 ? 1 : -1; }
+      const distV = coreHW - Math.abs(lx), distH = coreHH - Math.abs(ly);
+      if (distV < distH) { dx = lx >= 0 ? 1 : -1; dy = 0; }
+      else { dx = 0; dy = ly >= 0 ? 1 : -1; }
       len = 1;
     }
     dx /= len; dy /= len;
 
     const sx = cx + dx * cr, sy = cy + dy * cr;
-    const distance = Math.sqrt((local.x - sx) ** 2 + (local.y - sy) ** 2);
+    const distance = Math.sqrt((lx - sx) ** 2 + (ly - sy) ** 2);
 
     return {
       point: this.localPointToWorld(sx, sy),
       normal: this.localDirToWorld(dx, dy),
-      distance
+      distance,
     };
   }
 
@@ -126,28 +126,26 @@ export class RoundedRectPlanetoid {
     return this.nearestSurfacePoint(worldX, worldY).distance;
   }
 
-  // Standard rounded-box point-containment test: clamp to the core
-  // (unrounded) rect, then check whether the leftover offset falls
-  // within the corner radius — correctly covers flat-edge regions,
-  // corner regions, and fully-interior points with one formula, same
-  // spirit as nearestSurfacePoint above. Used for right-click "pull
-  // star" target selection (see Player.trySelectPullTarget).
+  // Used for pull-target selection — same clamp-then-check as
+  // nearestSurfacePoint, just a boolean.
   containsPoint(worldX, worldY) {
-    const local = this.worldToLocal(worldX, worldY);
+    const [lx, ly] = this.worldToLocal(worldX, worldY);
     const coreHW = this.halfWidth - this.cornerRadius;
     const coreHH = this.halfHeight - this.cornerRadius;
     const cr = this.cornerRadius;
-    const cx = Math.max(-coreHW, Math.min(coreHW, local.x));
-    const cy = Math.max(-coreHH, Math.min(coreHH, local.y));
-    const dx = local.x - cx, dy = local.y - cy;
+    const cx = Math.max(-coreHW, Math.min(coreHW, lx));
+    const cy = Math.max(-coreHH, Math.min(coreHH, ly));
+    const dx = lx - cx, dy = ly - cy;
     return (dx * dx + dy * dy) <= cr * cr;
   }
 
-  // Segment order (clockwise from the right edge's midpoint): right
-  // edge -> BR corner -> bottom edge -> BL corner -> left edge -> TL
-  // corner -> top edge -> TR corner -> (back to start). Each corner's
-  // startAngle is chosen so consecutive segments meet exactly, with
-  // continuous position/tangent/normal across every seam.
+  // ----------------------------------------------------------------
+  // Arc-length perimeter walking (right edge -> BR corner -> bottom edge
+  // -> BL corner -> left edge -> TL corner -> top edge -> TR corner) —
+  // what lets the player/coins walk all the way around the shape with a
+  // single-scalar "position on the surface".
+  // ----------------------------------------------------------------
+
   buildSegments() {
     const coreHW = this.halfWidth - this.cornerRadius;
     const coreHH = this.halfHeight - this.cornerRadius;
@@ -160,29 +158,26 @@ export class RoundedRectPlanetoid {
       { type: 'edge', length: 2 * coreHH, start: { x: -hw, y: coreHH }, dir: { x: 0, y: -1 }, normal: { x: -1, y: 0 } },
       { type: 'corner', length: (Math.PI / 2) * cr, center: { x: -coreHW, y: -coreHH }, startAngle: Math.PI },
       { type: 'edge', length: 2 * coreHW, start: { x: -coreHW, y: -hh }, dir: { x: 1, y: 0 }, normal: { x: 0, y: -1 } },
-      { type: 'corner', length: (Math.PI / 2) * cr, center: { x: coreHW, y: -coreHH }, startAngle: 3 * Math.PI / 2 }
+      { type: 'corner', length: (Math.PI / 2) * cr, center: { x: coreHW, y: -coreHH }, startAngle: 3 * Math.PI / 2 },
     ];
   }
 
   getPerimeter() {
-    let t = 0;
-    for (const seg of this._segments) t += seg.length;
-    return t;
+    let total = 0;
+    for (const seg of this._segments) total += seg.length;
+    return total;
   }
 
-  // Given arc-length s (wraps), returns local { point:{x,y},
-  // tangent:{x,y} (unit, direction of increasing s), normal:{x,y} (unit,
-  // outward) }.
   pointAtLocalArcPosition(s) {
     const perimeter = this.getPerimeter();
-    let remaining = ((s % perimeter) + perimeter) % perimeter;
+    let remaining = lua.mod(s, perimeter);
     for (const seg of this._segments) {
       if (remaining <= seg.length) {
         if (seg.type === 'edge') {
           return {
             point: { x: seg.start.x + seg.dir.x * remaining, y: seg.start.y + seg.dir.y * remaining },
             tangent: seg.dir,
-            normal: seg.normal
+            normal: seg.normal,
           };
         }
         const angle = seg.startAngle + remaining / this.cornerRadius;
@@ -190,7 +185,7 @@ export class RoundedRectPlanetoid {
         return {
           point: { x: seg.center.x + this.cornerRadius * c, y: seg.center.y + this.cornerRadius * s2 },
           tangent: { x: -s2, y: c },
-          normal: { x: c, y: s2 }
+          normal: { x: c, y: s2 },
         };
       }
       remaining -= seg.length;
@@ -199,9 +194,8 @@ export class RoundedRectPlanetoid {
     return { point: seg.start, tangent: seg.dir, normal: seg.normal };
   }
 
-  // Inverse: given a LOCAL point already on/near the boundary, returns
-  // the arc-length s that produced it. Used when the player lands, to
-  // initialize their walk position from wherever they touched down.
+  // Inverse: given a LOCAL point already on/near the boundary, returns the
+  // arc-length s that produced it — used when the player lands.
   arcPositionForLocalPoint(lx, ly) {
     const coreHW = this.halfWidth - this.cornerRadius;
     const coreHH = this.halfHeight - this.cornerRadius;
@@ -213,7 +207,7 @@ export class RoundedRectPlanetoid {
     const cumLeftEdge = cumBL + 2 * coreHH;
     const cumTL = cumLeftEdge + (Math.PI / 2) * cr;
     const cumTopEdge = cumTL + 2 * coreHW;
-    const norm = (a) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const norm = (a) => lua.mod(a, 2 * Math.PI);
 
     if (lx >= coreHW && ly >= coreHH) return cumRightEdge + norm(Math.atan2(ly - coreHH, lx - coreHW)) * cr;
     if (lx <= -coreHW && ly >= coreHH) return cumBottomEdge + (norm(Math.atan2(ly - coreHH, lx + coreHW)) - Math.PI / 2) * cr;
@@ -224,349 +218,191 @@ export class RoundedRectPlanetoid {
     if (lx < -coreHW) return cumBL + (coreHH - ly);
     if (ly < -coreHH) return cumTL + (lx + coreHW);
 
-    // Inside the core rect (shouldn't happen for a landing query) —
-    // fall back to nearest edge.
+    // Inside the core rect (shouldn't happen for a landing query) — fall
+    // back to the nearest edge.
     const distR = coreHW - lx, distL = lx + coreHW, distB = coreHH - ly, distT = ly + coreHH;
     const minH = Math.min(distR, distL), minV = Math.min(distB, distT);
-    if (minH < minV) return distR < distL ? (ly + coreHH) : (cumBL + (coreHH - ly));
-    return distB < distT ? (cumBR + (coreHW - lx)) : (cumTL + (lx + coreHW));
+    if (minH < minV) {
+      if (distR < distL) return ly + coreHH;
+      return cumBL + (coreHH - ly);
+    }
+    if (distB < distT) return cumBR + (coreHW - lx);
+    return cumTL + (lx + coreHW);
   }
 
   arcPositionForWorldPoint(worldX, worldY) {
-    const local = this.worldToLocal(worldX, worldY);
-    return this.arcPositionForLocalPoint(local.x, local.y);
+    const [lx, ly] = this.worldToLocal(worldX, worldY);
+    return this.arcPositionForLocalPoint(lx, ly);
   }
 
-  // World-space wrapper: returns { point: Vector2 (world, pushed
-  // outward by pushDistance), normal: Vector2 (world, unit) }. Player
-  // uses pushDistance=PLAYER_RADIUS, Coin uses pushDistance=
-  // COIN_ORBIT_OFFSET — same parameterization, different offset.
+  // World-space wrapper: returns { point: Vector2 (world, pushed outward
+  // by pushDistance), normal: Vector2 (world, unit) }.
   worldPointAtArcPosition(s, pushDistance = 0) {
     const local = this.pointAtLocalArcPosition(s);
     const normal = this.localDirToWorld(local.normal.x, local.normal.y);
     const surfacePoint = this.localPointToWorld(local.point.x, local.point.y);
-    const point = pushDistance !== 0 ? surfacePoint.add(normal.clone().multiply(pushDistance)) : surfacePoint;
+    let point = surfacePoint;
+    if (pushDistance !== 0) point = surfacePoint.clone().add(normal.clone().multiply(pushDistance));
     return { point, normal };
   }
 
-  // Same recipe as Planetoid.js: bake texture+color tint once, then
-  // bake the glow once onto a padded canvas, then bake the dashed
-  // influence ring once. Uses ctx.roundRect() instead of a circular
-  // arc. Reuses Planetoid's static shadow constants + shared sun-
-  // overlay sprite for visual consistency without extending that
-  // (circle-specific) class.
-  // Draws this planet's body texture onto bodyCtx (a plain w x h
-  // canvas, not yet padded/shadowed — that happens in createOffscreen
-  // below regardless of what this method does). Default implementation
-  // is the shared rocky planetTexture tinted by this planet's own
-  // color, same as circular Planetoid. Subclasses (SkyDomePlanetoid is
-  // the first example) can override just this one method to use a
-  // completely different body texture, while still getting the
-  // shadow-baking/offscreen-sizing/ring logic in createOffscreen()
-  // below for free, unchanged.
-  drawBodyTexture(bodyCtx, w, h) {
-    bodyCtx.save();
-    bodyCtx.beginPath();
-    bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
-    bodyCtx.clip();
-    const tiles = 2.5;
-    const texSize = Math.max(w, h) * tiles;
-    bodyCtx.drawImage(state.planetTexture, w / 2 - texSize / 2, h / 2 - texSize / 2, texSize, texSize);
-    bodyCtx.restore();
-
-    bodyCtx.save();
-    bodyCtx.globalCompositeOperation = 'multiply';
-    bodyCtx.beginPath();
-    bodyCtx.roundRect(0, 0, w, h, this.cornerRadius);
-    bodyCtx.fillStyle = this.color;
-    bodyCtx.fill();
-    bodyCtx.globalCompositeOperation = 'source-over';
-    bodyCtx.restore();
+  // Spin only — position drift is handled generically by main.js's
+  // updatePlanetoidsPhysics.
+  update() {
+    const ts = state.timeScale ?? 1;
+    this.rotationAngle += this.rotationSpeed * ts;
   }
 
-  createOffscreen() {
-    const w = this.halfWidth * 2, h = this.halfHeight * 2;
-    const bodyCanvas = document.createElement('canvas');
-    bodyCanvas.width = w;
-    bodyCanvas.height = h;
-    const bodyCtx = bodyCanvas.getContext('2d');
+  // ----------------------------------------------------------------
+  // Drawing
+  // ----------------------------------------------------------------
 
-    this.drawBodyTexture(bodyCtx, w, h);
+  // Bakes the body ONCE (per instance — there are only a handful): a
+  // soft glow border (successively padded rounded rects), then the
+  // shared rocky planetTexture tiled and tinted by this.color, clipped to
+  // the rounded-rect shape. Baked at bodyCanvasScale resolution.
+  ensureBodyCanvas() {
+    if (this.bodyCanvas) return;
+    if (!state.planetTexture) return;
 
     const padding = Planetoid.SHADOW_PADDING;
-    this.offscreenPadding = padding;
-    this.offscreen = document.createElement('canvas');
-    this.offscreen.width = w + padding * 2;
-    this.offscreen.height = h + padding * 2;
-    const finalCtx = this.offscreen.getContext('2d');
-    finalCtx.shadowColor = Planetoid.SHADOW_COLOR;
-    finalCtx.shadowBlur = Planetoid.SHADOW_BLUR;
-    finalCtx.drawImage(bodyCanvas, padding, padding);
+    this.bodyCanvasPadding = padding;
+    const scale = this.bodyCanvasScale;
+    const w = this.halfWidth * 2, h = this.halfHeight * 2;
+    const cr = this.cornerRadius * scale;
+    const canvasW = (w + padding * 2) * scale, canvasH = (h + padding * 2) * scale;
+    const originX = padding * scale, originY = padding * scale;
 
-    const ringPad = this.influenceRadius - this.radius;
-    this.ringCanvas = document.createElement('canvas');
-    this.ringCanvas.width = w + ringPad * 2;
-    this.ringCanvas.height = h + ringPad * 2;
-    const ringCtx = this.ringCanvas.getContext('2d');
-    ringCtx.strokeStyle = 'rgba(173,216,230,1)';
-    ringCtx.lineWidth = 3;
-    ringCtx.setLineDash([10, 5]);
-    ringCtx.beginPath();
-    ringCtx.roundRect(0, 0, w + ringPad * 2, h + ringPad * 2, this.cornerRadius + ringPad);
-    ringCtx.stroke();
+    const canvas = love.graphics.newCanvas(canvasW, canvasH);
+    canvas.setFilter('linear', 'linear');
+
+    love.graphics.push();
+    love.graphics.origin();
+    love.graphics.setCanvas({ 0: canvas, stencil: true });
+    love.graphics.clear(0, 0, 0, 0);
+    love.graphics.setBlendMode('alpha');
+
+    const GLOW_LAYERS = 18;
+    for (let i = GLOW_LAYERS; i >= 1; i--) {
+      const t = i / GLOW_LAYERS;
+      const pad = padding * scale * t;
+      const falloff = (1 - t) * (1 - t);
+      const alpha = Planetoid.SHADOW_COLOR[3] * falloff * 0.85;
+      love.graphics.setColor(Planetoid.SHADOW_COLOR[0], Planetoid.SHADOW_COLOR[1], Planetoid.SHADOW_COLOR[2], alpha);
+      love.graphics.rectangle('fill',
+        originX - pad, originY - pad, w * scale + pad * 2, h * scale + pad * 2,
+        cr + pad, cr + pad);
+    }
+
+    love.graphics.stencil(() => {
+      love.graphics.rectangle('fill', originX, originY, w * scale, h * scale, cr, cr);
+    }, 'replace', 1);
+    love.graphics.setStencilTest('greater', 0);
+
+    const tiles = 2.5;
+    const [texW, texH] = state.planetTexture.getDimensions();
+    const texSize = Math.max(w, h) * scale * tiles;
+    love.graphics.setColor(this.color[0], this.color[1], this.color[2], this.color[3] ?? 1);
+    love.graphics.draw(state.planetTexture,
+      originX + w * scale / 2, originY + h * scale / 2, 0,
+      texSize / texW, texSize / texH, texW / 2, texH / 2);
+
+    love.graphics.setStencilTest();
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.setCanvas();
+    love.graphics.pop();
+
+    this.bodyCanvas = canvas;
   }
 
   draw() {
-    const ctx = state.ctx;
-    const now = Date.now();
-    if (now - this.lastAlphaUpdate > 500) {
-      const dist = this.pos.subtract(state.player.pos).length();
-      this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
-      this.lastAlphaUpdate = now;
+    // Shadow first (behind everything) — circular Planetoid's own method.
+    Planetoid.drawEclipseShadow(this);
+
+    this.ensureBodyCanvas();
+
+    love.graphics.push();
+    love.graphics.translate(this.pos.x, this.pos.y);
+    love.graphics.rotate(this.rotationAngle);
+
+    if (this.bodyCanvas) {
+      const padding = this.bodyCanvasPadding ?? 0;
+      const invScale = 1 / this.bodyCanvasScale;
+      love.graphics.setColor(1, 1, 1, 1);
+      love.graphics.draw(this.bodyCanvas, -(this.halfWidth + padding), -(this.halfHeight + padding), 0, invScale, invScale);
+    } else {
+      love.graphics.setColor(this.color[0], this.color[1], this.color[2], this.color[3] ?? 1);
+      love.graphics.rectangle('fill', -this.halfWidth, -this.halfHeight,
+        this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius, this.cornerRadius);
+      love.graphics.setColor(1, 1, 1, 1);
     }
 
-    ctx.save();
-    ctx.translate(this.pos.x, this.pos.y);
-    ctx.rotate(this.rotationAngle);
+    love.graphics.pop();
 
-    if (this.ringCanvas) {
-      ctx.save();
-      ctx.globalAlpha = this.cachedAlpha;
-      ctx.drawImage(this.ringCanvas, -this.ringCanvas.width / 2, -this.ringCanvas.height / 2);
-      ctx.restore();
-    }
-    if (this.offscreen) {
-      ctx.drawImage(this.offscreen, -this.offscreen.width / 2, -this.offscreen.height / 2);
-    }
-
-    // Sun-relative shading, computed LIVE each frame via explicit
-    // gradient coordinates rather than an extra ctx.rotate() layered on
-    // top of this method's own rotate(rotationAngle) above. Two earlier
-    // attempts using a composed ctx.rotate() for this produced visibly
-    // wrong results (first a wandering offset, then a band that looked
-    // rotated ~90° against the shape) despite the underlying angle math
-    // checking out by hand both times — rather than keep chasing a
-    // subtle transform-composition bug blind, this sidesteps the whole
-    // category of it: the gradient's start/end points are computed
-    // directly as coordinates, already expressed in the local frame
-    // this code is already running in, so there's no additional
-    // rotation call left to get wrong. Recomputed every frame (not
-    // cached/baked) since the target direction changes continuously
-    // from both the planet's spin and its slowly-shifting angle to the
-    // sun as it drifts — cheap for the handful of these planets that
-    // exist.
-    //
-    // Gated behind noSunShading (SkyDomePlanetoid/JumpPlatform set this
-    // true) — this whole effect simulates directional lighting on a
-    // rocky, roughly spherical-reading surface, which doesn't make
-    // sense on a flat grass tile, and applying it would only ever hit
-    // part of a two-piece structure anyway: this live pass runs on a
-    // planet's own body but never touches JumpPlatform's separately-
-    // baked pillar underneath it, so the two would visibly mismatch in
-    // brightness — exactly the "vestigial darkening" this fixes.
-    if (!this.noSunShading) {
-      const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
-      const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
-      const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
-      const worldAngleToSun = Math.atan2(toSunY, toSunX);
-      // Convert the WORLD angle-to-sun into a direction usable here,
-      // since we're already inside the translate+rotate(rotationAngle)
-      // frame from above — subtracting rotationAngle is what keeps the
-      // gradient pointed at the true sun regardless of current spin.
-      const localAngle = worldAngleToSun - this.rotationAngle;
-      const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
-
-      const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
-      const distT = Math.min(distToSun / maxDist, 1);
-      const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
-
-      const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-      ctx.clip();
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.globalAlpha = overlayAlpha;
-      // Dark at the point opposite the sun, light at the point toward it.
-      const grad = ctx.createLinearGradient(-hx * extent, -hy * extent, hx * extent, hy * extent);
-      grad.addColorStop(0, 'black');
-      grad.addColorStop(1, 'white');
-      ctx.fillStyle = grad;
-      ctx.fillRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2);
-      ctx.restore();
-
-      const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
-      if (overallDarkness > 0) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = overallDarkness;
-        ctx.fillStyle = '#000000';
-        ctx.beginPath();
-        ctx.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius);
-        ctx.fill();
-        ctx.restore();
-      }
-    }
-
-    ctx.restore();
+    this.drawSunShading();
   }
 
-  // ----------------------------
-  // PIXI RENDERING — reuses createOffscreen()'s EXISTING Canvas2D bake
-  // wholesale, wrapped as Sprites, rather than rebuilding a GPU-native
-  // bake the way circular Planetoid needed. That optimization existed
-  // specifically because circular planetoids get created 50+ at a
-  // time, repeatedly, every time a new world cell activates — nothing
-  // here shares that problem. At most a handful of RoundedRectPlanetoid
-  // instances ever exist (rectPlanet, SkyDomePlanetoid, whatever else
-  // extends this), all created once at game start and permanent
-  // thereafter, so a plain Canvas2D bake — the exact same technique
-  // this class's own createOffscreen() already uses, completely
-  // unmodified — is the right level of complexity here, not a
-  // shortfall relative to circular Planetoid's own approach.
-  // ----------------------------
-  createPixiSprites(layer) {
-    if (this.pixiSprites) return;
-    if (!this.offscreen) return; // createOffscreen() hasn't run yet — try again next frame
-
-    // ring is genuinely optional, not just "not ready yet" —
-    // SkyDomePlanetoid's own createOffscreen() deliberately sets
-    // this.ringCanvas = null after calling super.createOffscreen()
-    // (suppressing the influence ring, since a generic circular-
-    // influence implication is actively misleading for something
-    // whose gravity only ever works in a rectangular window directly
-    // above it — see that class's own comment). Gating the WHOLE
-    // method on ringCanvas being present, the way an earlier version
-    // of this did, would have meant createPixiSprites() could never
-    // succeed at all for SkyDomePlanetoid — not just skipping the
-    // ring, silently breaking every other part of its rendering too,
-    // since ringCanvas would never become truthy to satisfy the guard.
-    let ring = null;
-    if (this.ringCanvas) {
-      ring = new Sprite(Texture.from(this.ringCanvas));
-      ring.anchor.set(0.5);
-    }
-
-    const body = new Sprite(Texture.from(this.offscreen));
-    body.anchor.set(0.5);
-
-    // Sun-shading + overall-darkness are live Graphics, redrawn every
-    // frame — same reasoning as draw()'s own version: the gradient's
-    // direction changes continuously (this planet's own spin, plus the
-    // sun's slowly-shifting angle as everything drifts), so there's
-    // nothing here to bake once the way ring/body are. Both stay null
-    // when noSunShading is set (SkyDomePlanetoid) — no Graphics objects
-    // built at all for something that will never be shown, rather than
-    // building them and just leaving them invisible.
-    const sunShading = this.noSunShading ? null : new Graphics();
-    const darkness = this.noSunShading ? null : new Graphics();
-
-    if (ring) layer.addChild(ring);
-    layer.addChild(body);
-    if (sunShading) layer.addChild(sunShading);
-    if (darkness) layer.addChild(darkness);
-
-    this.pixiSprites = { ring, body, sunShading, darkness };
-  }
-
-  // Called every frame in place of draw() once migrated.
-  updatePixiSprites(layer) {
-    if (!this.pixiSprites) this.createPixiSprites(layer);
-    if (!this.pixiSprites) return;
-
-    const now = Date.now();
-    if (now - this.lastAlphaUpdate > 500) {
-      const dist = this.pos.subtract(state.player.pos).length();
-      this.cachedAlpha = Math.max(0.01, 0.3 - (dist / 1000) * 0.65);
-      this.lastAlphaUpdate = now;
-    }
-
-    const { ring, body, sunShading, darkness } = this.pixiSprites;
-
-    if (ring) {
-      ring.position.set(this.pos.x, this.pos.y);
-      ring.rotation = this.rotationAngle;
-      ring.alpha = this.cachedAlpha;
-    }
-
-    body.position.set(this.pos.x, this.pos.y);
-    body.rotation = this.rotationAngle;
-
-    if (!this.noSunShading) {
-      this.updateSunShadingPixi(sunShading, darkness);
-    }
-  }
-
-  // Reproduces draw()'s own live sun-shading + overall-darkness passes,
-  // redrawn fresh every frame — same math, translated from Canvas2D
-  // gradient/clip/multiply-composite calls into Pixi's own
-  // FillGradient + roundRect + blendMode equivalents. Verified against
-  // Pixi's actual FillGradient type signature before writing this
-  // (constructor accepts start/end/colorStops/textureSpace directly;
-  // textureSpace:'global' specifically confirmed to mean "use these
-  // coordinates as-given," not normalized 0-1, which is the
-  // constructor's own default and would have been wrong here) — not
-  // runtime-tested the way some other math this session was checked
-  // numerically, since there's no way to execute the real render
-  // pipeline outside the browser itself.
-  updateSunShadingPixi(sunShading, darkness) {
-    const sunX = state.sceneWidth / 2, sunY = state.sceneHeight / 2;
+  // Live directional shading, recomputed every frame: a directional
+  // gradient (dark at the point opposite the sun, unchanged toward it)
+  // blended "multiply", then a flat overall-darkness fill on top. The
+  // gradient is a vertex-colored quad mesh oriented along the local
+  // direction to the sun and clipped to the rounded-rect via stencil.
+  drawSunShading() {
+    const sunX = (state.sceneWidth ?? 0) / 2, sunY = (state.sceneHeight ?? 0) / 2;
     const toSunX = sunX - this.pos.x, toSunY = sunY - this.pos.y;
     const distToSun = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
     const worldAngleToSun = Math.atan2(toSunY, toSunX);
+    // Subtracting rotationAngle keeps the gradient pointed at the true
+    // sun regardless of this planet's own current spin.
     const localAngle = worldAngleToSun - this.rotationAngle;
     const hx = Math.cos(localAngle), hy = Math.sin(localAngle);
 
-    const maxDist = Math.sqrt(state.sceneWidth ** 2 + state.sceneHeight ** 2) / 2;
-    const distT = Math.min(distToSun / maxDist, 1);
+    const maxDist = Math.sqrt((state.sceneWidth ?? 0) ** 2 + (state.sceneHeight ?? 0) ** 2) / 2;
+    const distT = maxDist > 0 ? Math.min(distToSun / maxDist, 1) : 0;
     const overlayAlpha = Planetoid.SUN_MIN_ALPHA + distT * (Planetoid.SUN_MAX_ALPHA - Planetoid.SUN_MIN_ALPHA);
 
+    const w = this.halfWidth * 2, h = this.halfHeight * 2;
     const extent = Math.max(this.halfWidth, this.halfHeight) * 1.3;
 
-    const gradient = new FillGradient({
-      type: 'linear',
-      start: { x: -hx * extent, y: -hy * extent },
-      end: { x: hx * extent, y: hy * extent },
-      textureSpace: 'global',
-      colorStops: [
-        { offset: 0, color: 'black' },
-        { offset: 1, color: 'white' }
-      ]
-    });
+    love.graphics.push();
+    love.graphics.translate(this.pos.x, this.pos.y);
+    love.graphics.rotate(this.rotationAngle);
 
-    sunShading.position.set(this.pos.x, this.pos.y);
-    sunShading.rotation = this.rotationAngle;
-    sunShading.blendMode = 'multiply';
-    sunShading.alpha = overlayAlpha;
-    sunShading.clear();
-    sunShading.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius).fill(gradient);
+    love.graphics.stencil(() => {
+      love.graphics.rectangle('fill', -this.halfWidth, -this.halfHeight, w, h, this.cornerRadius, this.cornerRadius);
+    }, 'replace', 1);
+    love.graphics.setStencilTest('greater', 0);
+
+    // A big quad straddling the shape, long axis along the sun direction,
+    // oversized so it fully covers the stencil region. Premultiplied
+    // alpha for the multiply blend: black stays black, white fades toward
+    // "no darkening" as overlayAlpha shrinks.
+    const px = -hy, py = hx;
+    const vertices = [
+      [-hx * extent + px * extent, -hy * extent + py * extent, 0, 0, 0, 0, 0, overlayAlpha],
+      [-hx * extent - px * extent, -hy * extent - py * extent, 0, 0, 0, 0, 0, overlayAlpha],
+      [hx * extent - px * extent, hy * extent - py * extent, 0, 0, overlayAlpha, overlayAlpha, overlayAlpha, overlayAlpha],
+      [hx * extent + px * extent, hy * extent + py * extent, 0, 0, overlayAlpha, overlayAlpha, overlayAlpha, overlayAlpha],
+    ];
+    if (!this.sunShadingMesh) this.sunShadingMesh = love.graphics.newMesh(vertices, 'fan', 'dynamic');
+    else this.sunShadingMesh.setVertices(vertices);
+
+    love.graphics.setBlendMode('multiply', 'premultiplied');
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.draw(this.sunShadingMesh);
 
     const overallDarkness = Planetoid.SUN_MAX_DARKNESS * distT;
-    darkness.position.set(this.pos.x, this.pos.y);
-    darkness.rotation = this.rotationAngle;
-    darkness.blendMode = 'multiply';
-    darkness.visible = overallDarkness > 0;
     if (overallDarkness > 0) {
-      darkness.alpha = overallDarkness;
-      darkness.clear();
-      darkness.roundRect(-this.halfWidth, -this.halfHeight, this.halfWidth * 2, this.halfHeight * 2, this.cornerRadius).fill(0x000000);
+      love.graphics.setBlendMode('alpha');
+      love.graphics.setColor(0, 0, 0, overallDarkness);
+      love.graphics.rectangle('fill', -this.halfWidth, -this.halfHeight, w, h, this.cornerRadius, this.cornerRadius);
     }
-  }
 
-  // NOTE: not currently wired to anything for rectPlanet specifically
-  // — never culled (isPermanent, see levelSetup.js) — but implemented
-  // for correctness rather than leaving a silent gap, same reasoning
-  // as BeamPlanetoid's own destroyPixiSprite.
-  destroyPixiSprite() {
-    if (!this.pixiSprites) return;
-    const { ring, body, sunShading, darkness } = this.pixiSprites;
-    // Unique to this one planet, unlike circular Planetoid's shared
-    // sunOverlay/darkness textures — texture:true here is correct and
-    // doesn't risk breaking anything else.
-    ring?.destroy({ texture: true, textureSource: true });
-    body.destroy({ texture: true, textureSource: true });
-    sunShading?.destroy();
-    darkness?.destroy();
-    this.pixiSprites = null;
+    love.graphics.setBlendMode('alpha');
+    love.graphics.setStencilTest();
+    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.pop();
   }
 }
+
+export default RoundedRectPlanetoid;

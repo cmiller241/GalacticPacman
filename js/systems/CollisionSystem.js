@@ -1,62 +1,62 @@
 // js/systems/CollisionSystem.js
-import { state } from '../state.js';
-import { SURFACE_TOLERANCE, ENEMY_RADIUS, COIN_RADIUS, GROUND_POUND_PUSH_STRENGTH } from '../constants.js';
-import { Vector2 } from '../vector2.js';
-import { createParticles } from '../utils.js';
+//
+// Port of lua/systems/CollisionSystem.lua. (See it for the long-form
+// notes on each pass.)
+//
+// Port notes: Lua's object-keyed "sets" are JS Sets (hitFireballs,
+// killed...) and Maps (handlePlanetAsteroidCollisions: asteroid ->
+// planetoid). Multi-returns come back as arrays.
 
-export class CollisionSystem {
-  // Shared helper: distance from a circle (pos, radius) to a planet's
-  // true surface — nearestSurfacePoint for rect planets, plain
-  // center-distance-minus-radius for circular ones. Used everywhere a
-  // planet might be either shape, so each collision method doesn't need
-  // its own copy of this branch.
+import state from '../state.js';
+import constants from '../constants.js';
+import Vector2 from '../vector2.js';
+
+// Smallest t in [0,1] along a->b where a circle of radius r at (cx,cy)
+// is first entered, or null.
+function sweptCircleEntryT(ax, ay, bx, by, cx, cy, r) {
+  const dx = bx - ax, dy = by - ay;
+  const fx = ax - cx, fy = ay - cy;
+  const a = dx * dx + dy * dy;
+  if (a < 1e-9) return (fx * fx + fy * fy <= r * r) ? 0 : null;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - r * r;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) {
+    if (fx * fx + fy * fy <= r * r) return 0;
+    const gx = bx - cx, gy = by - cy;
+    if (gx * gx + gy * gy <= r * r) return 1;
+    return null;
+  }
+  const sq = Math.sqrt(disc);
+  const t1 = (-b - sq) / (2 * a), t2 = (-b + sq) / (2 * a);
+  if (t1 > 1 || t2 < 0) return null;
+  const tEnter = Math.max(0, t1);
+  // Already resting on the boundary and moving outward: not a collision.
+  if (tEnter <= 0 && c <= 1e-6 && b >= 0) return null;
+  return tEnter;
+}
+
+const FIREBALL_MIRROR_BOUNCE_EXTRA_LIFE = 60;
+const LEVER_HIT_RADIUS = 48;
+
+class CollisionSystem {
+  static new() {
+    return new CollisionSystem();
+  }
+
   distanceToPlanetSurface(pos, planet) {
-    if (planet.isRoundedRect) {
-      return planet.distanceToSurface(pos.x, pos.y);
-    }
+    if (planet.isRoundedRect) return planet.distanceToSurface(pos.x, pos.y);
     return pos.subtract(planet.pos).length() - planet.radius;
   }
 
-  // General-purpose handler for ANY entity tagged isImmovable (FireBar
-  // is the first example, not the only intended one) colliding with
-  // ordinary movable entities (planetoids, asteroids, ...). This is
-  // NOT a special-cased hack — it's the direct physical limit of a
-  // normal elastic collision as one object's mass approaches infinity:
-  // solving the standard two-body elastic collision formula with
-  // m2 -> infinity reduces to "object 1 reflects off the surface
-  // normal (like bouncing off a wall), object 2 is completely
-  // unaffected." So rather than reuse handleElasticCollisions' mass-
-  // ratio math (which assumes both masses are finite and comparable),
-  // this applies that limiting case directly: a plain velocity
-  // reflection for the movable object, zero change for the immovable
-  // one, and the movable object gets pushed the FULL overlap distance
-  // out (not split between both, since only one side is actually free
-  // to move).
   handleImmovableCollisions(immovables, movables) {
     for (const im of immovables) {
       for (const mv of movables) {
-        // Immovable objects never push each other — also correctly
-        // skips a literal self-check on the rare occasions the same
-        // array gets passed for both roles (e.g. immovable planetoids
-        // checked against all planetoids, which naturally includes
-        // themselves).
-        if (mv.isImmovable) continue;
+        if (mv.isImmovable || mv.recalling) continue;
+        let normal = null, targetPos = null;
+        let domeContact = null;
 
-        let normal, targetPos;
-        let domeContact = null; // set only when the dome shell (not the platform body) is what was actually hit
         if (im.isRoundedRect) {
-          // For anything with a dome, an object above the platform's
-          // own top line is checked against the DOME shell instead of
-          // the platform body — the dome sits above and extends
-          // further out than the body alone, so that's the surface
-          // it'll actually reach first. Player landing never goes
-          // through this path at all (see nearestDomeSurfacePoint's
-          // own comment), so this can't affect that.
-          //
-          // Symmetric case below the line: if this immovable has a
-          // metal base ellipse (nearestBaseSurfacePoint), an object
-          // BELOW the top line is checked against THAT curved shape
-          // instead of the plain rectangle — same reasoning, mirrored.
           const topY = im.pos.y - im.halfHeight;
           const usingDome = typeof im.nearestDomeSurfacePoint === 'function' && mv.pos.y < topY;
           const usingBase = !usingDome && typeof im.nearestBaseSurfacePoint === 'function' && mv.pos.y > topY;
@@ -64,54 +64,47 @@ export class CollisionSystem {
           if (usingDome) surface = im.nearestDomeSurfacePoint(mv.pos.x, mv.pos.y);
           else if (usingBase) surface = im.nearestBaseSurfacePoint(mv.pos.x, mv.pos.y);
           else surface = im.nearestSurfacePoint(mv.pos.x, mv.pos.y);
-          // TRUE surface distance/normal here, NOT the bounding-circle
-          // shortcut used below for circular immovables — critical for
-          // a long, thin shape (SkyDomePlanetoid is the motivating
-          // case), where the bounding circle extends far beyond the
-          // true surface in the short direction, causing a collision
-          // to be detected long before anything visually touches it.
-          if (surface.distance >= mv.radius) continue;
-          normal = surface.normal;
-          targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
-          if (usingDome) domeContact = surface.point;
+
+          if (surface.distance < mv.radius) {
+            normal = surface.normal;
+            targetPos = surface.point.clone().add(normal.clone().multiply(mv.radius));
+            if (usingDome) domeContact = surface.point;
+          }
         } else {
           const offset = mv.pos.subtract(im.pos);
           const dist = offset.length();
           const minDist = im.radius + mv.radius;
-          if (dist >= minDist || dist <= 0) continue;
-          normal = offset.normalize();
-          targetPos = im.pos.clone().add(normal.multiply(minDist));
+          if (dist < minDist && dist > 0) {
+            normal = offset.normalize();
+            targetPos = im.pos.clone().add(normal.multiply(minDist));
+          }
         }
 
-        mv.pos = targetPos;
-        const dot = mv.vel.dot(normal);
-        mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
+        if (normal && targetPos) {
+          mv.pos = targetPos;
+          const dot = mv.vel.dot(normal);
+          mv.vel = mv.vel.subtract(normal.multiply(2 * dot));
 
-        // Forcefield reaction — only for an actual dome-shell contact,
-        // not the plain platform body (a glass shield reacting makes
-        // sense; ordinary ground reacting doesn't).
-        if (domeContact && typeof im.triggerShieldImpact === 'function') {
-          const intensity = Math.min(1, mv.radius / 60);
-          im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
+          if (domeContact && typeof im.triggerShieldImpact === 'function') {
+            const intensity = Math.min(1, mv.radius / 60);
+            im.triggerShieldImpact(domeContact.x, domeContact.y, intensity);
+          }
         }
       }
     }
   }
 
-  // The fire bar's block and its rotating fireballs are both lethal to
-  // the player on contact — no bounce/physics interaction for the
-  // player, just instant death, same as touching a spikey planetoid.
   handlePlayerFireBarCollisions(player, fireBars) {
     for (const bar of fireBars) {
       const blockDist = player.pos.subtract(bar.pos).length();
-      if (blockDist <= bar.blockRadius + player.radius + SURFACE_TOLERANCE) {
+      if (blockDist <= bar.blockRadius + player.radius + constants.SURFACE_TOLERANCE) {
         player.startDeath();
         return;
       }
       for (const f of bar.getFireballPositions()) {
         const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist <= f.radius + player.radius + SURFACE_TOLERANCE) {
+        if (dist <= f.radius + player.radius + constants.SURFACE_TOLERANCE) {
           player.startDeath();
           return;
         }
@@ -119,73 +112,89 @@ export class CollisionSystem {
     }
   }
 
-  // entities1/entities2 checked to be genuinely quadratic in a
-  // DevTools Performance capture (Bottom-up view: highest single
-  // self-time entry in the whole profile) — with up to ~180 planetoids
-  // active across a full 3x3 cell neighborhood, that's up to ~16,000
-  // pairwise checks every single frame, unconditionally, regardless of
-  // whether any two planets are anywhere near each other. Fixed with a
-  // spatial-hash broad-phase below: entities2 gets bucketed by grid
-  // cell, and each entity from entities1 only ever gets compared
-  // against others in its own or an immediately-adjacent bucket,
-  // instead of every other entity in the array. All of the actual
-  // collision math (the block below the broad-phase loop) is
-  // byte-for-byte identical to what this method always did — only HOW
-  // pairs get selected for checking changed, not what happens once a
-  // pair is found to actually overlap.
-  handleElasticCollisions(entities1, entities2 = entities1, radiusProp1 = 'radius', radiusProp2 = 'radius', massProp1 = 'mass', massProp2 = 'mass') {
+  // Solid axis-aligned walls — the player as a vertical capsule.
+  handlePlayerWallCollisions(player, walls) {
+    if (!walls) return;
+
+    const onWallClimb = player.onSurface && player.currentPlanet && player.currentPlanet.isWallClimb;
+    const headReach = (!player.isBall && !onWallClimb) ? (player.headReach ?? 0) : 0;
+    const segBottomY = player.pos.y;
+    const segTopY = player.pos.y - Math.max(0, headReach - player.radius);
+
+    for (const wall of walls) {
+      const boxMinX = wall.pos.x - wall.halfWidth, boxMaxX = wall.pos.x + wall.halfWidth;
+      const boxMinY = wall.pos.y - wall.halfHeight, boxMaxY = wall.pos.y + wall.halfHeight;
+
+      const segY = Math.max(segTopY, Math.min(wall.pos.y, segBottomY));
+      const closestX = Math.max(boxMinX, Math.min(player.pos.x, boxMaxX));
+      const closestY = Math.max(boxMinY, Math.min(segY, boxMaxY));
+      const dx = player.pos.x - closestX, dy = segY - closestY;
+      const distSq = dx * dx + dy * dy;
+
+      if (distSq < player.radius * player.radius) {
+        const dist = Math.sqrt(distSq);
+        let normal, penetration;
+
+        if (dist > 1e-6) {
+          normal = Vector2.new(dx / dist, dy / dist);
+          penetration = player.radius - dist;
+        } else {
+          const overlapX = (wall.halfWidth + player.radius) - Math.abs(player.pos.x - wall.pos.x);
+          const overlapY = Math.min(segBottomY + player.radius, boxMaxY) - Math.max(segTopY - player.radius, boxMinY);
+          if (overlapX < overlapY) {
+            normal = Vector2.new(player.pos.x >= wall.pos.x ? 1 : -1, 0);
+            penetration = overlapX;
+          } else {
+            normal = Vector2.new(0, player.pos.y >= wall.pos.y ? 1 : -1);
+            penetration = overlapY;
+          }
+        }
+
+        player.pos.add(normal.multiply(penetration));
+        const intoWall = player.vel.dot(normal);
+        if (intoWall < 0) player.vel = player.vel.subtract(normal.multiply(intoWall));
+
+        if (Math.abs(normal.x) > Math.abs(normal.y)) {
+          player.touchingWall = wall;
+          player.wallContactNormal = normal.clone();
+        }
+
+        if (player.onSurface && player.currentPlanet
+            && typeof player.currentPlanet.arcPositionForWorldPoint === 'function') {
+          player.surfaceArcPos = player.currentPlanet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+        }
+      }
+    }
+  }
+
+  handleElasticCollisions(entities1, entities2, radiusProp1, radiusProp2, massProp1, massProp2) {
+    entities2 = entities2 ?? entities1;
+    radiusProp1 = radiusProp1 ?? 'radius';
+    radiusProp2 = radiusProp2 ?? 'radius';
+    massProp1 = massProp1 ?? 'mass';
+    massProp2 = massProp2 ?? 'mass';
     const sameArray = entities1 === entities2;
 
-    // Grid cell size computed from the ACTUAL max radius present in
-    // this call, not a fixed guess — deliberately NOT reusing
-    // worldGen.js's own CELL_SIZE (3000, used for world streaming):
-    // state.planetoids/asteroids already only ever contain the active
-    // 3x3 streaming neighborhood's worth of entities, so bucketing at
-    // that same coarse granularity would put nearly the whole active
-    // set into just 9 buckets — no real improvement over the O(n^2)
-    // check this replaces. This needs a MUCH finer granularity, sized
-    // to the actual collision distances involved instead. Computed
-    // dynamically rather than hardcoded specifically because
-    // state.planetoids mixes small, uniform worldGen.js planets
-    // (radius 30-70) with much larger permanent ones (mazePlanet/
-    // platformPlanet at radius 250) — a fixed size tuned only to the
-    // small ones could let two large planets overlap without ever
-    // landing in the same or an adjacent bucket, silently missing a
-    // real collision (objects passing through each other) rather than
-    // just costing more than necessary. This way the grid is always
-    // sized correctly for whatever's actually present, regardless of
-    // which specific planetoid subclasses do or don't end up tagged
-    // isImmovable — genuinely verified, not assumed, since I don't
-    // have visibility into every planetoid subclass this session.
     let maxRadius = 0;
     for (const e of entities1) {
       const r = e[radiusProp1];
-      if (r > maxRadius) maxRadius = r;
+      if (r && r > maxRadius) maxRadius = r;
     }
     if (!sameArray) {
       for (const e of entities2) {
         const r = e[radiusProp2];
-        if (r > maxRadius) maxRadius = r;
+        if (r && r > maxRadius) maxRadius = r;
       }
     }
-    // Two entities can only ever collide within (their two radii
-    // summed) of each other — at most 2x the single largest radius
-    // present. A grid cell at least that large guarantees any real
-    // collision lands in the same or an immediately-adjacent cell;
-    // the 50 floor just avoids a degenerate near-zero grid if
-    // everything passed in happens to be tiny.
     const gridSize = Math.max(maxRadius * 2, 50);
 
     const grid = new Map();
-    for (let j = 0; j < entities2.length; j++) {
-      const e = entities2[j];
-      const col = Math.floor(e.pos.x / gridSize);
-      const row = Math.floor(e.pos.y / gridSize);
-      const key = `${col},${row}`;
+    entities2.forEach((e, j) => {
+      const key = Math.floor(e.pos.x / gridSize) + ',' + Math.floor(e.pos.y / gridSize);
       let bucket = grid.get(key);
       if (!bucket) { bucket = []; grid.set(key, bucket); }
       bucket.push(j);
-    }
+    });
 
     for (let i = 0; i < entities1.length; i++) {
       const p1 = entities1[i];
@@ -194,44 +203,33 @@ export class CollisionSystem {
 
       for (let dRow = -1; dRow <= 1; dRow++) {
         for (let dCol = -1; dCol <= 1; dCol++) {
-          const bucket = grid.get(`${col + dCol},${row + dRow}`);
+          const bucket = grid.get((col + dCol) + ',' + (row + dRow));
           if (!bucket) continue;
-
           for (const j of bucket) {
-            // Same dedup guarantee the original i+1 loop-bound gave —
-            // each unordered pair checked exactly once, no self-pairs
-            // — just expressed as a condition instead of a loop bound,
-            // since j no longer walks a fixed, ordered range here.
             if (sameArray && j <= i) continue;
-
             const p2 = entities2[j];
-            // Immovable objects are handled exclusively by
-            // handleImmovableCollisions, which uses true surface
-            // distance for rect-type shapes instead of this method's
-            // bounding-circle-based check — critical for anything
-            // long/thin, where that circle badly overshoots the true
-            // surface.
-            if (p1.isImmovable || p2.isImmovable) continue;
+            if (p1.isImmovable || p2.isImmovable || p1.recalling || p2.recalling) continue;
             const offset = p1.pos.subtract(p2.pos);
             const distSq = offset.lengthSq();
             const sumR = p1[radiusProp1] + p2[radiusProp2];
-            const sumRSq = sumR * sumR;
-            if (distSq < sumRSq) {
+            if (distSq < sumR * sumR && distSq > 0) {
               const dist = Math.sqrt(distSq);
               const overlap = sumR - dist;
               const normal = offset.normalize();
-              const tangent = new Vector2(-normal.y, normal.x);
-              const m1 = p1[massProp1], m2 = p2[massProp2], totalMass = m1 + m2;
-              const sep1 = overlap * (m2 / totalMass), sep2 = overlap * (m1 / totalMass);
+              const tangent = Vector2.new(-normal.y, normal.x);
+              const m1 = p1[massProp1], m2 = p2[massProp2];
+              const totalMass = m1 + m2;
+              const sep1 = overlap * (m2 / totalMass);
+              const sep2 = overlap * (m1 / totalMass);
               p1.pos.add(normal.multiply(sep1));
               p2.pos.add(normal.multiply(-sep2));
               const v1 = p1.vel.clone(), v2 = p2.vel.clone();
               const v1n = normal.dot(v1), v2n = normal.dot(v2);
               const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
-              const new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
-              const new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
-              p1.vel = normal.multiply(new_v1n).add(tangent.multiply(v1t));
-              p2.vel = normal.multiply(new_v2n).add(tangent.multiply(v2t));
+              const newV1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
+              const newV2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
+              p1.vel = normal.multiply(newV1n).add(tangent.multiply(v1t));
+              p2.vel = normal.multiply(newV2n).add(tangent.multiply(v2t));
             }
           }
         }
@@ -240,37 +238,14 @@ export class CollisionSystem {
   }
 
   handlePlayerPlanetCollisions(player) {
-    for (const planet of state.planetoids.filter(p => p.isSpikey)) {
-      const dist = player.pos.subtract(planet.pos).length();
-      if (dist <= planet.radius + player.radius + SURFACE_TOLERANCE) {
-        player.startDeath();
-        return;
-      }
-    }
-
     if (player.onSurface) return;
 
-    // While actively pulling toward a planet (right-click grapple
-    // held), pass straight through every regular (non-spikey)
-    // planetoid EXCEPT the one being pulled toward — touching that one
-    // lands the player normally and ends the pull, same as flying into
-    // any planet normally would. Everything else stays passable so the
-    // pull remains useful for fast traversal through dense fields (the
-    // belt especially) rather than getting stopped by incidental
-    // planets along the way. The spikey check above is NOT gated on
-    // this — it stays fully lethal regardless of pulling, including
-    // for a spikey pull target (by the time execution reaches here,
-    // being close enough to a spikey pullTarget to land on it would
-    // already have killed the player above, so the isSpikey guard
-    // below is just belt-and-suspenders clarity, not load-bearing).
     if (player.pullTarget) {
-      if (!player.pullTarget.isSpikey && this.tryLandOnPlanet(player, player.pullTarget)) {
-        player.pullTarget = null; // touching the target ends the pull
-      }
+      if (this.tryLandOnPlanet(player, player.pullTarget)) player.pullTarget = null;
       return;
     }
 
-    for (const planet of state.planetoids.filter(p => !p.isSpikey)) {
+    for (const planet of state.planetoids) {
       if (this.tryLandOnPlanet(player, planet)) return;
     }
 
@@ -278,75 +253,156 @@ export class CollisionSystem {
     player.currentPlanet = null;
   }
 
-  // Attempts to land the player on a single planet (rounded-rect or
-  // circular). Returns true if landing occurred. Factored out of
-  // handlePlayerPlanetCollisions so the same logic can be applied
-  // either across the full planet list (normal flight) or to just one
-  // specific planet (the pull target, while otherwise passing through
-  // everything else — see above).
+  // Spikeys: solid, lethal obstacles — swept so fast movement can't skip them.
+  handlePlayerSpikeyCollisions(player, spikeys) {
+    if (!spikeys) return;
+    const prevPos = player.prevPos ?? player.pos;
+    for (const spikey of spikeys) {
+      const r = spikey.radius + player.radius + constants.SURFACE_TOLERANCE;
+      const t = sweptCircleEntryT(prevPos.x, prevPos.y, player.pos.x, player.pos.y, spikey.pos.x, spikey.pos.y, r);
+      if (t != null) {
+        player.pos.x = prevPos.x + (player.pos.x - prevPos.x) * t;
+        player.pos.y = prevPos.y + (player.pos.y - prevPos.y) * t;
+
+        const nx = player.pos.x - spikey.pos.x, ny = player.pos.y - spikey.pos.y;
+        const ndist = Math.sqrt(nx * nx + ny * ny);
+        const normal = ndist > 1e-6 ? Vector2.new(nx / ndist, ny / ndist) : Vector2.new(0, -1);
+
+        const into = player.vel.dot(normal);
+        if (into < 0) player.vel = player.vel.subtract(normal.multiply(into));
+
+        player.touchingWall = spikey;
+        player.wallContactNormal = normal;
+        player.startDeath();
+      }
+    }
+  }
+
+  // Keeps the player sealed inside the SkyDomePlanetoid.
+  handlePlayerSkyDomeContainment(player, dome) {
+    if (!dome) return;
+    if (player.isTeleporting) return;
+
+    const deckY = dome.trueSurfaceY();
+    const domeTopY = dome.domeAnchorY() - dome.domeRadiusY;
+    const MARGIN = 200;
+
+    if (player.pos.y < domeTopY - MARGIN || player.pos.y > deckY + MARGIN) return;
+    if (Math.abs(player.pos.x - dome.pos.x) > dome.halfWidth + MARGIN) return;
+
+    const r = player.radius;
+
+    const minX = dome.pos.x - dome.halfWidth + r;
+    const maxX = dome.pos.x + dome.halfWidth - r;
+    if (player.pos.x < minX) {
+      player.pos.x = minX;
+      if (player.vel.x < 0) player.vel.x = 0;
+    } else if (player.pos.x > maxX) {
+      player.pos.x = maxX;
+      if (player.vel.x > 0) player.vel.x = 0;
+    }
+
+    const restY = deckY - r;
+    if (player.pos.y > restY) {
+      player.pos.y = restY;
+      if (player.vel.y > 0) player.vel.y = 0;
+    }
+
+    const cx = dome.pos.x, cy = dome.domeAnchorY();
+    const rx = dome.domeRadiusX, ry = dome.domeRadiusY;
+    if (player.pos.y < cy) {
+      const nx = (player.pos.x - cx) / rx;
+      const ny = (player.pos.y - cy) / ry;
+      const nDist = Math.sqrt(nx * nx + ny * ny);
+      if (nDist > 0.0001) {
+        const boundaryDist = 1 - r / ((rx + ry) / 2);
+        if (nDist > boundaryDist) {
+          const scale = boundaryDist / nDist;
+          player.pos.x = cx + nx * rx * scale;
+          player.pos.y = cy + ny * ry * scale;
+
+          const normal = Vector2.new(nx / rx, ny / ry).normalize();
+          const outward = player.vel.dot(normal);
+          if (outward > 0) player.vel = player.vel.subtract(normal.multiply(outward));
+        }
+      }
+    }
+  }
+
   tryLandOnPlanet(player, planet) {
     if (planet.isRoundedRect) {
-      // SkyDomePlanetoid is only landable from within its top-only
-      // gravity window — without this, momentum, a pull-star yank, or
-      // a ground-pound knockback could still land the player on the
-      // side or underside via the generic nearest-surface-point check
-      // below, even though gravity would never have pulled them there
-      // (exactly the "stuck to the underside" weirdness the top-only
-      // window was built to avoid in the first place).
-      if (planet.isSkyDome && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) {
-        return false;
+      if (planet.isSkyDome) {
+        if (typeof planet.isWithinGravityWindow === 'function'
+            && !planet.isWithinGravityWindow(player.pos.x, player.pos.y)) return false;
+        if (player.vel.y < 0) return false;
       }
-      // isSkyDome planets are deliberately pass-through from below —
-      // jumping up INTO one from underneath, with enough speed to
-      // still be closing in on the top surface while still ascending,
-      // would otherwise trigger the same instant landing snap normal
-      // falling uses (which is invisible there, since downward
-      // velocity already carries the player toward where the snap
-      // places them anyway). Mid-ascent, that snap instead freezes
-      // upward momentum and teleports the player the rest of the way
-      // in one frame — the "blip" this guard exists to prevent. Once
-      // vel.y >= 0 (falling, or right at the peak), landing proceeds
-      // normally and reads exactly like landing on anything else.
-      if (planet.isSkyDome && player.vel.y < 0) {
-        return false;
+
+      let surface;
+      if (planet.isOpenPath && typeof planet.findLandingCrossing === 'function') {
+        const prev = player.prevPos ?? player.pos;
+        surface = planet.findLandingCrossing(prev.x, prev.y, player.pos.x, player.pos.y);
+        if (!surface) return false;
+      } else {
+        surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
       }
-      const surface = planet.nearestSurfacePoint(player.pos.x, player.pos.y);
-      if (surface.distance <= player.radius + SURFACE_TOLERANCE) {
-        player.pos = surface.point.clone().add(surface.normal.clone().multiply(player.radius));
+
+      if (surface.distance <= player.radius + constants.SURFACE_TOLERANCE) {
+        if (planet.isSkyDome) {
+          const minX = planet.pos.x - planet.halfWidth;
+          const maxX = planet.pos.x + planet.halfWidth;
+          if (player.pos.x < minX - player.radius || player.pos.x > maxX + player.radius) return false;
+        }
+
+        const restOffset = planet.forceUprightJump
+          ? Vector2.new(0, -player.radius)
+          : surface.normal.clone().multiply(player.radius);
+        player.pos = surface.point.clone().add(restOffset);
         player.onSurface = true;
         player.currentPlanet = planet;
         player.lastInfluencePlanet = planet;
-        player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y);
+
+        if (typeof planet.arcPositionForWorldPoint === 'function') {
+          player.surfaceArcPos = planet.arcPositionForWorldPoint(player.pos.x, player.pos.y, true);
+        } else if (planet.isSkyDome) {
+          player.surfaceArcPos = player.pos.x - (planet.pos.x - planet.halfWidth);
+        }
+
         const impactVel = player.vel.clone();
-        player.vel = new Vector2(0, 0);
+        player.vel = Vector2.new(0, 0);
+
         if (player.isGroundPounding) {
           player.isGroundPounding = false;
-          const pushDir = surface.normal.clone().multiply(-1);
-          planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-          createParticles(player.pos, 20);
+          if (!planet.isImmovable) {
+            const pushDir = surface.normal.clone().multiply(-1);
+            planet.vel.add(pushDir.multiply(impactVel.length() * constants.GROUND_POUND_PUSH_STRENGTH));
+          }
         }
         return true;
       }
       return false;
     }
 
+    // Water planets are never solid ground.
+    if (planet.isWaterPlanet) return false;
+
     const offset = player.pos.subtract(planet.pos);
     const dist = offset.length();
     const surfaceDist = planet.radius + player.radius;
-    if (dist <= surfaceDist + SURFACE_TOLERANCE) {
+    if (dist <= surfaceDist + constants.SURFACE_TOLERANCE) {
       const normal = offset.normalize();
       player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
       player.onSurface = true;
       player.currentPlanet = planet;
       player.lastInfluencePlanet = planet;
       const impactVel = player.vel.clone();
-      player.vel = new Vector2(0, 0);
+      player.vel = Vector2.new(0, 0);
       player.angle = Math.atan2(player.pos.y - planet.pos.y, player.pos.x - planet.pos.x);
       if (player.isGroundPounding) {
         player.isGroundPounding = false;
-        const pushDir = normal.multiply(-1);
-        planet.vel.add(pushDir.multiply(impactVel.length() * GROUND_POUND_PUSH_STRENGTH));
-        createParticles(player.pos, 20);
+        if (!planet.isImmovable) {
+          const pushDir = normal.multiply(-1);
+          planet.vel.add(pushDir.multiply(impactVel.length() * constants.GROUND_POUND_PUSH_STRENGTH));
+        }
       }
       return true;
     }
@@ -354,10 +410,11 @@ export class CollisionSystem {
   }
 
   handlePlayerAsteroidCollisions(player, asteroids) {
+    if (!asteroids) return;
     for (const a of asteroids) {
       const dist = player.pos.subtract(a.pos).length();
       if (dist <= player.radius + a.radius) {
-        player.startDeath();
+        if (player.startDeath) player.startDeath();
         return;
       }
     }
@@ -366,82 +423,81 @@ export class CollisionSystem {
   handlePlayerEnemyCollisions(player, enemies) {
     for (const e of enemies) {
       const dist = player.pos.subtract(e.pos).length();
-      if (dist <= player.radius + ENEMY_RADIUS) {
+      if (dist <= player.radius + constants.ENEMY_RADIUS) {
         player.startDeath();
         return;
       }
     }
   }
 
-  // Distinguishes a stomp (jump on its head — kills it) from a
-  // damaging side/underneath touch (kills the player), the classic
-  // Mario-style rule: the player's center needs to be meaningfully
-  // above the goomba's own center, AND moving downward (or at least
-  // not actively still rising from a jump) — landing squarely on top,
-  // not just brushing past. Returns the list of goombas that got
-  // stomped (game.js removes them and gives the player a bounce); any
-  // non-stomp touch calls player.startDeath() directly here, same as
-  // handlePlayerEnemyCollisions above (which already safely no-ops
-  // during invincibility, so no extra guard needed here either).
   handlePlayerGoombaCollisions(player, goombas) {
     const stomped = [];
     for (const g of goombas) {
       const dist = player.pos.subtract(g.pos).length();
-      if (dist > player.radius + g.radius) continue;
-
-      const isStomp = (g.pos.y - player.pos.y) > g.radius * 0.3 && player.vel.y >= 0;
-      if (isStomp) {
-        stomped.push(g);
-      } else {
-        player.startDeath();
+      if (dist <= player.radius + g.radius) {
+        const isStomp = (g.pos.y - player.pos.y) > g.radius * 0.3 && player.vel.y >= 0;
+        if (isStomp) stomped.push(g);
+        else player.startDeath();
       }
     }
     return stomped;
   }
 
-  // Same shape as handleFireballCollisions below, for goombas
-  // specifically — a separate method rather than folding into that
-  // one, since goombas aren't planetoids/asteroids and have their own
-  // simple circle-only collision (no surface-distance concept to
-  // reuse from distanceToPlanetSurface).
-  handleFireballGoombaCollisions(fireballs, goombas) {
-    const hitFireballs = new Set();
-    const killedGoombas = new Set();
+  // Returns the Ooombas that finished going flat THIS frame.
+  handlePlayerOoombaCollisions(player, ooombas) {
+    const flattened = [];
+    if (!ooombas) return flattened;
 
+    for (const o of ooombas) {
+      if (!o.isSquashing && !player.isDying && !o.portalTransit) {
+        const dx = player.pos.x - o.pos.x, dy = player.pos.y - o.pos.y;
+        const r = player.radius + o.hitRadius;
+        if (dx * dx + dy * dy <= r * r) {
+          if (o.isStompedBy(player)) o.startSquash();
+          else player.startDeath();
+        }
+      }
+      if (o.isSquashing && o.updateSquash(player)) flattened.push(o);
+    }
+    return flattened;
+  }
+
+  // -> [Set hitFireballs, Set killedOoombas]
+  handleFireballOoombaCollisions(fireballs, ooombas) {
+    const hitFireballs = new Set();
+    const killed = new Set();
     for (const f of fireballs) {
-      for (const g of goombas) {
-        if (killedGoombas.has(g)) continue; // already killed by an earlier fireball this same frame
-        const dist = f.pos.subtract(g.pos).length();
-        if (dist < f.radius + g.radius) {
+      for (const o of ooombas) {
+        if (killed.has(o)) continue;
+        const dist = f.pos.subtract(o.pos).length();
+        if (dist < f.radius + o.hitRadius) {
           hitFireballs.add(f);
-          killedGoombas.add(g);
+          killed.add(o);
           break;
         }
       }
     }
-
-    return { hitFireballs, killedGoombas };
+    return [hitFireballs, killed];
   }
 
-  // Always-lethal-on-touch, mirroring handlePlayerEnemyCollisions'
-  // pattern above rather than handlePlayerGoombaCollisions' stomp
-  // mechanic — stomping is a more deliberate, specific design choice
-  // (also needs a bounce-response wired up wherever it's called from,
-  // same as goombas), not assumed here without being asked for it
-  // specifically for blobs.
-  //
-  // b.getWorldPos() is doing real work here, not just following
-  // convention: BlobMonster's own .pos is LOCAL to its interior's tile
-  // grid (0,0 = top-left corner, only ever converted to world space at
-  // draw time), while player.pos is already world-space — comparing
-  // them directly would silently measure distance between two
-  // different coordinate systems, not a crash, just meaningless
-  // collision detection.
-  //
-  // Uses player.platformHalfExtent, NOT player.radius — the latter is
-  // space-mode's own, unrelated collision size; reusing it here would
-  // reintroduce the exact same visual/collision coupling bug already
-  // found and fixed once for platform-mode tile collision.
+  // -> [Set hitFireballs, Set killedGoombas]
+  handleFireballGoombaCollisions(fireballs, goombas) {
+    const hitFireballs = new Set();
+    const killed = new Set();
+    for (const f of fireballs) {
+      for (const g of goombas) {
+        if (killed.has(g)) continue;
+        const dist = f.pos.subtract(g.pos).length();
+        if (dist < f.radius + g.radius) {
+          hitFireballs.add(f);
+          killed.add(g);
+          break;
+        }
+      }
+    }
+    return [hitFireballs, killed];
+  }
+
   handlePlayerBlobCollisions(player, blobs) {
     for (const b of blobs) {
       const dist = player.pos.subtract(b.getWorldPos()).length();
@@ -452,80 +508,66 @@ export class CollisionSystem {
     }
   }
 
-  // Same shape as handleFireballGoombaCollisions above, mirrored for
-  // blob monsters — same getWorldPos() reasoning as
-  // handlePlayerBlobCollisions above applies here too.
   handleFireballBlobCollisions(fireballs, blobs) {
     const hitFireballs = new Set();
-    const killedBlobs = new Set();
-
+    const killed = new Set();
     for (const f of fireballs) {
       for (const b of blobs) {
-        if (killedBlobs.has(b)) continue; // already killed by an earlier fireball this same frame
+        if (killed.has(b)) continue;
         const dist = f.pos.subtract(b.getWorldPos()).length();
         if (dist < f.radius + b.radius) {
           hitFireballs.add(f);
-          killedBlobs.add(b);
+          killed.add(b);
           break;
         }
       }
     }
-
-    return { hitFireballs, killedBlobs };
+    return [hitFireballs, killed];
   }
 
   handleCoinCollisions(player, coins) {
     for (let i = coins.length - 1; i >= 0; i--) {
       const c = coins[i];
       const dist = player.pos.subtract(c.pos).length();
-      if (dist <= player.radius + COIN_RADIUS) {
-        state.audioManager.playEatDot();
+      if (dist <= player.radius + constants.COIN_RADIUS) {
+        if (state.audioManager) state.audioManager.playEatDot();
         coins.splice(i, 1);
-        state.score++;
+        state.score = state.score + 1;
       }
     }
   }
 
+  // -> Map asteroid -> the planetoid it hit.
   handlePlanetAsteroidCollisions(planetoids, asteroids) {
-    const toBreak = new Set();
-    // Original doesn't add to toBreak on every collision, but assume all planet-asteroid collisions break asteroid
-    for (let p of planetoids) {
-      for (let a of asteroids) {
-        const dist = this.distanceToPlanetSurface(a.pos, p);
-        if (dist < a.radius) {
-          toBreak.add(a);
-          continue;
+    const toBreak = new Map();
+    if (!asteroids) return toBreak;
+
+    for (const p of planetoids) {
+      for (const a of asteroids) {
+        if (!p.isSkyDome) {
+          const dist = this.distanceToPlanetSurface(a.pos, p);
+          if (dist < a.radius) toBreak.set(a, p);
         }
-        // Dome shell — a completely separate surface from the
-        // platform body, only relevant for planets that actually have
-        // one, and only for asteroids approaching from above the
-        // platform's own top line (see nearestDomeSurfacePoint's own
-        // comment for why this stays out of distanceToPlanetSurface).
+
         if (typeof p.nearestDomeSurfacePoint === 'function') {
-          const topY = p.pos.y - p.halfHeight;
+          const topY = p.pos.y - (p.halfHeight ?? 0);
           if (a.pos.y < topY) {
             const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
             if (domeSurface.distance < a.radius) {
-              toBreak.add(a);
+              toBreak.set(a, p);
               if (typeof p.triggerShieldImpact === 'function') {
                 const intensity = Math.min(1, a.radius / 45);
                 p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
               }
-              continue;
             }
           }
         }
-        // Metal base ellipse — symmetric case below the platform's own
-        // top line. No shield-impact trigger here: that effect is
-        // specifically a glass/energy-shield reaction, and doesn't fit
-        // a solid metal surface the same way.
+
         if (typeof p.nearestBaseSurfacePoint === 'function') {
-          const topY = p.pos.y - p.halfHeight;
+          const topY = p.pos.y - (p.halfHeight ?? 0);
           if (a.pos.y > topY) {
             const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
-            if (baseSurface.distance < a.radius) {
-              toBreak.add(a);
-            }
+            if (baseSurface.distance < a.radius) toBreak.set(a, p);
           }
         }
       }
@@ -533,20 +575,82 @@ export class CollisionSystem {
     return toBreak;
   }
 
-  // Checks every fireball against every asteroid, then every planetoid.
-  // Each fireball can only register a single hit per frame (whichever
-  // it's found to overlap first) — once it's hit something, it's spent
-  // and doesn't get checked against further targets.
-  //
-  // Returns:
-  //   hitFireballs     — Set of fireballs that hit something this frame
-  //                       (caller should remove these from state.fireballs)
-  //   toBreakAsteroids — Set of asteroids to break (pass to the
-  //                       existing breakAsteroid() in game.js, same as
-  //                       planet-asteroid collisions already do)
-  //   planetHits       — array of { fireball, planet } pairs, for the
-  //                       caller to apply a push impulse + spawn an
-  //                       explosion at each impact
+  // Fireball vs WALL tiles (only those flagged isWall). -> Set
+  handleFireballWallCollisions(fireballs, walls) {
+    const hitFireballs = new Set();
+    if (!walls) return hitFireballs;
+
+    for (const f of fireballs) {
+      if (hitFireballs.has(f)) continue;
+      for (const wall of walls) {
+        if (!wall.isWall) continue;
+        const boxMinX = wall.pos.x - wall.halfWidth, boxMaxX = wall.pos.x + wall.halfWidth;
+        const boxMinY = wall.pos.y - wall.halfHeight, boxMaxY = wall.pos.y + wall.halfHeight;
+        const closestX = Math.max(boxMinX, Math.min(f.pos.x, boxMaxX));
+        const closestY = Math.max(boxMinY, Math.min(f.pos.y, boxMaxY));
+        const dx = f.pos.x - closestX, dy = f.pos.y - closestY;
+        if (dx * dx + dy * dy < f.radius * f.radius) {
+          hitFireballs.add(f);
+          break;
+        }
+      }
+    }
+    return hitFireballs;
+  }
+
+  // Fireball vs Lever: engages it. -> Set
+  handleFireballLeverCollisions(fireballs, levers) {
+    const hitFireballs = new Set();
+    if (!levers) return hitFireballs;
+
+    for (const f of fireballs) {
+      for (const lever of levers) {
+        const dx = f.pos.x - lever.pos.x, dy = f.pos.y - lever.pos.y;
+        const minDist = f.radius + LEVER_HIT_RADIUS;
+        if (dx * dx + dy * dy < minDist * minDist) {
+          lever.engage();
+          hitFireballs.add(f);
+          break;
+        }
+      }
+    }
+    return hitFireballs;
+  }
+
+  // Fireball vs Mirror: reflects it. -> Set of reflected fireballs
+  handleFireballMirrorCollisions(fireballs, mirrors) {
+    const reflected = new Set();
+    if (!mirrors) return reflected;
+
+    for (const f of fireballs) {
+      for (const m of mirrors) {
+        const cosA = Math.cos(m.angle), sinA = Math.sin(m.angle);
+        const dx = f.pos.x - m.pos.x, dy = f.pos.y - m.pos.y;
+        const localX = dx * cosA + dy * sinA;
+        const localY = -dx * sinA + dy * cosA;
+
+        if (Math.abs(localX) < m.halfLength + f.radius && Math.abs(localY) < m.halfThickness + f.radius) {
+          const vx = f.vel.x, vy = f.vel.y;
+          const localVX = vx * cosA + vy * sinA;
+          const localVY = -(-vx * sinA + vy * cosA);
+
+          f.vel.x = localVX * cosA - localVY * sinA;
+          f.vel.y = localVX * sinA + localVY * cosA;
+
+          const pushLocalY = (localY >= 0 ? 1 : -1) * (m.halfThickness + f.radius + 1);
+          f.pos.x = m.pos.x + localX * cosA - pushLocalY * sinA;
+          f.pos.y = m.pos.y + localX * sinA + pushLocalY * cosA;
+
+          f.life += FIREBALL_MIRROR_BOUNCE_EXTRA_LIFE;
+          reflected.add(f);
+          break;
+        }
+      }
+    }
+    return reflected;
+  }
+
+  // -> [Set hitFireballs, Set toBreakAsteroids, planetHits[]]
   handleFireballCollisions(fireballs, planetoids, asteroids) {
     const hitFireballs = new Set();
     const toBreakAsteroids = new Set();
@@ -564,63 +668,41 @@ export class CollisionSystem {
           break;
         }
       }
-      if (hit) continue;
 
-      for (const p of planetoids) {
-        if (p.isSkyDome) {
-          // Semi-solid from below/the side, like a classic Mario-style
-          // platform — fireballs only ever collide with the TOP
-          // surface, same top-only concept already used for player
-          // gravity/landing and the dome/base's own curved collision.
-          // Without this, a "grounded" platform's own collision
-          // rectangle (which now extends all the way down to the
-          // ground via its pillar) would register an immediate hit
-          // for a fireball fired anywhere near or underneath it —
-          // reading as "shooting immediately explodes" even though
-          // nothing was genuinely hit from above.
-          const topY = p.pos.y - p.halfHeight;
-          if (f.pos.y >= topY) continue;
-
-          // Above the line — check the DOME's curved shell (if this
-          // planet has one) instead of the generic flat rect surface.
-          // Same reasoning as handleImmovableCollisions: the dome
-          // sits above and extends further out than the rect body
-          // alone, so that's the surface a fireball fired upward from
-          // inside will actually reach — without this, fireballs pass
-          // straight through the dome, since the generic rect check
-          // only ever measures distance to the flat line the player
-          // walks on, which a fireball moving away from is unlikely to
-          // ever get close to again.
-          if (typeof p.nearestDomeSurfacePoint === 'function') {
-            const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
-            if (domeSurface.distance < f.radius) {
+      if (!hit) {
+        for (const p of planetoids) {
+          let skipRest = false;
+          if (p.isSkyDome) {
+            const topY = p.pos.y - (p.halfHeight ?? 0);
+            if (f.pos.y >= topY) {
+              skipRest = true;
+            } else if (typeof p.nearestDomeSurfacePoint === 'function') {
+              const domeSurface = p.nearestDomeSurfacePoint(f.pos.x, f.pos.y);
+              if (domeSurface.distance < f.radius) {
+                hitFireballs.add(f);
+                planetHits.push({ fireball: f, planet: p });
+                if (typeof p.triggerShieldImpact === 'function') {
+                  const intensity = Math.min(1, f.radius / 45);
+                  p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
+                }
+              }
+              skipRest = true;
+            }
+          }
+          if (!skipRest) {
+            const dist = this.distanceToPlanetSurface(f.pos, p);
+            if (dist < f.radius) {
               hitFireballs.add(f);
               planetHits.push({ fireball: f, planet: p });
-              if (typeof p.triggerShieldImpact === 'function') {
-                const intensity = Math.min(1, f.radius / 45); // same intensity formula as asteroid impacts — a fireball is roughly that scale
-                p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
-              }
+              break;
             }
-            continue;
           }
-        }
-        const dist = this.distanceToPlanetSurface(f.pos, p);
-        if (dist < f.radius) {
-          hitFireballs.add(f);
-          planetHits.push({ fireball: f, planet: p });
-          break;
         }
       }
     }
-
-    return { hitFireballs, toBreakAsteroids, planetHits };
+    return [hitFireballs, toBreakAsteroids, planetHits];
   }
 
-  // Maze ghosts track grid coordinates (mazeCol/mazeRow), same as the
-  // player does while in the maze — so this is a tile match, not a
-  // distance check. Any death this triggers goes through
-  // player.startDeath(), which already handles the invincibility
-  // window on its own, so no special-casing is needed here.
   handlePlayerMazeGhostCollisions(player, ghosts) {
     if (!ghosts) return;
     for (const g of ghosts) {
@@ -631,3 +713,5 @@ export class CollisionSystem {
     }
   }
 }
+
+export default CollisionSystem;
