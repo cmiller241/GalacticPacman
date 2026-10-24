@@ -128,6 +128,26 @@ function CharacterShadows.drawOnto(level)
   love.graphics.setShader()
 end
 
+-- The shadows on whatever drawFn draws — only on its own pixels, the
+-- same way drawOnto keeps them to the level's tiles: drawFn is called
+-- again with the shadow shader on, so where it draws a solid pixel the
+-- shadow shows, and where it's clear, nothing does. For scenery drawn
+-- outside the level (the Space Shelter — see main.lua). Call right after
+-- drawing the thing itself, in world space.
+function CharacterShadows.drawOntoSprite(drawFn)
+  if not (anyCaster and casters) then return end
+  local s = getShader()
+  local pw, ph = casters:getPixelDimensions()
+  s:send("casters", casters)
+  s:send("castersSize", { pw, ph })
+  s:send("softPx", SOFTNESS * (state.zoom or 1) * casters:getDPIScale())
+  s:send("strength", STRENGTH)
+  local prevShader = love.graphics.getShader()
+  love.graphics.setShader(s)
+  drawFn()
+  love.graphics.setShader(prevShader)
+end
+
 -- Shadows on state.ooombas[index] from the Ooombas drawn after it (in
 -- front of it — later in the list draws on top) that are close enough
 -- to reach it. Call right after drawing it, in world space. The same
