@@ -1,54 +1,60 @@
 // js/entities/Particle.js
-import { state } from '../state.js';
-import { Vector2 } from '../vector2.js';
+//
+// A single simple physics particle (position + velocity + fading
+// life), used for debris/death/explosion bursts, dust and splashes.
 
-export class Particle {
+import love from '../love/index.js';
+import state from '../state.js';
+
+class Particle {
+  static new(pos, vel, life) {
+    return new Particle(pos, vel, life);
+  }
+
   constructor(pos, vel, life = 40) {
     this.pos = pos.clone();
     this.vel = vel;
     this.life = life;
-    // Stored separately from the live-decrementing life above, so the
-    // alpha fade in draw() scales correctly regardless of what life
-    // value was passed in — previously hardcoded to /40, which was
-    // wrong for any particle NOT created with the default life.
     this.maxLife = life;
-    // Any valid CSS color string (hex, rgb, hsl, named) — alpha is
-    // applied separately via globalAlpha in draw() rather than baked
-    // into this string, so it works regardless of format. Defaults to
-    // the original hardcoded yellow, so any existing caller that
-    // doesn't set this explicitly (e.g. Player.js's teleport
-    // particles) looks exactly the same as before.
-    //
-    // NOTE: draw() previously never actually read this property at
-    // all — it was hardcoded to rgba(255,255,0,...) regardless of what
-    // callers set here, silently no-op-ing utils.js's
-    // createDeathParticles' own color override. Fixed below.
-    this.color = 'rgb(255, 255, 0)';
-    this.radius = 2; // matches the original hardcoded draw size
-    // Both default to "no effect," so any existing caller that doesn't
-    // set these explicitly (every current caller) behaves exactly as
-    // before.
-    this.drag = 1;     // velocity multiplier applied per frame — 1 = constant velocity forever, <1 = decelerates over time
-    this.growRate = 0; // radius change per frame — 0 = constant size, positive = expands over its lifetime
+    // Plain [r, g, b] (0-1). Defaults to yellow.
+    this.color = [1, 1, 0];
+    this.radius = 2;
+    // Both default to "no effect": 1 = constant velocity forever, 0 =
+    // constant size.
+    this.drag = 1;
+    this.growRate = 0;
+    // Optional — null by default, so ordinary particles (explosions,
+    // sparks, etc.) draw as a single plain circle. When set (see
+    // DustPuff.js), a list of {angle, distFrac, radiusFrac} blobs, each
+    // positioned/sized as a FRACTION of the particle's own current
+    // radius rather than fixed pixels — so as the particle grows over
+    // its life (see growRate), the whole cluster grows with it instead
+    // of the sub-circles drifting apart or staying a fixed size.
+    this.blobs = null;
   }
+
   update() {
-    const timeScale = state.timeScale;
-    this.pos.add(this.vel.clone().multiply(timeScale));
-    // Math.pow for the drag decay — see Asteroid.js's identical
-    // reasoning for why an exponential per-frame rate needs to be
-    // exponentiated by timeScale, not just multiplied.
-    this.vel = this.vel.multiply(Math.pow(this.drag, timeScale));
+    const timeScale = state.timeScale ?? 1;
+    this.pos.addScaled(this.vel, timeScale);
+    this.vel.scale(this.drag ** timeScale);
     this.radius += this.growRate * timeScale;
     this.life -= timeScale;
   }
+
   draw() {
-    const ctx = state.ctx;
     if (this.life <= 0) return;
-    ctx.globalAlpha = this.life / this.maxLife;
-    ctx.beginPath();
-    ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = this.color;
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    love.graphics.setColor(this.color[0], this.color[1], this.color[2], this.life / this.maxLife);
+    if (this.blobs) {
+      for (const blob of this.blobs) {
+        const bx = this.pos.x + Math.cos(blob.angle) * blob.distFrac * this.radius;
+        const by = this.pos.y + Math.sin(blob.angle) * blob.distFrac * this.radius;
+        love.graphics.circle('fill', bx, by, blob.radiusFrac * this.radius);
+      }
+    } else {
+      love.graphics.circle('fill', this.pos.x, this.pos.y, this.radius);
+    }
+    love.graphics.setColor(1, 1, 1, 1);
   }
 }
+
+export default Particle;

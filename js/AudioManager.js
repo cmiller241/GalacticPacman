@@ -1,60 +1,67 @@
 // js/AudioManager.js
-import { state } from './state.js';
-import { Vector2 } from './vector2.js'; // For position calculations in playBang
+//
+// Every sound effect in the game. Each play* method clones its source
+// and plays the clone, so the same sound can overlap itself.
 
-export class AudioManager {
+import love from './love/index.js';
+import state from './state.js';
+
+// Clone this source and play it.
+function cloneAndPlay(source) {
+  const instance = source.clone();
+  const started = instance.play();
+  if (!started) console.log('Audio play failed for a cloned source');
+  return instance;
+}
+
+class AudioManager {
+  static new() {
+    return new AudioManager();
+  }
+
   constructor() {
-    this.eatDotIndex = 0; // Moved from state
-    this.eatDotAudio0 = new Audio('sounds/eat_dot_0.wav');
-    this.eatDotAudio1 = new Audio('sounds/eat_dot_1.wav');
-    this.deathAudio = new Audio('sounds/death_0.wav');
-    this.jumpAudio = new Audio('sounds/jump.wav');
-    this.jumpSmallAudio = new Audio('sounds/jumpsmall.wav');
-    this.bangLarge = new Audio('sounds/bangLarge.wav');
-    this.bangMedium = new Audio('sounds/bangMedium.wav');
-    this.bangSmall = new Audio('sounds/bangSmall.wav');
-    this.goombaStompAudio = new Audio('sounds/mario-goomba-stomp.mp3');
-    this.fireballAudio = new Audio('sounds/mario-fireball.mp3');
+    this.eatDotIndex = 0;
 
-    // Set volumes and preload
-    [this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio, this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall, this.goombaStompAudio, this.fireballAudio].forEach(audio => {
-      audio.volume = 0.5;
-      audio.preload = 'auto';
-      audio.load();
-    });
+    this.eatDotAudio0 = love.audio.newSource('sounds/eat_dot_0.wav', 'static');
+    this.eatDotAudio1 = love.audio.newSource('sounds/eat_dot_1.wav', 'static');
+    this.deathAudio = love.audio.newSource('sounds/death_0.wav', 'static');
+    this.jumpAudio = love.audio.newSource('sounds/jump.wav', 'static');
+    this.jumpSmallAudio = love.audio.newSource('sounds/jumpsmall.wav', 'static');
+    this.bangLarge = love.audio.newSource('sounds/bangLarge.wav', 'static');
+    this.bangMedium = love.audio.newSource('sounds/bangMedium.wav', 'static');
+    this.bangSmall = love.audio.newSource('sounds/bangSmall.wav', 'static');
+    this.goombaStompAudio = love.audio.newSource('sounds/mario-goomba-stomp.mp3', 'static');
+    this.fireballAudio = love.audio.newSource('sounds/mario-fireball.mp3', 'static');
+    this.groundPoundAudio = love.audio.newSource('sounds/groundpound.wav', 'static');
+
+    const allSources = [
+      this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio,
+      this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall,
+      this.goombaStompAudio, this.fireballAudio, this.groundPoundAudio,
+    ];
+    for (const source of allSources) source.setVolume(0.5);
+
+    // Played 30% faster than recorded. Speeding a sound up this way
+    // raises its pitch along with it, so it also sounds about four and
+    // a half semitones higher.
+    this.groundPoundAudio.setPitch(1.3);
   }
 
   playEatDot() {
     const source = this.eatDotIndex === 0 ? this.eatDotAudio0 : this.eatDotAudio1;
-    this.eatDotIndex = 1 - this.eatDotIndex; // Toggle between 0 and 1
-    const audio = source.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
+    this.eatDotIndex = 1 - this.eatDotIndex; // toggles between 0 and 1
+    cloneAndPlay(source);
   }
 
-  playDeath() {
-    const audio = this.deathAudio.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
+  playDeath() { cloneAndPlay(this.deathAudio); }
+  playJump() { cloneAndPlay(this.jumpAudio); }
+  playJumpSmall() { cloneAndPlay(this.jumpSmallAudio); }
+  playGoombaStomp() { cloneAndPlay(this.goombaStompAudio); }
+  playFireball() { cloneAndPlay(this.fireballAudio); }
 
-  playJump() {
-    const audio = this.jumpAudio.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
-
-  playJumpSmall() {
-    const audio = this.jumpSmallAudio.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
-
-  playGoombaStomp() {
-    const audio = this.goombaStompAudio.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
-
-  playFireball() {
-    const audio = this.fireballAudio.cloneNode(true);
-    audio.play().catch(e => console.log('Audio play failed:', e));
-  }
+  // The slam of a ground pound landing (see Player.js's own ground-pound
+  // bookkeeping in Player.update).
+  playGroundPound() { cloneAndPlay(this.groundPoundAudio); }
 
   playBang(size, position) {
     let audioSource;
@@ -63,17 +70,20 @@ export class AudioManager {
     else if (size === 'small') audioSource = this.bangSmall;
     else return;
 
+    // subtract() returns a NEW Vector2 — it doesn't touch the player's position.
     const dist = state.player.pos.subtract(position).length();
-    let vol = 0.5 * Math.max(0, 1 - dist / 800); // Fade out over 800 units distance
+    const vol = 0.5 * Math.max(0, 1 - dist / 800); // fades out over 800 units
     if (vol <= 0) return;
 
-    const audio = audioSource.cloneNode(true);
-    audio.volume = vol;
-    audio.play().catch(e => console.log('Audio play failed:', e));
+    const instance = audioSource.clone();
+    instance.setVolume(vol);
+    const started = instance.play();
+    if (!started) console.log('Audio play failed for playBang');
   }
 
-  // Optional: Reset method if needed for game restarts (e.g., call from initGame)
   reset() {
     this.eatDotIndex = 0;
   }
 }
+
+export default AudioManager;
