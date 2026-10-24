@@ -222,13 +222,26 @@ function showError(err) {
 }
 
 // boot({ canvas, images: [...paths], sounds: [...paths], onProgress })
-love.boot = async function boot({ canvas, images: imagePaths = [], sounds: soundPaths = [], onProgress } = {}) {
+// screenUnits — what one unit of love.graphics.getWidth() etc. is:
+//   'pixels' (default): one real screen pixel, like a LÖVE window. How
+//     much the game shows depends only on the window's real size, never
+//     on browser zoom or the display's scaling setting.
+//   'css': one CSS pixel. Text and HUD keep the same physical size on
+//     scaled/high-DPI displays, but browser zoom and display scaling
+//     change how much of the world fits in the window.
+// minView ({ width, height }, optional — overrides screenUnits): the
+//   game always gets at least this many units each way, whatever size
+//   the window really is: the picture is scaled to fit the window, and
+//   any extra room (a wider or taller window than that shape) shows more
+//   on that side. So the game shows the same view on every screen.
+// Either way the canvas has one pixel per real screen pixel, so it's sharp.
+love.boot = async function boot({ canvas, images: imagePaths = [], sounds: soundPaths = [], onProgress, screenUnits = 'pixels', minView = null } = {}) {
   canvasEl = canvas;
   // The canvas gets the display's real pixels (devicePixelRatio of them
   // per CSS pixel — more than 1 on a scaled/high-DPI display, and it
-  // changes with browser zoom), while the game keeps working in CSS
-  // pixels (love.graphics.getWidth etc.). Otherwise the browser would
-  // stretch a lower-resolution image over the window and blur it.
+  // changes with browser zoom); otherwise the browser would stretch a
+  // lower-resolution image over the window and blur it. The game's own
+  // units: see screenUnits above.
   const fit = () => {
     const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
     const dpr = window.devicePixelRatio || 1;
@@ -236,7 +249,16 @@ love.boot = async function boot({ canvas, images: imagePaths = [], sounds: sound
     canvas.height = Math.max(1, Math.round(h * dpr));
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
-    graphics._setScreen(w, h, canvas.width / w);
+    if (minView) {
+      // Real pixels per game unit: whatever fits minView in the window.
+      const k = Math.min(canvas.width / minView.width, canvas.height / minView.height);
+      const gw = Math.round(canvas.width / k), gh = Math.round(canvas.height / k);
+      graphics._setScreen(gw, gh, canvas.width / gw);
+    } else if (screenUnits === 'css') {
+      graphics._setScreen(w, h, canvas.width / w);
+    } else {
+      graphics._setScreen(canvas.width, canvas.height, 1);
+    }
   };
   try {
     fit();
