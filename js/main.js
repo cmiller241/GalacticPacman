@@ -1475,13 +1475,28 @@ function drawFrame() {
   g.translate(-Math.floor(state.camera.x * zoom + 0.5) / zoom,
     -Math.floor(state.camera.y * zoom + 0.5) / zoom);
 
+  // Bob's and the Ooombas' shadow shapes for this frame (see
+  // CharacterShadows.js) — up front, since the Space Shelter just below
+  // takes them, as well as the level's tiles further down.
+  CharacterShadows.prepare();
+
   if (state.skyDomePlanet) state.skyDomePlanet.draw();
 
   // Between the dome's background and foreground hex layers; the door
   // goes over the player once he's stepped out in front of it.
   if (state.spaceShelter) {
-    state.spaceShelter.drawBody();
-    if (state.spaceShelter.playerInFront) state.spaceShelter.drawDoor();
+    const shelter = state.spaceShelter;
+    shelter.drawBody();
+    if (shelter.playerInFront) {
+      shelter.drawDoor();
+      // His shadow on the shelter (and its doors), the same as on the
+      // level's tiles — only once he's stepped out in front of it, not
+      // while he's still inside behind the closed door.
+      CharacterShadows.drawOntoSprite(() => {
+        shelter.drawBody();
+        shelter.drawDoor();
+      });
+    }
   }
 
   if (state.sun) state.sun.draw();
@@ -1543,7 +1558,6 @@ function drawFrame() {
   }
 
   if (state.tiledLevels) {
-    CharacterShadows.prepare();
     TileGlow.prepare();
     for (const level of state.tiledLevels) {
       if (!utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50)) continue;
@@ -1816,6 +1830,11 @@ love.boot({
   canvas: document.getElementById('gameCanvas'),
   images: assetList.images,
   sounds: assetList.sounds,
+  // Always show at least as much of the world as the LÖVE version does
+  // in a maximized window on a 1920x1080 screen (1920x1004 — measured),
+  // whatever size the browser window is. Hand-tuned zooms (the Tiled
+  // Zoom-Windows framing the mirror puzzle, say) depend on it.
+  minView: { width: 1920, height: 1004 },
 });
 
 // For poking at the game from the browser console while debugging.

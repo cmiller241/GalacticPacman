@@ -1430,19 +1430,23 @@ function love.load()
       end
     end end
 
-    -- He starts, and respawns, standing on the north entry planet a
-    -- little round from its cannon — not in it. The shelter's
-    -- door-opening intro is marked already over, since he isn't there
-    -- behind the door.
-    local standAngle = entryCannon.mountAngle - 0.45
-    local standDist = entryPlanet.radius + constants.PLAYER_RADIUS
-    state.respawnPoint = {
-      x = entryPlanet.pos.x + math.cos(standAngle) * standDist,
-      y = entryPlanet.pos.y + math.sin(standAngle) * standDist,
-      planet = entryPlanet,
-    }
-    state.spaceShelter.playerInFront = true
-    state.spaceShelter.introDone = true
+    -- true: he starts, and respawns, standing on the north entry planet
+    -- a little round from its cannon — not in it — instead of behind the
+    -- Space Shelter's door on the sky dome. The shelter's door-opening
+    -- intro is then marked already over, since he isn't there behind the
+    -- door.
+    local START_AT_EXPRESSWAY_ENTRY = false
+    if START_AT_EXPRESSWAY_ENTRY then
+      local standAngle = entryCannon.mountAngle - 0.45
+      local standDist = entryPlanet.radius + constants.PLAYER_RADIUS
+      state.respawnPoint = {
+        x = entryPlanet.pos.x + math.cos(standAngle) * standDist,
+        y = entryPlanet.pos.y + math.sin(standAngle) * standDist,
+        planet = entryPlanet,
+      }
+      state.spaceShelter.playerInFront = true
+      state.spaceShelter.introDone = true
+    end
   end
 
   -- Missile outposts just past the asteroid belt's outer edge (see
@@ -2503,6 +2507,11 @@ function love.draw()
   love.graphics.translate(-math.floor(state.camera.x * zoom + 0.5) / zoom,
                           -math.floor(state.camera.y * zoom + 0.5) / zoom)
 
+  -- Bob's and the Ooombas' shadow shapes for this frame (see
+  -- lua/effects/CharacterShadows.lua) — up front, since the Space Shelter
+  -- just below takes them, as well as the level's tiles further down.
+  CharacterShadows.prepare()
+
   if state.skyDomePlanet then
     state.skyDomePlanet:draw()
   end
@@ -2520,9 +2529,17 @@ function love.draw()
   -- right after the player (see below), so the closed/opening door
   -- covers the player standing behind it.
   if state.spaceShelter then
-    state.spaceShelter:drawBody()
-    if state.spaceShelter.playerInFront then
-      state.spaceShelter:drawDoor()
+    local shelter = state.spaceShelter
+    shelter:drawBody()
+    if shelter.playerInFront then
+      shelter:drawDoor()
+      -- His shadow on the shelter (and its doors), the same as on the
+      -- level's tiles — only once he's stepped out in front of it, not
+      -- while he's still inside behind the closed door.
+      CharacterShadows.drawOntoSprite(function()
+        shelter:drawBody()
+        shelter:drawDoor()
+      end)
     end
   end
 
@@ -2662,12 +2679,11 @@ function love.draw()
   end
 
   if state.tiledLevels then
-    -- Bob's and the Ooombas' shadows on the level's tiles (see
-    -- lua/effects/CharacterShadows.lua) — drawn over each level, before
-    -- they themselves are.
-    CharacterShadows.prepare()
-    -- ...and glowing things (fireballs, lava, portals, ...) lighting
-    -- them up (see lua/effects/TileGlow.lua).
+    -- (Bob's and the Ooombas' shadows on the level's tiles — see
+    -- lua/effects/CharacterShadows.lua, prepared at the top of
+    -- love.draw — are drawn over each level, before they themselves are.)
+    -- Glowing things (fireballs, lava, portals, ...) lighting the tiles
+    -- up (see lua/effects/TileGlow.lua).
     TileGlow.prepare()
     for _, level in ipairs(state.tiledLevels) do
       if utils.isOnScreen(level.pos.x, level.pos.y, level.radius, 50) then

@@ -163,14 +163,18 @@ const joystick = {
 
 // ---------------- DOM wiring ----------------
 let canvasEl = null;
+let graphicsWidth = () => (canvasEl ? canvasEl.width : 1);
 
 function attach(el, love, onFirstInput) {
+  if (love.graphics) graphicsWidth = () => love.graphics.getWidth();
   canvasEl = el;
   const mouseButton = (b) => (b === 0 ? 1 : b === 2 ? 2 : b === 1 ? 3 : b + 1);
   const toCanvas = (e) => {
     const r = el.getBoundingClientRect();
-    // (In CSS pixels — the game's units — not the canvas' real pixels.)
-    return [e.clientX - r.left, e.clientY - r.top];
+    // (In the game's units — see screenUnits in index.js — via the
+    // canvas' real pixels per CSS pixel and the game's units per real pixel.)
+    const k = (el.width / r.width) * (graphicsWidth() / el.width);
+    return [(e.clientX - r.left) * k, (e.clientY - r.top) * k];
   };
 
   window.addEventListener('keydown', (e) => {

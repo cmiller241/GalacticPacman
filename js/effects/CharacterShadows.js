@@ -135,6 +135,26 @@ CharacterShadows.drawOnto = function (level) {
 // enough to reach it. Call right after drawing it, in world space. The
 // same shader as drawOnto, with the Ooomba's own sprite standing in for
 // the level's tiles: shadow only where the sprite is.
+// The shadows on whatever drawFn draws — only on its own pixels, the
+// same way drawOnto keeps them to the level's tiles: drawFn is called
+// again with the shadow shader on, so where it draws a solid pixel the
+// shadow shows, and where it's clear, nothing does. For scenery drawn
+// outside the level (the Space Shelter — see main.js). Call right after
+// drawing the thing itself, in world space.
+CharacterShadows.drawOntoSprite = function (drawFn) {
+  if (!(anyCaster && casters)) return;
+  const s = getShader();
+  const [pw, ph] = casters.getPixelDimensions();
+  s.send('casters', casters);
+  s.send('castersSize', [pw, ph]);
+  s.send('softPx', SOFTNESS * (state.zoom ?? 1) * casters.getDPIScale());
+  s.send('strength', STRENGTH);
+  const prevShader = love.graphics.getShader();
+  love.graphics.setShader(s);
+  drawFn();
+  love.graphics.setShader(prevShader);
+};
+
 CharacterShadows.drawOntoOoomba = function (index) {
   const ooombas = state.ooombas;
   const o = ooombas[index];
