@@ -75,6 +75,7 @@ local PauseMenu = require("lua.ui.PauseMenu")
 local PortalGun = require("lua.systems.PortalGun")
 local WeaponModes = require("lua.systems.WeaponModes")
 local Recall = require("lua.systems.Recall")
+local ClipRecorder = require("lua.systems.ClipRecorder")
 
 -- Shared by the Enter key handler and the mousedown handler below —
 -- same role and same logic as the original. levelSetup is required
@@ -130,32 +131,32 @@ local function attachInputHandlers()
     -- ...or riding a cannon (see Player:isCannonRiding): no shooting,
     -- pulling, portals or recall at all.
     if state.player and state.player:isCannonRiding() then return end
+    -- Portal: left click red portal, right click blue.
     if state.portalMode then
       if button == 1 then PortalGun.fire(state.player, "red")
       elseif button == 2 then PortalGun.fire(state.player, "blue") end
       return
     end
-    -- Water mode: spraying is held, so it's read each frame instead
-    -- (see WaterSystem.update); the left button does nothing for now.
-    if state.waterMode then return end
-    -- Recall mode: the right button rewinds the planetoid under the
-    -- cursor (see lua/systems/Recall.lua); the left does nothing for now.
-    if state.recallMode then
-      if button == 2 then Recall.activate(state.player) end
-      return
-    end
-    if button == 1 then
+    -- Every other blaster fires with the left button only (see
+    -- lua/systems/WeaponModes.lua).
+    if button ~= 1 or not state.player then return end
+    if state.fireballMode or state.iceMode then
+      -- Fired in love.update, after he's moved this frame (same spot as
+      -- R2), so the shot leaves from where the muzzle is drawn.
       state.mouseDown = true
-      if state.player then state.player:shootFireball() end
-    elseif button == 2 then
-      if state.player then state.player:trySelectPullTarget() end
+      state.mouseFirePending = true
+    elseif state.pullBeamMode then
+      state.player:trySelectPullTarget()
+    elseif state.recallMode then
+      Recall.activate(state.player)
     end
+    -- Water: spraying is held, so it's read each frame instead (see
+    -- WaterSystem.update).
   end
 
   function love.mousereleased(x, y, button, istouch, presses)
     if button == 1 then
       state.mouseDown = false
-    elseif button == 2 then
       -- Not in V.A.T.S. — same rule as letting go of L2 (see
       -- GamePadInput.lua's own L2 handling).
       if state.player and not state.vatsActive then state.player:clearPullTarget() end
@@ -185,6 +186,18 @@ local function attachInputHandlers()
     local key = toJsStyleKey(loveKey)
     state.lastKeyboardMouseInputTime = love.timer.getTime()
 
+    -- F11: borderless fullscreen <-> maximized window. Works everywhere,
+    -- even on the title screen and in the pause menu.
+    if key == 'f11' and not isrepeat then
+      if love.window.getFullscreen() then
+        love.window.setFullscreen(false)
+        love.window.maximize()
+      else
+        love.window.setFullscreen(true, "desktop")
+      end
+      return
+    end
+
     -- Title screen (see lua/ui/TitleScreen.lua): Enter, Space or X
     -- starts the game and no other key does anything — checked before
     -- state.keys is even set, so held keys (zoom, movement) can't act
@@ -204,6 +217,12 @@ local function attachInputHandlers()
     end
     if key == 'escape' and not isrepeat then
       PauseMenu.open()
+      return
+    end
+
+    -- Start/stop recording a trailer clip (see lua/systems/ClipRecorder.lua).
+    if key == 'p' and not isrepeat then
+      ClipRecorder.toggle()
       return
     end
 
@@ -308,6 +327,14 @@ local function attachInputHandlers()
       state.showCollisionDebug = not state.showCollisionDebug
     end
 
+    -- Turns the dirt planet he's on or near: N clockwise, M
+    -- counter-clockwise; the same key again stops it (see
+    -- CrackedPlanetoid:toggleSpin).
+    if (key == 'n' or key == 'm') and not isrepeat and state.player then
+      local p = state.player.currentPlanet or state.player.lastInfluencePlanet
+      if p and p.toggleSpin then p:toggleSpin(key == 'n' and 1 or -1) end
+    end
+
     if key == 'a' and not isrepeat then
       state.showBeltCellDebug = not state.showBeltCellDebug
     end
@@ -318,8 +345,16 @@ local function attachInputHandlers()
 
     -- Cycles what the blaster's buttons do: Blaster (fire + pull beam),
     -- Portal, Water (see lua/systems/WeaponModes.lua).
-    if key == 'p' and not isrepeat and not riding then
+    if key == 'tab' and not isrepeat and not riding then
       WeaponModes.cycle(1)
+    end
+
+    -- Switches the gravity of the dirt planet he's on or near: toward
+    -- its core, straight down, straight up (see
+    -- CrackedPlanetoid:cycleGravity).
+    if key == 'g' and not isrepeat and state.player then
+      local p = state.player.currentPlanet or state.player.lastInfluencePlanet
+      if p and p.cycleGravity then p:cycleGravity() end
     end
   end
 

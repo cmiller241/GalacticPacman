@@ -17,6 +17,7 @@
 
 import love from '../love/index.js';
 import state from '../state.js';
+import WaterSystem from '../systems/WaterSystem.js';
 
 const TileGlow = {};
 
@@ -92,11 +93,21 @@ TileGlow.prepare = function () {
     }
   }
   for (const lava of state.lavas ?? []) {
-    if (lava.x0 != null && lava.size != null) {
-      const pulse = 1 + LAVA.pulse * Math.sin(now * 1.7 + lava.x0 * 0.01);
-      add(lava.x0 + lava.size / 2, lava.y0 + lava.size * 0.3, LAVA.color, LAVA.radius, LAVA.intensity * pulse);
+    // (null: none, for lava buried under more lava or turned to obsidian;
+    // heat dims it as it cools)
+    const glow = lava.glowPoint();
+    if (glow) {
+      const [gx, gy, heat] = glow;
+      const pulse = 1 + LAVA.pulse * Math.sin(now * 1.7 + gx * 0.01);
+      add(gx, gy, LAVA.color, LAVA.radius, LAVA.intensity * pulse * heat);
     }
   }
+  // The lava itself (a liquid — see WaterSystem.js): one glow for each
+  // tile's worth of its surface.
+  WaterSystem.forEachLavaGlow((gx, gy) => {
+    const pulse = 1 + LAVA.pulse * Math.sin(now * 1.7 + gx * 0.01);
+    add(gx, gy, LAVA.color, LAVA.radius, LAVA.intensity * pulse);
+  });
   for (const [color, p] of Object.entries(state.portals ?? {})) {
     const c = PORTAL_COLORS[color];
     if (c && p && p.x != null) {

@@ -38,7 +38,6 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
-local Lava = require("lua.world.Lava")
 
 local TiledTerrain = {}
 
@@ -163,6 +162,18 @@ local function classifyGid(tileProps, gid)
     -- buildConvexClimbShape.
     if slope == "crestRight" or slope == "crestLeft" then return slope end
     if slope == "archRight" or slope == "archLeft" then return slope end
+    -- Ball-tunnel pieces (see CrackedPlanetoid.lua's SHAPED_TILES):
+    --   * an *Inner corner is the tunnel's wall and ceiling (or floor) at
+    --     a bend: a "wall" — solid, with a walkable top — so the curve
+    --     he rolls round (buildRampClimbShape) runs up its face and over
+    --     it like any other wall. (Its rounded corner is only art: a
+    --     square corner is what that path goes round.)
+    --   * an *Outer1/2/3 arc is the outside of a bend round a crest or
+    --     arch: mostly open tunnel, solid only out past its curve — so
+    --     no top here (it'd be an invisible ledge in the middle of the
+    --     tunnel); it's solid in its exact shape (see buildTunnelSolids).
+    if slope and slope:find("Inner$") then return "wall" end
+    if slope and slope:find("Outer%d$") then return "fill" end
     return "flat"
   end
   return "fill"
@@ -1129,7 +1140,11 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
           flatCol, flatRow = wallCol, leftRow
         end
 
-      elseif capRole == "ceilingLeft" or capRole == "ceilingRight" then
+      elseif capRole == (dir > 0 and "ceilingLeft" or "ceilingRight") then
+        -- (Only the cap that curves back over the ramp — ceilingLeft over
+        -- a rampRight, ceilingRight over a rampLeft — makes a loop. The
+        -- other way round, it's the far side of a ball tunnel turning
+        -- from a shaft into a passage, not a ceiling to run along.)
         -- Continues the wall PAST vertical into a ceiling, instead of
         -- stopping at a 45-degree slope. Unlike the base arc, this
         -- curve's center is NOT one of the cap tile's own four corners
@@ -1176,6 +1191,20 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
       end
     end
 
+    -- A ball tunnel's inner corner (an *Inner tile — a "wall", see
+    -- classifyGid) topping the stack, with open tunnel above it: the
+    -- walkway runs on across the corner's own top, onto the ground beside
+    -- it at that height (the tunnel turning from the shaft into a passage).
+    local runStartsOnStackTop = false
+    if absorbRole == "flat" and flatCol == wallCol and flatRow == wallTopRow - 1 and flatRow >= 0
+       and (layer.data[flatRow * width + wallCol + 1] or 0) == 0 then
+      local topProps = tileProps[layer.data[wallTopRow * width + wallCol + 1]]
+      if topProps and topProps.slope and topProps.slope:find("Inner$") then
+        flatRow = wallTopRow
+        runStartsOnStackTop = true
+      end
+    end
+
     -- Absorb the run that follows, all the way to its TRUE end (a gap,
     -- wall, or other feature) — not just a tile or two. This shape
     -- needs to BE the complete continuation for that stretch, so
@@ -1193,6 +1222,11 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
       local rowEdge = (absorbRole == "wall") and (flatRow + 1) or flatRow
       if absorbRole == "wall" then ceilingRunStart = #points end
       local fc = flatCol
+      if runStartsOnStackTop then
+        -- (Across the corner's own top first — it's the stack's, already claimed.)
+        table.insert(points, Vector2.new(anchorX + (absorbDir > 0 and (fc + 1) or fc) * T, anchorY + flatRow * T))
+        fc = fc + absorbDir
+      end
       while fc >= 0 and fc < width do
         local fgid = layer.data[flatRow * width + fc + 1]
         if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then
@@ -1844,28 +1878,25 @@ local function buildWallShapes(layer, tileProps, width, height, anchorX, anchorY
 end
 
 ----------------------------------------------------------------------
--- Lava — see lua/world/Lava.lua for the actual entity (shader-drawn
--- wavy surface + rising embers). One instance per lava-role tile, NOT
--- merged into multi-tile strips — Lava.lua's own wave is driven by
--- absolute world X, so independently-drawn adjacent tiles already line
--- up with each other at their shared edge with no seam; merging them
--- into wider quads would just be unneeded bookkeeping for no visual
--- difference.
+-- Lava tiles: where the level's lava starts out. The lava itself is a
+-- liquid, flowing like the water — see WaterSystem.lua (WaterSystem.init
+-- fills these tiles with it). Each is { x0, y0, size }: its top-left
+-- corner in world units, and its size.
 ----------------------------------------------------------------------
 
 local function buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
-  local lavas = {}
+  local lavaTiles = {}
   for row = 0, height - 1 do
     for col = 0, width - 1 do
       local gid = layer.data[row * width + col + 1]
       if gid ~= 0 and classifyGid(tileProps, gid) == "lava" then
-        local x0 = anchorX + col * TILE_WORLD_SIZE
-        local y0 = anchorY + row * TILE_WORLD_SIZE
-        table.insert(lavas, Lava.new(x0, y0, TILE_WORLD_SIZE))
+        table.insert(lavaTiles, {
+          x0 = anchorX + col * TILE_WORLD_SIZE, y0 = anchorY + row * TILE_WORLD_SIZE, size = TILE_WORLD_SIZE,
+        })
       end
     end
   end
-  return lavas
+  return lavaTiles
 end
 
 ----------------------------------------------------------------------
@@ -1881,6 +1912,240 @@ function Level:draw()
   if not self.canvas then return end
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(self.canvas, self.anchorX, self.anchorY)
+end
+
+----------------------------------------------------------------------
+-- Ball tunnels: solid tunnel pieces, and headroom
+----------------------------------------------------------------------
+--
+-- The ball-tunnel arc pieces (CrackedPlanetoid.lua's *Outer1/2/3, round
+-- the outside of a bend over a crest or under an arch) are solid exactly
+-- where their art is: Bob (and his head, standing — see below), fireballs
+-- and water are kept out of them. The tunnel's straight ceilings and
+-- walls are ordinary wall tiles, so are its *Inner corners (see
+-- classifyGid), and its bends are the ordinary ramp/ceiling/crest curves
+-- he already rolls round (see buildRampClimbShape/buildConvexClimbShape).
+--
+-- Headroom: standing up, Bob is taller than his round body — a head
+-- circle sits on top of it, reaching about 78 units above his feet. A
+-- ball tunnel is one tile (64 units) high: he only fits curled up as a
+-- ball (about 48), so he can't walk into one standing, his head is
+-- stopped jumping into one, and he can't uncurl inside one (see
+-- Player:exitBallMode and main.lua). The same as on the Tiled planet
+-- (CrackedPlanetoid:standingRoomAt).
+
+local HEAD_OFFSET = 26   -- the head circle's center, above his own center
+local HEAD_RADIUS = 22
+-- Curves that are a ceiling over him (solid above), for headroom.
+local HEADROOM_CURVES = { ceilingLeft = true, ceilingRight = true, archLeft = true, archRight = true }
+
+local function pointInOutline(o, x, y)
+  local inside, n = false, #o
+  local jx, jy = o[n - 1], o[n]
+  for k = 1, n, 2 do
+    local ix, iy = o[k], o[k + 1]
+    if (iy > y) ~= (jy > y) and x < (jx - ix) * (y - iy) / (jy - iy) + ix then inside = not inside end
+    jx, jy = ix, iy
+  end
+  return inside
+end
+
+local function nearestOnOutline(o, x, y)
+  local bx, by, bd = x, y, math.huge
+  local n = #o
+  for k = 1, n, 2 do
+    local k2 = (k + 1) % n + 1
+    local ax, ay, cx, cy = o[k], o[k + 1], o[k2], o[k2 + 1]
+    local dx, dy = cx - ax, cy - ay
+    local len2 = dx * dx + dy * dy
+    local t = len2 > 0 and ((x - ax) * dx + (y - ay) * dy) / len2 or 0
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    local qx, qy = ax + dx * t, ay + dy * t
+    local d = (x - qx) ^ 2 + (y - qy) ^ 2
+    if d < bd then bx, by, bd = qx, qy, d end
+  end
+  return bx, by, bd
+end
+
+-- A tile's outline (shape name) in world space, for the cell at col/row.
+local function shapeOutlineWorld(shape, anchorX, anchorY, col, row)
+  local SHAPED = require("lua.world.CrackedPlanetoid").SHAPED_TILES
+  local T = TILE_WORLD_SIZE
+  local x0, y0 = anchorX + col * T, anchorY + row * T
+  local o = {}
+  for _, p in ipairs(SHAPED[shape].outline) do
+    o[#o + 1] = x0 + p[1] * T
+    o[#o + 1] = y0 + (1 - p[2]) * T
+  end
+  return o
+end
+
+function Level:cellAt(x, y)
+  local T = TILE_WORLD_SIZE
+  local col = math.floor((x - self.anchorX) / T)
+  local row = math.floor((y - self.anchorY) / T)
+  if col < 0 or row < 0 or col >= self.mapWidth or row >= self.mapHeight then return nil end
+  return col, row
+end
+
+-- Whether world (x, y) is inside a ball-tunnel piece.
+function Level:tunnelSolidAt(x, y)
+  local col, row = self:cellAt(x, y)
+  if not col then return false end
+  local t = self.tunnelByCell[row * self.mapWidth + col]
+  return t ~= nil and pointInOutline(t, x, y)
+end
+
+-- Whether world (x, y) is solid rock: a wall tile or a ball-tunnel piece
+-- — and, for headroom, the solid part of a ceiling/arch curve too. (Not
+-- an ordinary top: he can always stand up into, or jump up through, one
+-- of those.)
+function Level:solidAt(x, y, forHeadroom)
+  local col, row = self:cellAt(x, y)
+  if not col then return false end
+  local key = row * self.mapWidth + col
+  local t = self.tunnelByCell[key]
+  if t then return pointInOutline(t, x, y) end
+  local gid = self.collisionData[key + 1] or 0
+  if gid == 0 then return false end
+  local role = classifyGid(self.tileProps, gid)
+  if role == "wall" then return true end
+  if forHeadroom and HEADROOM_CURVES[role] then
+    return pointInOutline(shapeOutlineWorld(role, self.anchorX, self.anchorY, col, row), x, y)
+  end
+  return false
+end
+
+-- Whether a standing Bob with his center at (cx, cy) and body radius r
+-- has room: nothing solid in his head, or the top of his body.
+function Level:headroomAt(cx, cy, r)
+  local hx, hy = cx, cy - HEAD_OFFSET
+  if self:solidAt(hx, hy, true) then return false end
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    if self:solidAt(hx + math.cos(a) * (HEAD_RADIUS - 1), hy + math.sin(a) * (HEAD_RADIUS - 1), true) then
+      return false
+    end
+  end
+  for _, deg in ipairs({ -150, -120, -90, -60, -30 }) do
+    local a = math.rad(deg)
+    if self:solidAt(cx + math.cos(a) * (r - 1), cy + math.sin(a) * (r - 1), true) then return false end
+  end
+  return true
+end
+
+-- Whether curled-up Bob could stand up where he is: feet where the
+-- ball's bottom is, at his full standing size.
+function Level:standingRoomAt(player)
+  local full = player.baseRadius or player.radius
+  local feetY = player.pos.y + player.radius
+  return self:headroomAt(player.pos.x, feetY - full, full)
+end
+
+-- Pushes a circle at (x, y), radius r, out of the ball-tunnel pieces —
+-- and, with withCurves, out of the solid part of ceiling/arch curves, and
+-- with withWalls out of wall tiles too (for his head: his body's walls
+-- are CollisionSystem's). Returns its new center and the direction of
+-- the last push (nil if it wasn't moved).
+function Level:pushCircleOut(x, y, r, withWalls, withCurves)
+  local T = TILE_WORLD_SIZE
+  local nx, ny
+  for _ = 1, 3 do
+    local moved = false
+    local c0, r0 = self:cellAt(x - r, y - r)
+    local c1, r1 = self:cellAt(x + r, y + r)
+    c0 = c0 or math.max(0, math.floor((x - r - self.anchorX) / T))
+    r0 = r0 or math.max(0, math.floor((y - r - self.anchorY) / T))
+    c1 = c1 or math.min(self.mapWidth - 1, math.floor((x + r - self.anchorX) / T))
+    r1 = r1 or math.min(self.mapHeight - 1, math.floor((y + r - self.anchorY) / T))
+    for row = r0, r1 do
+      for col = c0, c1 do
+        local key = row * self.mapWidth + col
+        local o = self.tunnelByCell[key]
+        if not o and (withWalls or withCurves) then
+          local gid = self.collisionData[key + 1] or 0
+          if gid ~= 0 then
+            local role = classifyGid(self.tileProps, gid)
+            if role == "wall" and withWalls then
+              local x0, y0 = self.anchorX + col * T, self.anchorY + row * T
+              o = { x0, y0, x0 + T, y0, x0 + T, y0 + T, x0, y0 + T }
+            elseif HEADROOM_CURVES[role] and withCurves then
+              o = shapeOutlineWorld(role, self.anchorX, self.anchorY, col, row)
+            end
+          end
+        end
+        if o then
+          local qx, qy, d2 = nearestOnOutline(o, x, y)
+          local d = math.sqrt(d2)
+          local inside = pointInOutline(o, x, y)
+          if inside or d < r - 0.5 then
+            local px, py
+            if d > 1e-6 then px, py = (x - qx) / d, (y - qy) / d else px, py = 0, -1 end
+            if inside then px, py = -px, -py end -- (out the nearest side)
+            local depth = inside and (d + r) or (r - d)
+            x, y = x + px * depth, y + py * depth
+            nx, ny, moved = px, py, true
+          end
+        end
+      end
+    end
+    if not moved then break end
+  end
+  return x, y, nx, ny
+end
+
+-- Every frame (see main.lua): keeps Bob out of the ball-tunnel pieces —
+-- and of the ceiling/arch curves, except while he's riding one of this
+-- file's curve paths (it rounds them itself; see buildRampClimbShape) —
+-- and, standing, in the air, his head out of ceilings.
+function Level:pushPlayer(player)
+  local function apply(dx, dy, nx, ny)
+    player.pos.x, player.pos.y = player.pos.x + dx, player.pos.y + dy
+    local into = player.vel.x * nx + player.vel.y * ny
+    if into < 0 then
+      player.vel.x, player.vel.y = player.vel.x - nx * into, player.vel.y - ny * into
+    end
+    if player.onSurface and player.currentPlanet
+       and type(player.currentPlanet.arcPositionForWorldPoint) == "function" then
+      player.surfaceArcPos = player.currentPlanet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+    end
+  end
+  local onCurvePath = player.onSurface and player.currentPlanet and player.currentPlanet.isWallClimb
+  local x, y, nx, ny = self:pushCircleOut(player.pos.x, player.pos.y, player.radius, false, not onCurvePath)
+  if nx then apply(x - player.pos.x, y - player.pos.y, nx, ny) end
+  if not player.isBall and not player.onSurface then
+    local hx, hy = player.pos.x, player.pos.y - HEAD_OFFSET
+    local x2, y2, hnx, hny = self:pushCircleOut(hx, hy, HEAD_RADIUS, true, true)
+    if hnx then apply(x2 - hx, y2 - hy, hnx, hny) end
+  end
+end
+
+-- The ball-tunnel pieces: { [row * width + col] = world outline } — and,
+-- for the water, a solid cell for each whose middle is inside one.
+local function buildTunnelSolids(layer, tileProps, width, height, anchorX, anchorY)
+  local SHAPED = require("lua.world.CrackedPlanetoid").SHAPED_TILES
+  local byCell, waterSolids = {}, {}
+  local T = TILE_WORLD_SIZE
+  for row = 0, height - 1 do
+    for col = 0, width - 1 do
+      local raw = layer.data[row * width + col + 1] or 0
+      local gid = raw % 2 ^ 29
+      local props = gid ~= 0 and tileProps[gid]
+      local shape = props and props.slope
+      if shape and SHAPED[shape] and shape:find("Outer%d$") then -- (the *Inner corners are walls — see classifyGid)
+        if math.floor(raw / 2 ^ 31) % 2 == 1 then -- (flipped left-right in Tiled)
+          shape = shape:find("Right") and (shape:gsub("Right", "Left")) or (shape:gsub("Left", "Right"))
+        end
+        local o = shapeOutlineWorld(shape, anchorX, anchorY, col, row)
+        byCell[row * width + col] = o
+        local cx, cy = anchorX + (col + 0.5) * T, anchorY + (row + 0.5) * T
+        if pointInOutline(o, cx, cy) then
+          table.insert(waterSolids, { pos = Vector2.new(cx, cy), halfWidth = T / 2, halfHeight = T / 2, isWall = true })
+        end
+      end
+    end
+  end
+  return byCell, waterSolids
 end
 
 ----------------------------------------------------------------------
@@ -1955,11 +2220,9 @@ local function getBlurShader()
 end
 
 -- Bakes the tile layers into one canvas (see the comment above). Lava
--- tiles are skipped: Lava.lua draws its own animated shader quad over
--- that same area every frame instead — baking the sheet's own flat tile
--- art underneath would just sit there uselessly (visible only through
--- the shader's transparent-above-the-wave cutout, where it isn't wanted
--- either).
+-- tiles are skipped: the lava (WaterSystem.lua's liquid) is drawn over
+-- it (and it flows away from where it started) — the sheet's own flat
+-- red tile art would show wherever it's run off from, as if still lava.
 local function bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
   local function drawLayerTiles(l, scale, ox, oy)
     for row = 0, height - 1 do
@@ -2125,9 +2388,12 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- rather than TerrainShape instances.
   local walls = buildWallShapes(layer, tileProps, width, height, anchorX, anchorY)
 
-  -- Lava tiles — see buildLavaTiles above and lua/world/Lava.lua for
-  -- the shader-drawn entity itself.
-  local lavas = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
+  -- Ball-tunnel pieces, solid in their exact shape (see Level:pushPlayer).
+  local tunnelByCell, waterSolids = buildTunnelSolids(layer, tileProps, width, height, anchorX, anchorY)
+
+  -- Lava tiles — where the lava starts out (see buildLavaTiles above,
+  -- and WaterSystem.init).
+  local lavaTiles = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
 
   -- Entity spawn points authored via Tiled's own Object Layer (see
   -- tiled/Level1.lua's "objectgroup" layer) — each object's Class field
@@ -2189,6 +2455,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- export, pipe-delimited for more than one message — see Sign.lua's
   -- own splitMessages).
   local signSpawns = {}
+  local plungerSpawns = {} -- (RightPlunger/LeftPlunger — see lua/world/Plunger.lua)
   -- "Gate" objects (see lua/world/Gate.lua): a vertical barrier that
   -- spans from the nearest wall/top tile BELOW the object's own point
   -- up to the nearest wall/top tile ABOVE it — resolved right here via
@@ -2317,6 +2584,16 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
             x = anchorX + obj.x * TILE_SCALE,
             y = anchorY + obj.y * TILE_SCALE,
             mirrorId = tonumber(obj.properties and obj.properties["Mirror"]),
+          })
+        elseif obj.class == "RightPlunger" or obj.class == "LeftPlunger" then
+          -- (See lua/world/Plunger.lua. Snapped to the tile the object's
+          -- top-left corner is in.)
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE + 0.01)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE + 0.01)
+          table.insert(plungerSpawns, {
+            x = anchorX + col * TILE_WORLD_SIZE,
+            y = anchorY + row * TILE_WORLD_SIZE,
+            dir = obj.class == "RightPlunger" and 1 or -1,
           })
         elseif obj.class == "Sign" then
           table.insert(signSpawns, {
@@ -2497,7 +2774,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   local level = setmetatable({
     shapes = shapes,
     walls = walls,
-    lavas = lavas,
+    lavaTiles = lavaTiles,
     ooombaSpawns = ooombaSpawns,
     sphereSpawns = sphereSpawns,
     spikeySpawns = spikeySpawns,
@@ -2505,6 +2782,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     leverSpawns = leverSpawns,
     crankSpawns = crankSpawns,
     signSpawns = signSpawns,
+    plungerSpawns = plungerSpawns,
     gateSpawns = gateSpawns,
     spikeyVerticalSpawns = spikeyVerticalSpawns,
     spikeyOrbitSpawns = spikeyOrbitSpawns,
@@ -2513,6 +2791,13 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     deathZones = deathZones,
     ropeSpawns = ropeSpawns,
     rockSpawns = rockSpawns,
+    -- (For Level:solidAt/headroomAt/pushPlayer — ball tunnels.)
+    tunnelByCell = tunnelByCell,
+    waterSolids = waterSolids,
+    collisionData = layer.data,
+    tileProps = tileProps,
+    mapWidth = width,
+    mapHeight = height,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

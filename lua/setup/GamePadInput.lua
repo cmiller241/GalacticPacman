@@ -287,8 +287,8 @@ local function pollGamepad(dt)
     gamepadHeldZoomOut = false
   end
 
-  -- --- D-pad left/right: cycle weapon mode (Blaster / Portal / Water —
-  -- same as P on the keyboard; see WeaponModes.lua) ---
+  -- --- D-pad left/right: cycle weapon mode (see WeaponModes.lua —
+  -- same as Tab on the keyboard) ---
   local dpadLeftPressed = gp:isGamepadDown(BUTTON_DPAD_LEFT)
   local dpadRightPressed = gp:isGamepadDown(BUTTON_DPAD_RIGHT)
   if dpadRightPressed and not lastDpadRightPressed and not riding then WeaponModes.cycle(1) end
@@ -336,7 +336,19 @@ local function pollGamepad(dt)
     -- he's aiming at (see lua/systems/Recall.lua), no fireballs.
     if r2Pressed and not lastR2Pressed then Recall.activate(state.player) end
     state.gamepadFireHeld = false
+  elseif state.pullBeamMode then
+    -- Pull Beam mode: R2 pulls, like the right mouse button (L2 still
+    -- pulls too — see below).
+    state.gamepadFireHeld = false
+    if state.player then
+      if r2Pressed and not lastR2Pressed then
+        state.player:trySelectPullTarget(state.player.lockedTarget or state.player.aimTargetObject)
+      elseif not r2Pressed and lastR2Pressed and not state.vatsActive then
+        state.player:clearPullTarget()
+      end
+    end
   else
+    -- Fireball and Ice: fire while held (see main.lua).
     state.gamepadFireHeld = r2Pressed
   end
   lastR2Pressed = r2Pressed
@@ -459,8 +471,9 @@ local function pollGamepad(dt)
   elseif state.portalMode then
     -- Portal mode: one red portal per press, no pull beam.
     if l2Pressed and not lastL2Pressed then PortalGun.fire(state.player, "red") end
-  elseif state.waterMode or state.recallMode then
-    -- Water and Recall modes: L2 does nothing for now (R2 sprays/recalls).
+  elseif not WeaponModes.canPull() then
+    -- Water, Ice and Recall modes: L2 does nothing (R2 sprays/fires
+    -- ice/recalls).
   elseif state.player then
     if l2Pressed and not lastL2Pressed then
       state.player:trySelectPullTarget(state.player.lockedTarget or state.player.aimTargetObject)
@@ -473,7 +486,8 @@ local function pollGamepad(dt)
     end
   end
   lastL2Pressed = l2Pressed
-  state.gamepadPullHeld = l2Pressed and not riding and not state.portalMode and not state.waterMode and not state.recallMode
+  state.gamepadPullHeld = not riding and WeaponModes.canPull()
+    and (l2Pressed or (state.pullBeamMode and lastR2Pressed))
 
   -- --- Right stick: aim (or, while in V.A.T.S., drives VatsCursor.lua's
   -- own on-screen cursor instead — see that file) ---

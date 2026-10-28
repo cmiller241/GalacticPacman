@@ -37,7 +37,8 @@ LockOutline.drawRingAround = function (target) {
   const glowColor = [OUTLINE_R, OUTLINE_G, OUTLINE_B, 0.35 * (0.35 + pulse * 0.25)];
   const coreColor = [OUTLINE_R, OUTLINE_G, OUTLINE_B, 0.8 + pulse * 0.2];
 
-  if (target.isRoundedRect) {
+  // (A cracked planet is round: it gets the circle.)
+  if (target.isRoundedRect && !target.isCrackedPlanet) {
     const hw = (target.halfWidth ?? target.radius ?? 0) + OUTLINE_PADDING;
     const hh = (target.halfHeight ?? target.radius ?? 0) + OUTLINE_PADDING;
     const cr = (target.cornerRadius ?? 0) + OUTLINE_PADDING;

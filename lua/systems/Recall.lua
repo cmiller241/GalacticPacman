@@ -1,7 +1,7 @@
 -- lua/systems/Recall.lua
 --
 -- Recall mode (one of the modes P cycles through — see WeaponModes.lua),
--- after Tears of the Kingdom's: right click / R2 on a planetoid and it
+-- after Tears of the Kingdom's: left click / R2 on a planetoid and it
 -- rewinds back along the path it's taken over the last 30 seconds.
 --
 -- Recording: every RECORD_SECONDS of game time, every planetoid that's

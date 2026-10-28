@@ -150,6 +150,21 @@ function Ooomba.newOnPlanet(planet, startAngle, options)
   return self
 end
 
+-- An Ooomba that patrols the ground of a dirt planet — one built from a
+-- Tiled map (see CrackedPlanetoid.fromTiledMap's objectSpawns, which is
+-- where main.lua gets (fx, fy): where it was placed on the map, in the
+-- planet's own frame). It's set down on the ground under that point and
+-- walks along it round the planet, turning back at a wall, a drop or a
+-- gap (see CrackedPlanetoid:floorPath's canWalkTo).
+function Ooomba.newOnCrackedPlanet(planet, fx, fy, options)
+  local R = planet:floorBelow(fx, fy)
+  if not R then return nil end
+  local angle = math.atan2(fy, fx) % (2 * math.pi)
+  local self = Ooomba.new(planet:floorPath(R), angle * R, options)
+  self.planet = planet
+  return self
+end
+
 -- A round planet's circumference as a walkable loop, in the same shape
 -- as a TerrainShape path (see newOnPlanet, and landing in :tryLand).
 function Ooomba.planetPath(planet)
@@ -237,8 +252,9 @@ function Ooomba:updateSquash(player)
 end
 
 function Ooomba:update()
-  -- Stops dead the moment it's stepped on.
-  if self.isSquashing then return end
+  -- Stops dead the moment it's stepped on — or frozen in an ice cube
+  -- (see WaterSystem.lua's "Ice": it walks on once that melts).
+  if self.isSquashing or self.frozen then return end
 
   local timeScale = state.timeScale or 1
 
@@ -277,7 +293,12 @@ function Ooomba:update()
   -- Measured before any wrap below, so a lap boundary doesn't read as
   -- one enormous step.
   local actualDs = desiredArcPos - prevArcPos
-  if shape.isLoop or (shape.isRoundedRect and not shape.isOpenPath and not shape.isSkyDome) then
+  if shape.canWalkTo and not shape:canWalkTo(desiredArcPos, self.direction, self.halfWidth, self.halfHeight) then
+    -- A wall, a drop or a gap ahead (on a dirt planet — see
+    -- Ooomba.newOnCrackedPlanet): turn around instead.
+    self.direction = -self.direction
+    actualDs = 0
+  elseif shape.isLoop or (shape.isRoundedRect and not shape.isOpenPath and not shape.isSkyDome) then
     -- A round planetoid (see Ooomba.newOnPlanet) — or a rounded-rect
     -- one it's landed on after a portal — has no ends to turn around
     -- at: it just keeps walking laps.

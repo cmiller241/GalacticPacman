@@ -123,7 +123,9 @@ function GravitySystem:applyTo(entity)
   entity.lastInfluencePlanet = dominant
 
   local dir
-  if dominant.isRoundedRect and dominant.nearestSurfacePoint then
+  -- (A cracked planet is round: it pulls toward its center, so a
+  -- crater's wall doesn't drag things sideways into it.)
+  if dominant.isRoundedRect and dominant.nearestSurfacePoint and not dominant.isCrackedPlanet then
     local surface = dominant:nearestSurfacePoint(entity.pos.x, entity.pos.y)
     -- Toward the deck point while airborne; once nearly on it, use
     -- "down" along the surface normal (SkyDome normal is (0,-1), so
@@ -136,6 +138,10 @@ function GravitySystem:applyTo(entity)
     else
       dir = surface.normal:clone():multiply(-1)
     end
+  elseif dominant.gravityDirAt then
+    -- (A cracked planet's gravity can be switched — see
+    -- CrackedPlanetoid:cycleGravity.)
+    dir = dominant:gravityDirAt(entity.pos.x, entity.pos.y)
   else
     dir = dominant.pos:subtract(entity.pos):normalize()
   end

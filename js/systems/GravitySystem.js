@@ -75,13 +75,19 @@ class GravitySystem {
     entity.lastInfluencePlanet = dominant;
 
     let dir;
-    if (dominant.isRoundedRect && dominant.nearestSurfacePoint) {
+    // (A cracked planet is round: it pulls toward its center, so a
+    // crater's wall doesn't drag things sideways into it.)
+    if (dominant.isRoundedRect && dominant.nearestSurfacePoint && !dominant.isCrackedPlanet) {
       const surface = dominant.nearestSurfacePoint(entity.pos.x, entity.pos.y);
       if (surface.distance > 1e-6) {
         dir = Vector2.new(surface.point.x - entity.pos.x, surface.point.y - entity.pos.y).normalize();
       } else {
         dir = surface.normal.clone().multiply(-1);
       }
+    } else if (dominant.gravityDirAt) {
+      // (A cracked planet's gravity can be switched — see
+      // CrackedPlanetoid.cycleGravity.)
+      dir = dominant.gravityDirAt(entity.pos.x, entity.pos.y);
     } else {
       dir = dominant.pos.subtract(entity.pos).normalize();
     }

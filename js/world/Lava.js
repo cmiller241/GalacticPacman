@@ -1,6 +1,13 @@
 // js/world/Lava.js
 //
-// One hazardous lava tile (see TiledTerrain.js's buildLavaTiles).
+// One tile's worth of lava, drawn on its own — now just the effect played
+// over a tile of lava turning to obsidian and back (see WaterSystem.js's
+// "Lava meeting water: obsidian"; the lava itself is a liquid there,
+// flowing like the water). A square tile (Lava.new), or with
+// Lava.newOnRing one tile of a Tiled map wrapped round a planet (see
+// CrackedPlanetoid.fromTiledMap): a curved slice of a ring, its surface
+// following the ring round and its embers rising away from the planet's
+// center.
 // Rendered as one quad with a GLSL shader, rather than the sheet's own
 // flat red tile art (skipped when baking TiledTerrain's static canvas) —
 // the shader punches a transparent hole above an animated sinusoidal
@@ -42,6 +49,16 @@ const PLASMA_DETAIL_SCALE = 2.6;  // how much finer the second (speckle) noise l
 const PLASMA_EVOLVE_SPEED = 0.18; // how fast the pattern churns in place
 const PLASMA_SCROLL_SPEED = 0.06; // horizontal drift on top of the churn
 
+// Turning to obsidian (a ring tile water's got to — see harden()) and
+// back (a fireball melting it — see melt()). Over HARDEN_SECONDS the
+// surface rises flat to the tile's top, the body darkens to glassy
+// black with glowing cracks hanging on longest, then fades out over the
+// obsidian block baked underneath. Melting plays it backwards.
+const HARDEN_SECONDS = 1.2;
+const MELT_SECONDS = 0.8;
+const COLOR_OBSIDIAN = [0.075, 0.055, 0.11]; // (matching img/obsidian.png)
+const COLOR_OBSIDIAN_SHEEN = [0.30, 0.22, 0.45];
+
 const EMBER_SPAWN_CHANCE = 0.35; // per tile, per baseline frame
 const EMBER_RISE_SPEED_MIN = 0.6;
 const EMBER_RISE_SPEED_MAX = 1.4;
@@ -51,13 +68,18 @@ const EMBER_LIFE_MAX = 1.8; // seconds
 const EMBER_RADIUS_MIN = 1.2;
 const EMBER_RADIUS_MAX = 2.6;
 
-function newEmber(x, y) {
+const RING_PIECE_LENGTH = 10; // world units of arc per straight piece of a ring tile's shape
+
+// (ux, uy): which way is up for it — straight up the screen on a flat
+// level (the default), away from the planet's center on a ring.
+function newEmber(x, y, ux = 0, uy = -1) {
   const speed = EMBER_RISE_SPEED_MIN + Math.random() * (EMBER_RISE_SPEED_MAX - EMBER_RISE_SPEED_MIN);
   const lifeSeconds = EMBER_LIFE_MIN + Math.random() * (EMBER_LIFE_MAX - EMBER_LIFE_MIN);
+  const drift = (Math.random() * 2 - 1) * EMBER_DRIFT;
   return {
     x, y,
-    vx: (Math.random() * 2 - 1) * EMBER_DRIFT,
-    vy: -speed,
+    vx: -uy * drift + ux * speed,
+    vy: ux * drift + uy * speed,
     life: 1,
     decayPerSecond: 1 / lifeSeconds,
     radius: EMBER_RADIUS_MIN + Math.random() * (EMBER_RADIUS_MAX - EMBER_RADIUS_MIN),
@@ -88,6 +110,20 @@ function getLavaShader() {
     extern vec3 colorDeep;
     extern vec3 colorMid;
     extern vec3 colorHot;
+    extern number waveFrequency2; // the second, smaller ripple's frequency
+    // Ring mode (polar = 1, see Lava.newOnRing): the tile is a slice of
+    // a ring round a planet, so "along the surface" is the angle round
+    // it and "down" is in toward its center.
+    extern number polar;
+    extern vec2 centerScreen;  // the planet's center, in SCREEN pixels, this frame
+    extern number rotation;    // how far the planet has turned (radians)
+    extern number ringOuter;   // the ring's outside radius: the tile's top edge
+    // Turning to obsidian: cool 0 (lava) .. 1 (obsidian); overlayAlpha
+    // fades the whole thing out at the end, over the baked block.
+    extern number cool;
+    extern number overlayAlpha;
+    extern vec3 colorObsidian;
+    extern vec3 colorObsidianSheen;
 
     // Cheap scramble hash (Dave Hoskins-style).
     float hash(vec2 p) {
@@ -122,13 +158,26 @@ function getLavaShader() {
     }
 
     vec4 effect(vec4 color, Image tex, vec2 texture_coords, vec2 screen_coords) {
-      vec2 localWorld = (screen_coords - originScreen) / zoom; // position within this tile, world units
-      float localY = localWorld.y;
-      float worldX = worldX0 + localWorld.x;
-      float worldY = worldY0 + localWorld.y;
+      float localY;    // how far below the tile's top edge, in world units
+      float alongX;    // how far along the surface, in world units (drives the wave)
+      vec2 noisePos;   // where it is, for the mottling below
+      if (polar > 0.5) {
+        vec2 d = (screen_coords - centerScreen) / zoom;
+        float c = cos(rotation);
+        float s = sin(rotation);
+        vec2 f = vec2(d.x * c + d.y * s, -d.x * s + d.y * c); // (in the planet's own, unturned frame)
+        localY = ringOuter - length(f);
+        alongX = atan(f.y, f.x) * ringOuter;
+        noisePos = f;
+      } else {
+        vec2 localWorld = (screen_coords - originScreen) / zoom; // position within this tile, world units
+        localY = localWorld.y;
+        alongX = worldX0 + localWorld.x;
+        noisePos = vec2(alongX, worldY0 + localWorld.y);
+      }
 
-      float wave = sin(worldX * waveFrequency + time * waveSpeed) * waveAmplitude
-                 + sin(worldX * waveFrequency * 2.3 - time * waveSpeed * 1.7) * waveAmplitude * 0.35;
+      float wave = sin(alongX * waveFrequency + time * waveSpeed) * waveAmplitude
+                 + sin(alongX * waveFrequency2 - time * waveSpeed * 1.7) * waveAmplitude * 0.35;
       float surfaceY = waveBaseY + wave;
 
       // Above the line: fully transparent. Below it: opaque lava,
@@ -136,7 +185,7 @@ function getLavaShader() {
       float alpha = smoothstep(surfaceY - edgeSoftness, surfaceY + edgeSoftness, localY);
 
       // Plasma-style mottling, continuous across adjacent tiles.
-      vec2 gp = vec2(worldX, worldY) * plasmaScale + vec2(time * scrollSpeed, -time * evolveSpeed);
+      vec2 gp = noisePos * plasmaScale + vec2(time * scrollSpeed, -time * evolveSpeed);
       float grain = fbm(gp);
       float speck = fbm(gp * detailScale + 5.2);
       float v = clamp(grain * 0.7 + speck * 0.3, 0.0, 1.0);
@@ -149,7 +198,17 @@ function getLavaShader() {
       vec3 lavaColor = mix(colorDeep, colorMid, smoothstep(0.25, 0.55, v));
       lavaColor = mix(lavaColor, colorHot, smoothstep(0.6, 0.9, v));
 
-      return vec4(lavaColor, alpha) * color;
+      // Cooling to obsidian: the body goes dark first, glassy where the
+      // coarse noise is high; thin cracks (the fine noise's ridges) keep
+      // glowing a while longer, then go dark too.
+      float bodyHeat = 1.0 - smoothstep(0.0, 0.55, cool);
+      float crackHeat = 1.0 - smoothstep(0.3, 0.95, cool);
+      float crack = smoothstep(0.80, 0.96, 1.0 - abs(speck * 2.0 - 1.0));
+      vec3 rock = mix(colorObsidian, colorObsidianSheen, grain * grain * 0.8);
+      vec3 col = mix(rock, lavaColor, bodyHeat);
+      col = mix(col, mix(colorMid, colorHot, crackHeat), crack * crackHeat * (1.0 - bodyHeat));
+
+      return vec4(col, alpha * overlayAlpha) * color;
     }
   `);
   return lavaShader;
@@ -183,6 +242,10 @@ class Lava {
     this.pos = new Vector2(x + this.size / 2, y + this.size / 2);
     this.radius = this.size * 0.7071067811865476; // half-diagonal of a square tile
 
+    // (Only lava on a planet turns to obsidian — see Lava.newOnRing — but
+    // these are read for every tile.)
+    this.cool = 0; this.coolDir = 0; this.hardened = false;
+
     this.embers = [];
 
     // Immovable/permanent terrain-like hazard, not something to pull
@@ -192,10 +255,111 @@ class Lava {
     this.isPullExempt = true;
   }
 
+  // One tile of a Tiled map wrapped round a planet (see
+  // CrackedPlanetoid.fromTiledMap): the slice of ring from radius rInner
+  // to rOuter, angle a0 to a1, in the planet's own unturned frame. It
+  // turns with the planet (planet.rotationAngle). filled: there's more
+  // lava right on top of it, so it's lava all the way up — no surface,
+  // no embers.
+  static newOnRing(planet, rInner, rOuter, a0, a1, filled) {
+    const self = Object.create(Lava.prototype);
+    self.planet = planet;
+    self.rInner = rInner; self.rOuter = rOuter;
+    self.a0 = a0; self.a1 = a1;
+    self.filled = filled;
+
+    // A whole number of waves round the ring, so the surface meets
+    // itself where the angle wraps round.
+    self.waveFrequency = Math.max(1, Math.floor(rOuter * WAVE_FREQUENCY + 0.5)) / rOuter;
+    self.waveFrequency2 = Math.max(1, Math.floor(rOuter * WAVE_FREQUENCY * 2.3 + 0.5)) / rOuter;
+
+    const arc = (a1 - a0) * rOuter;
+    const height = rOuter - rInner;
+    self.radius = Math.sqrt(arc * arc + height * height) / 2;
+    self.pos = new Vector2(0, 0);
+    self.placeOnRing();
+
+    // Obsidian (see harden() / melt()): cool runs 0 (lava) .. 1
+    // (obsidian), coolDir is which way it's going (1 hardening, -1
+    // melting, 0 neither).
+    self.cool = 0; self.coolDir = 0; self.hardened = false;
+
+    self.embers = [];
+    self.isImmovable = true;
+    self.isPermanent = true;
+    self.isPullExempt = true;
+    return self;
+  }
+
+  // Starts it cooling into obsidian. (WaterSystem.js makes the solid
+  // block under it — see "Lava meeting water: obsidian" there — and
+  // plays this over it as it forms.)
+  harden() {
+    this.hardened = true;
+    this.coolDir = 1;
+  }
+
+  // Starts it heating back up out of obsidian (a fireball's hit the block).
+  melt() {
+    this.hardened = false;
+    this.coolDir = -1;
+  }
+
+  // All the way to obsidian: nothing of it left to draw (the block's
+  // drawn on its own).
+  isObsidian() {
+    return this.hardened && this.cool >= 1;
+  }
+
+  // A point in the planet's own frame, turned with the planet, in world space.
+  ringToWorld(fx, fy) {
+    const p = this.planet;
+    const a = p.rotationAngle || 0;
+    const c = Math.cos(a), s = Math.sin(a);
+    return [p.pos.x + fx * c - fy * s, p.pos.y + fx * s + fy * c];
+  }
+
+  // Keeps pos (the bounding circle's center) on the tile as the planet turns.
+  placeOnRing() {
+    const am = (this.a0 + this.a1) / 2;
+    const rm = (this.rInner + this.rOuter) / 2;
+    [this.pos.x, this.pos.y] = this.ringToWorld(Math.cos(am) * rm, Math.sin(am) * rm);
+  }
+
+  // Where its glow sits (see TileGlow.js), and how strong (0..1), as
+  // [x, y, heat] — or null for none.
+  glowPoint() {
+    if (this.planet) {
+      if (this.filled || this.isObsidian()) return null;
+      const am = (this.a0 + this.a1) / 2;
+      const r = this.rOuter - (this.rOuter - this.rInner) * 0.3;
+      const [x, y] = this.ringToWorld(Math.cos(am) * r, Math.sin(am) * r);
+      return [x, y, 1 - this.cool];
+    }
+    if (this.isObsidian()) return null;
+    return [this.x0 + this.size / 2, this.y0 + this.size * 0.3, 1 - this.cool];
+  }
+
   update() {
     const timeScale = state.timeScale ?? 1;
 
-    if (Math.random() < EMBER_SPAWN_CHANCE * timeScale) {
+    if (this.coolDir !== 0) {
+      const seconds = this.coolDir > 0 ? HARDEN_SECONDS : MELT_SECONDS;
+      this.cool = Math.max(0, Math.min(1, this.cool + this.coolDir * timeScale / 60 / seconds));
+      if ((this.coolDir > 0 && this.cool >= 1) || (this.coolDir < 0 && this.cool <= 0)) this.coolDir = 0;
+    }
+    const heat = (1 - this.cool) ** 2; // (fewer embers as it cools)
+
+    if (this.planet) {
+      this.placeOnRing();
+      if (!this.filled && Math.random() < EMBER_SPAWN_CHANCE * heat * timeScale) {
+        const b = this.a0 + Math.random() * (this.a1 - this.a0);
+        const r = this.rOuter - WAVE_BASE_Y;
+        const [ex, ey] = this.ringToWorld(Math.cos(b) * r, Math.sin(b) * r);
+        const up = b + (this.planet.rotationAngle || 0);
+        this.embers.push(newEmber(ex, ey, Math.cos(up), Math.sin(up)));
+      }
+    } else if (Math.random() < EMBER_SPAWN_CHANCE * heat * timeScale) {
       const ex = this.x0 + Math.random() * this.size;
       const ey = this.y0 + WAVE_BASE_Y;
       this.embers.push(newEmber(ex, ey));
@@ -210,21 +374,60 @@ class Lava {
     }
   }
 
+  // A ring tile's shape, as triangles in the planet's own frame — made
+  // once, then drawn turned with the planet.
+  ringMesh() {
+    if (this.mesh) return this.mesh;
+    const { a0, a1, rInner: rIn, rOuter: rOut } = this;
+    const pieces = Math.max(2, Math.ceil((a1 - a0) * rOut / RING_PIECE_LENGTH));
+    const vertices = [];
+    const add = (r, a) => vertices.push([Math.cos(a) * r, Math.sin(a) * r, 0, 0, 1, 1, 1, 1]);
+    for (let k = 0; k < pieces; k++) {
+      const b0 = a0 + (a1 - a0) * k / pieces;
+      const b1 = a0 + (a1 - a0) * (k + 1) / pieces;
+      add(rOut, b0); add(rOut, b1); add(rIn, b1);
+      add(rOut, b0); add(rIn, b1); add(rIn, b0);
+    }
+    this.mesh = love.graphics.newMesh(vertices, 'triangles', 'static');
+    return this.mesh;
+  }
+
   draw() {
+    if (!this.isObsidian()) this.drawBody();
+
+    for (const e of this.embers) {
+      const a = Math.max(0, e.life);
+      love.graphics.setColor(1, 0.35 + 0.5 * a, 0.05 + 0.25 * a, a);
+      love.graphics.circle('fill', e.x, e.y, e.radius);
+    }
+    love.graphics.setColor(1, 1, 1, 1);
+  }
+
+  drawBody() {
     const shader = getLavaShader();
     const zoom = state.zoom ?? 1;
     const cam = state.camera ?? { x: 0, y: 0 };
+    const cool = this.cool ?? 0;
 
     love.graphics.setShader(shader);
-    shader.send('originScreen', [(this.x0 - cam.x) * zoom, (this.y0 - cam.y) * zoom]);
     shader.send('zoom', zoom);
     shader.send('time', sharedTime);
-    shader.send('worldX0', this.x0);
-    shader.send('worldY0', this.y0);
-    shader.send('waveAmplitude', WAVE_AMPLITUDE);
-    shader.send('waveFrequency', WAVE_FREQUENCY);
+    // (Cooling, the surface settles flat and rises to the tile's top.)
+    shader.send('waveAmplitude', WAVE_AMPLITUDE * (1 - cool));
     shader.send('waveSpeed', WAVE_SPEED);
-    shader.send('waveBaseY', WAVE_BASE_Y);
+    // (A filled tile's surface is far above it, so it's lava all the way up.)
+    shader.send('waveBaseY', this.filled ? -1000 : (WAVE_BASE_Y * (1 - cool) - EDGE_SOFTNESS * 2 * cool));
+    shader.send('cool', cool);
+    // (Hardening, it fades out at the very end over the baked block;
+    // melting, the block's already gone, so it stays solid throughout.)
+    let fade = 0;
+    if (this.hardened) {
+      const t = Math.max(0, Math.min(1, (cool - 0.8) / 0.2));
+      fade = t * t * (3 - 2 * t);
+    }
+    shader.send('overlayAlpha', 1 - fade);
+    shader.send('colorObsidian', COLOR_OBSIDIAN);
+    shader.send('colorObsidianSheen', COLOR_OBSIDIAN_SHEEN);
     shader.send('edgeSoftness', EDGE_SOFTNESS);
     shader.send('glowBand', GLOW_BAND);
     shader.send('plasmaScale', PLASMA_SCALE);
@@ -236,15 +439,26 @@ class Lava {
     shader.send('colorHot', COLOR_HOT);
 
     love.graphics.setColor(1, 1, 1, 1);
-    love.graphics.rectangle('fill', this.x0, this.y0, this.size, this.size);
-    love.graphics.setShader();
-
-    for (const e of this.embers) {
-      const a = Math.max(0, e.life);
-      love.graphics.setColor(1, 0.35 + 0.5 * a, 0.05 + 0.25 * a, a);
-      love.graphics.circle('fill', e.x, e.y, e.radius);
+    if (this.planet) {
+      const p = this.planet;
+      const angle = p.rotationAngle || 0;
+      shader.send('polar', 1);
+      shader.send('centerScreen', [(p.pos.x - cam.x) * zoom, (p.pos.y - cam.y) * zoom]);
+      shader.send('rotation', angle);
+      shader.send('ringOuter', this.rOuter);
+      shader.send('waveFrequency', this.waveFrequency);
+      shader.send('waveFrequency2', this.waveFrequency2);
+      love.graphics.draw(this.ringMesh(), p.pos.x, p.pos.y, angle);
+    } else {
+      shader.send('polar', 0);
+      shader.send('originScreen', [(this.x0 - cam.x) * zoom, (this.y0 - cam.y) * zoom]);
+      shader.send('worldX0', this.x0);
+      shader.send('worldY0', this.y0);
+      shader.send('waveFrequency', WAVE_FREQUENCY);
+      shader.send('waveFrequency2', WAVE_FREQUENCY * 2.3);
+      love.graphics.rectangle('fill', this.x0, this.y0, this.size, this.size);
     }
-    love.graphics.setColor(1, 1, 1, 1);
+    love.graphics.setShader();
   }
 }
 

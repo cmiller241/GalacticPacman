@@ -38,7 +38,23 @@
   <main id="content">
     <section class="page" data-page="0">
       <h2>Home</h2>
+      <!-- What's new, newest first. To add a post, copy an <article>
+           block to the top of this list and change its date and text. -->
       <div class="updates">
+        <article class="update">
+          <span class="update-date">Tue, October 27, 2026</span>
+          <h3 class="update-title">The Galactic Highway</h3>
+          <p>
+            Bob doesn't have a spaceship, and teleporting everywhere
+            would skip the fun of the trip &mdash; so he gets a highway.
+            The Galactic Highway is a quick way to get around the galaxy,
+            and much like a real highway, Bob enters and exits it
+            through cannons and flippers.
+          </p>
+          <div class="video-embed update-video">
+            <iframe src="https://www.youtube-nocookie.com/embed/0nJM0LD4biw" title="Asteroid Bob — the Galactic Highway" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+          </div>
+        </article>
         <article class="update">
           <span class="update-date">Sat, October 10, 2026</span>
           <p>
@@ -91,16 +107,19 @@
       <h3 class="media-subhead">Videos</h3>
       <div class="video-grid">
         <div class="video-embed">
-          <iframe src="https://www.youtube-nocookie.com/embed/Qed6qY5nKCk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          <iframe src="https://www.youtube-nocookie.com/embed/0nJM0LD4biw" title="Asteroid Bob — the Galactic Highway" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
         </div>
         <div class="video-embed">
-          <iframe src="https://www.youtube-nocookie.com/embed/0rcjYK3JeIE" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          <iframe src="https://www.youtube-nocookie.com/embed/Qed6qY5nKCk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
         </div>
         <div class="video-embed">
-          <iframe src="https://www.youtube-nocookie.com/embed/RaAhAkApAhA" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          <iframe src="https://www.youtube-nocookie.com/embed/0rcjYK3JeIE" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
         </div>
         <div class="video-embed">
-          <iframe src="https://www.youtube-nocookie.com/embed/la8H_S-S_lk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          <iframe src="https://www.youtube-nocookie.com/embed/RaAhAkApAhA" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        </div>
+        <div class="video-embed">
+          <iframe src="https://www.youtube-nocookie.com/embed/la8H_S-S_lk" title="Asteroid Bob video" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
         </div>
       </div>
     </section>
@@ -167,6 +186,7 @@
 
 <script src="js/starfield.js"></script>
 <script src="js/planets.js"></script>
+<script src="js/fx.js"></script>
 <script src="js/pullbeam.js"></script>
 <script src="js/dust.js"></script>
 <script src="js/fireball.js"></script>

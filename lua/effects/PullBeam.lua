@@ -304,7 +304,8 @@ local function drawPullIndicator()
   drawGlow(endX, endY, 26, COLOR_HOT[1], COLOR_HOT[2], COLOR_HOT[3], 1)
 
   -- Outline around the target
-  if target.isRoundedRect then
+  -- (A cracked planet is round: it gets the circle below.)
+  if target.isRoundedRect and not target.isCrackedPlanet then
     -- A true rotated rounded-rect outline, matching the target's own
     -- actual silhouette (halfWidth/halfHeight/cornerRadius/
     -- rotationAngle — RoundedRectPlanetoid.lua's own fields; SkyDome/

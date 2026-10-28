@@ -16,6 +16,7 @@
 -- characters themselves, so they aren't washed out by it.
 
 local state = require("lua.state")
+local WaterSystem = require("lua.systems.WaterSystem")
 
 local TileGlow = {}
 
@@ -91,11 +92,20 @@ function TileGlow.prepare()
     end
   end
   for _, lava in ipairs(state.lavas or {}) do
-    if lava.x0 and lava.size then
-      local pulse = 1 + LAVA.pulse * math.sin(now * 1.7 + lava.x0 * 0.01)
-      add(lava.x0 + lava.size / 2, lava.y0 + lava.size * 0.3, LAVA.color, LAVA.radius, LAVA.intensity * pulse)
+    -- (nil: none, for lava buried under more lava or turned to obsidian;
+    -- heat dims it as it cools)
+    local gx, gy, heat = lava:glowPoint()
+    if gx then
+      local pulse = 1 + LAVA.pulse * math.sin(now * 1.7 + gx * 0.01)
+      add(gx, gy, LAVA.color, LAVA.radius, LAVA.intensity * pulse * heat)
     end
   end
+  -- The lava itself (a liquid — see WaterSystem.lua): one glow for each
+  -- tile's worth of its surface.
+  WaterSystem.forEachLavaGlow(function(gx, gy)
+    local pulse = 1 + LAVA.pulse * math.sin(now * 1.7 + gx * 0.01)
+    add(gx, gy, LAVA.color, LAVA.radius, LAVA.intensity * pulse)
+  end)
   for color, p in pairs(state.portals or {}) do
     local c = PORTAL_COLORS[color]
     if c and p.x then

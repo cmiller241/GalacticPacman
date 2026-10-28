@@ -113,13 +113,11 @@ const Bob = (() => {
   // cursor instead of hanging neutral. MAX_AIM_FROM_FORWARD matches the
   // game's own 95-degree cone; MOUSE_IDLE_MS matches its 2-second
   // mouseIdleThreshold (no recent mouse movement reverts to a neutral
-  // arm instead of tracking a stale target). MUZZLE_LENGTH has no real
-  // game equivalent (Player.lua derives its muzzle from the exact
-  // blaster-arm sprite pixel) — just a short, plausible "gun barrel"
-  // reach for where js/fireball.js's bolts actually spawn from.
+  // arm instead of tracking a stale target). Fireballs and the pull beam
+  // leave from the blaster's exact muzzle pixel (see muzzlePoint below),
+  // as in the game.
   const MAX_AIM_FROM_FORWARD = (95 * Math.PI) / 180;
   const MOUSE_IDLE_MS = 2000;
-  const MUZZLE_LENGTH = 14;
 
   // World-space shoulder attach point for the left (aiming) arm — the
   // ONE formula pullBeamInfo() and the mouse-aim pose below both need,
@@ -128,6 +126,31 @@ const Bob = (() => {
     const cos = Math.cos(orientation), sin = Math.sin(orientation);
     const offX = LEFT_ARM_X * SCALE, offY = LEFT_ARM_Y * SCALE;
     return { x: originX + (offX * cos - offY * sin), y: originY + (offX * sin + offY * cos) };
+  }
+
+  // Facing left, draw() mirrors the whole rig across the line through
+  // his feet (pose.x/y) along `orientation`. Same mirror, for one point.
+  function mirrorPoint(x, y, poseX, poseY, orientation, facing) {
+    if (facing >= 0) return { x, y };
+    const cos = Math.cos(orientation), sin = Math.sin(orientation);
+    const dx = x - poseX, dy = y - poseY;
+    const along = dx * cos + dy * sin;       // along the feet line
+    const across = -dx * sin + dy * cos;     // out from it
+    return { x: poseX - along * cos - across * sin, y: poseY - along * sin + across * cos };
+  }
+
+  // Where the blaster's muzzle (the hole at the end of leftarm.png, pixel
+  // 530,120 — same as Player.lua:getMuzzlePosition) is drawn, for the
+  // left arm at local angle `armAngle`.
+  const MUZZLE_PX_X = 530, MUZZLE_PX_Y = 120;
+  function muzzlePoint(originX, originY, orientation, armAngle, poseX, poseY, facing) {
+    const shoulder = leftShoulderPoint(originX, originY, orientation);
+    const arm = PARTS.find((p) => p.id === "leftarm");
+    const vx = (MUZZLE_PX_X - arm.jointX) * SCALE, vy = (MUZZLE_PX_Y - arm.jointY) * SCALE;
+    const a = orientation + armAngle;
+    const x = shoulder.x + vx * Math.cos(a) - vy * Math.sin(a);
+    const y = shoulder.y + vx * Math.sin(a) + vy * Math.cos(a);
+    return mirrorPoint(x, y, poseX, poseY, orientation, facing);
   }
 
   // Idling too long curls him into a ball (same transformation Bob can
@@ -220,9 +243,105 @@ const Bob = (() => {
   // baseAngle too (for every kind, including body/head), so a part's
   // placement swings correctly around Bob's own tilt rather than
   // staying pinned to world-up as he leans along a planet's curve.
+  // ------------------------------------------------------------------
+  // Crisp sprites. The part PNGs are hundreds of pixels across but drawn
+  // at a few percent of that; shrinking that far in one drawImage call
+  // comes out soft. Instead each part is shrunk ONCE, in halving steps
+  // (which keeps detail), to exactly the size it's shown at on this
+  // screen, then lightly sharpened. drawPart then draws that at about
+  // 1:1. Remade if the size on screen changes (window resize, zoom,
+  // moving to a screen with a different pixel density).
+  // ------------------------------------------------------------------
+  const SHARPEN = 0.45; // 0 = off; how much edge contrast to add back after shrinking
+  const spriteCache = {}; // part id -> { key, canvas }
+
+  function sharpen(canvas) {
+    const ctx = canvas.getContext("2d");
+    let data;
+    try {
+      data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    } catch (e) {
+      return; // opened straight from a file: the browser blocks reading pixels; skip
+    }
+    const w = canvas.width, h = canvas.height, src = data.data;
+    // Work on premultiplied color so transparent edges don't grow halos.
+    const pm = new Float32Array(src.length);
+    for (let i = 0; i < src.length; i += 4) {
+      const a = src[i + 3] / 255;
+      pm[i] = src[i] * a; pm[i + 1] = src[i + 1] * a; pm[i + 2] = src[i + 2] * a; pm[i + 3] = src[i + 3];
+    }
+    const out = new Uint8ClampedArray(src.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const result = [0, 0, 0, 0];
+        for (let c = 0; c < 4; c++) {
+          // Average of the four neighbors (edges reuse the pixel itself).
+          const l = x > 0 ? pm[i - 4 + c] : pm[i + c];
+          const r = x < w - 1 ? pm[i + 4 + c] : pm[i + c];
+          const u = y > 0 ? pm[i - w * 4 + c] : pm[i + c];
+          const d = y < h - 1 ? pm[i + w * 4 + c] : pm[i + c];
+          const v = pm[i + c] + SHARPEN * (pm[i + c] - (l + r + u + d) / 4);
+          result[c] = c === 3 ? Math.min(255, Math.max(0, v)) : Math.max(0, v);
+        }
+        const a = result[3];
+        if (a <= 0) continue;
+        const k = 255 / a;
+        out[i] = Math.min(a, result[0]) * k;
+        out[i + 1] = Math.min(a, result[1]) * k;
+        out[i + 2] = Math.min(a, result[2]) * k;
+        out[i + 3] = a;
+      }
+    }
+    ctx.putImageData(new ImageData(out, w, h), 0, 0);
+  }
+
+  function shrinkImage(img, targetW, targetH) {
+    let cur = img, curW = img.naturalWidth, curH = img.naturalHeight;
+    // Halve while still more than twice the target...
+    while (curW / 2 >= targetW && curH / 2 >= targetH) {
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(curW / 2));
+      c.height = Math.max(1, Math.round(curH / 2));
+      const cx = c.getContext("2d");
+      cx.imageSmoothingEnabled = true;
+      cx.imageSmoothingQuality = "high";
+      cx.drawImage(cur, 0, 0, c.width, c.height);
+      cur = c; curW = c.width; curH = c.height;
+    }
+    // ...then one last step to the exact size.
+    const out = document.createElement("canvas");
+    out.width = targetW;
+    out.height = targetH;
+    const ox = out.getContext("2d");
+    ox.imageSmoothingEnabled = true;
+    ox.imageSmoothingQuality = "high";
+    ox.drawImage(cur, 0, 0, targetW, targetH);
+    if (SHARPEN > 0) sharpen(out);
+    return out;
+  }
+
+  // The part's image pre-shrunk for how big it's about to be drawn:
+  // `scale` (rig units -> page units) times the canvas transform's own
+  // scale (page units -> screen pixels).
+  function spriteFor(ctx, part, img, scale) {
+    const m = ctx.getTransform();
+    const pixelsPerUnit = Math.hypot(m.a, m.b) * scale;
+    const key = Math.round(pixelsPerUnit * 2000); // ignore tiny changes
+    let entry = spriteCache[part.id];
+    if (!entry || entry.key !== key) {
+      const tw = Math.max(1, Math.round(img.naturalWidth * pixelsPerUnit));
+      const th = Math.max(1, Math.round(img.naturalHeight * pixelsPerUnit));
+      entry = { key, canvas: shrinkImage(img, tw, th) };
+      spriteCache[part.id] = entry;
+    }
+    return entry.canvas;
+  }
+
   function drawPart(ctx, part, originX, originY, baseAngle, scale) {
-    const img = images[part.id];
-    if (!img || !img.complete || !img.naturalWidth) return;
+    const source = images[part.id];
+    if (!source || !source.complete || !source.naturalWidth) return;
+    const img = spriteFor(ctx, part, source, scale);
 
     const offX = (part.x || 0) * scale;
     const offY = (part.y || 0) * scale;
@@ -231,8 +350,10 @@ const Bob = (() => {
     const worldX = originX + (offX * cos - offY * sin);
     const worldY = originY + (offX * sin + offY * cos);
 
-    const w = img.naturalWidth * scale;
-    const h = img.naturalHeight * scale;
+    // Size on the page, from the original image's dimensions (img is
+    // the shrunk copy, drawn at this same size).
+    const w = source.naturalWidth * scale;
+    const h = source.naturalHeight * scale;
 
     ctx.save();
     ctx.translate(worldX, worldY);
@@ -635,14 +756,19 @@ const Bob = (() => {
       const outwardY = Math.sin(pose.orientation - Math.PI / 2);
       const originX = pose.x + outwardX * GROUND_OFFSET * SCALE;
       const originY = pose.y + outwardY * GROUND_OFFSET * SCALE;
-      const shoulder = leftShoulderPoint(originX, originY, pose.orientation);
-      // PullBeam.lua draws to the TARGET'S CENTER (target.pos) and
-      // outlines its full radius — not the surface point Bob himself
-      // is flying to land on.
+      // The arm points from his (drawn, possibly mirrored) shoulder at
+      // the planet's center; the beam leaves from the blaster's muzzle,
+      // like the game's (Player:getMuzzlePosition).
+      const shoulderU = leftShoulderPoint(originX, originY, pose.orientation);
+      const shoulder = mirrorPoint(shoulderU.x, shoulderU.y, pose.x, pose.y, pose.orientation, this.facing);
       const toPlanet = this.planets[this._pull.targetIdx];
+      const worldAngle = Math.atan2(toPlanet.cy - shoulder.y, toPlanet.cx - shoulder.x);
+      const armAngle = worldAngleToLocalRotation(worldAngle, pose.orientation, this.facing);
+      const muzzle = muzzlePoint(originX, originY, pose.orientation, armAngle, pose.x, pose.y, this.facing);
       return {
-        originX: shoulder.x,
-        originY: shoulder.y,
+        originX: muzzle.x,
+        originY: muzzle.y,
+        armAngle,
         targetX: toPlanet.cx,
         targetY: toPlanet.cy,
         targetRadius: toPlanet.r,
@@ -691,12 +817,14 @@ const Bob = (() => {
       const clampedWorldAngle = forwardAngle + relative;
       const armAngle = worldAngleToLocalRotation(clampedWorldAngle, pose.orientation, dirSign);
 
+      // The muzzle where the arm's drawn (see muzzlePoint).
+      const muzzle = muzzlePoint(originX, originY, pose.orientation, armAngle, pose.x, pose.y, dirSign);
       return {
         dirSign,
         armAngle,
         worldAngle: clampedWorldAngle,
-        muzzleX: shoulder.x + Math.cos(clampedWorldAngle) * MUZZLE_LENGTH,
-        muzzleY: shoulder.y + Math.sin(clampedWorldAngle) * MUZZLE_LENGTH,
+        muzzleX: muzzle.x,
+        muzzleY: muzzle.y,
       };
     }
 
@@ -753,11 +881,7 @@ const Bob = (() => {
         // simplified to a direct point-at, since the website has no
         // separate aim-vs-facing distinction to track.
         let leftArmAngle = 0;
-        if (pulling) {
-          const info = this.pullBeamInfo();
-          const worldAngleToTarget = Math.atan2(info.targetY - info.originY, info.targetX - info.originX);
-          leftArmAngle = worldAngleToLocalRotation(worldAngleToTarget, pose.orientation, dirSign);
-        }
+        if (pulling) leftArmAngle = this.pullBeamInfo().armAngle;
 
         angles = { leftboot: -0.7, rightboot: 0.7, leftarm: leftArmAngle, rightarm: rightArmAngle };
         flips = { rightarm: true };

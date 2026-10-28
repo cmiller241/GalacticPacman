@@ -1,10 +1,8 @@
 // js/planets.js
 //
 // The four nav planets: where they sit, what they're tinted, and how
-// they're baked to look like the game's own planetoids (see
-// lua/world/Planetoid.lua:ensureBodyCanvas, which this mirrors —
-// texture cropped to a circle, tinted via a multiply blend, a
-// directional "sun-shading" gradient, a thin rim light).
+// they're baked to look like the game's own planetoids (see bakePlanet
+// below: the game's texture, tint, sun shading and highlight).
 //
 // Positions are authored in a FIXED internal coordinate space
 // (HERO_WIDTH x HERO_HEIGHT), not real CSS pixels — js/main.js draws
@@ -67,66 +65,99 @@ const Planets = (() => {
     });
   }
 
+  // ------------------------------------------------------------------
+  // Lighting — the same as the game's planets (lua/world/Planetoid.lua's
+  // bake and sun-shading shader, same numbers): the body brightened, lit
+  // side / dark side multiplied onto it, and a soft warm highlight on
+  // the sun-facing side.
+  // Built from canvas gradients and blend modes only (no pixel reads),
+  // so it also works when the page is opened straight from a file.
+  // ------------------------------------------------------------------
+  const BAKE_SCALE = 2;  // baked at 2x, like the game, so it stays sharp on high-DPI screens
+
+  // Toward the sun: upper-left, a little more up than left.
+  const LIGHT = (() => { const x = -0.62, y = -0.78, l = Math.hypot(x, y); return { x: x / l, y: y / l }; })();
+
+  // From Planetoid.lua.
+  const BODY_BRIGHTEN = 0.18;     // the body's texture lifted by this much of itself
+  const OVERALL_DARKEN = 0.08;    // flat darkening over the whole body
+  const HIGHLIGHT_ALPHA = 0.22;   // the soft sun-side highlight: brightness...
+  const HIGHLIGHT_SIZE = 0.55;    // ...size (fraction of the radius)...
+  const HIGHLIGHT_OFFSET = 0.48;  // ...and how far toward the sun it sits
+
+  function makeCanvas(size) {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    return [c, ctx];
+  }
+
+  const rgba = (c, a) => `rgba(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)}, ${a})`;
+
   // Bakes one planet's own circular body once — cheap enough (4 of
   // them, once at startup) that there's no need for the game's own
   // per-frame bake-budget/cache machinery here.
   function bakePlanet(def) {
-    const size = def.r * 2;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    const r = def.r;
+    const R = def.r * BAKE_SCALE;
+    const size = R * 2;
+    const [canvas, ctx] = makeCanvas(size);
+    const color = def.color;
 
     ctx.save();
     ctx.beginPath();
-    ctx.arc(r, r, r, 0, Math.PI * 2);
+    ctx.arc(R, R, R, 0, Math.PI * 2);
     ctx.clip();
 
+    // Texture, drawn 2.5x the planet's width so only its middle shows —
+    // same as Planetoid.lua's bake.
     if (textureImg) {
-      // Oversized + centered crop (not a true tile) — same technique
-      // Planetoid.lua's own bake uses: draw the texture bigger than
-      // the circle so only its middle portion actually shows once
-      // clipped, instead of stretching the whole image to exactly fit.
-      const scale = Math.max(size / textureImg.width, size / textureImg.height) * 1.5;
-      const dw = textureImg.width * scale, dh = textureImg.height * scale;
-      ctx.drawImage(textureImg, r - dw / 2, r - dh / 2, dw, dh);
+      const tex = size * 2.5;
+      ctx.drawImage(textureImg, R - tex / 2, R - tex / 2, tex, tex);
     } else {
       ctx.fillStyle = "#888";
       ctx.fillRect(0, 0, size, size);
     }
 
-    // Tint — a multiply blend against a flat fill is the canvas
-    // equivalent of love.graphics.draw(img, ..., color): both just
-    // multiply the drawn pixels by the tint color channel-for-channel.
-    const [cr, cg, cb] = def.color;
+    // Tint (multiply = the game's love.graphics.draw(img, ..., color)).
     ctx.globalCompositeOperation = "multiply";
-    ctx.fillStyle = `rgb(${cr * 255}, ${cg * 255}, ${cb * 255})`;
+    ctx.fillStyle = rgba(color, 1);
     ctx.fillRect(0, 0, size, size);
 
-    // Directional "sun-shading" — a bright highlight toward the
-    // upper-left, darkening toward the lower-right — same idea as
-    // Planetoid.lua's own drawSunShading, just a static baked gradient
-    // here instead of one recomputed from a live sun position.
-    ctx.globalCompositeOperation = "source-over";
-    const shade = ctx.createRadialGradient(r * 0.6, r * 0.5, r * 0.15, r * 0.6, r * 0.5, r * 1.5);
-    shade.addColorStop(0, "rgba(255,255,255,0.30)");
-    shade.addColorStop(0.5, "rgba(255,255,255,0)");
-    shade.addColorStop(1, "rgba(0,0,0,0.55)");
-    ctx.fillStyle = shade;
+    // Brighten: the tinted body added onto itself at BODY_BRIGHTEN.
+    const [copy, copyCtx] = makeCanvas(size);
+    copyCtx.drawImage(canvas, 0, 0);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = BODY_BRIGHTEN;
+    ctx.drawImage(copy, 0, 0);
+    ctx.globalAlpha = 1;
+
+    // Lit side / dark side, multiplied on: full brightness half a radius
+    // toward the sun, falling off to black 1.6 radii from there.
+    ctx.globalCompositeOperation = "multiply";
+    const lx = R + LIGHT.x * R * 0.5, ly = R + LIGHT.y * R * 0.5;
+    const lit = ctx.createRadialGradient(lx, ly, 0, lx, ly, R * 1.6);
+    const top = Math.round(255 * (1 - OVERALL_DARKEN));
+    lit.addColorStop(0, `rgb(${top}, ${top}, ${top})`);
+    lit.addColorStop(1, "rgb(0, 0, 0)");
+    ctx.fillStyle = lit;
     ctx.fillRect(0, 0, size, size);
-    ctx.restore();
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(r, r, r - 1, 0, Math.PI * 2);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.stroke();
-    ctx.restore();
+    // Highlight: a soft warm spot on the sun side, added on, fading
+    // with the square of the distance like the game's.
+    ctx.globalCompositeOperation = "lighter";
+    const hx = R + LIGHT.x * R * HIGHLIGHT_OFFSET, hy = R + LIGHT.y * R * HIGHLIGHT_OFFSET;
+    const hl = ctx.createRadialGradient(hx, hy, 0, hx, hy, R * HIGHLIGHT_SIZE);
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      hl.addColorStop(t, rgba([1, 0.98, 0.92], HIGHLIGHT_ALPHA * (1 - t) * (1 - t)));
+    }
+    ctx.fillStyle = hl;
+    ctx.fillRect(0, 0, size, size);
 
+    ctx.restore();
     return canvas;
   }
 
@@ -157,7 +188,7 @@ const Planets = (() => {
       ctx.arc(def.cx, cy, glowR, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.drawImage(baked[i], def.cx - def.r, cy - def.r);
+      ctx.drawImage(baked[i], def.cx - def.r, cy - def.r, def.r * 2, def.r * 2);
     }
   }
 
