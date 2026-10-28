@@ -65,6 +65,14 @@ function attachInputHandlers() {
       return;
     }
     if (state.waterMode) return;
+    // Ice mode: the left button fires an ice bolt; the right does nothing for now.
+    if (state.iceMode) {
+      if (button === 1) {
+        state.mouseDown = true;
+        if (state.player) state.player.shootIceBolt();
+      }
+      return;
+    }
     if (state.recallMode) {
       if (button === 2) Recall.activate(state.player);
       return;
@@ -148,11 +156,27 @@ function attachInputHandlers() {
     }
 
     if (key === 'c' && !isrepeat) state.showCollisionDebug = !state.showCollisionDebug;
+
+    // Turns the dirt planet he's on or near: N clockwise, M
+    // counter-clockwise; the same key again stops it (see
+    // CrackedPlanetoid.toggleSpin).
+    if ((key === 'n' || key === 'm') && !isrepeat && state.player) {
+      const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
+      if (p && p.toggleSpin) p.toggleSpin(key === 'n' ? 1 : -1);
+    }
     if (key === 'a' && !isrepeat) state.showBeltCellDebug = !state.showBeltCellDebug;
     if (key === 'r' && !isrepeat) state.showInfluenceRings = !state.showInfluenceRings;
 
     // Cycles what the blaster's buttons do (see WeaponModes.js).
     if (key === 'p' && !isrepeat && !riding) WeaponModes.cycle(1);
+
+    // Switches the gravity of the dirt planet he's on or near: toward
+    // its core, straight down, straight up (see
+    // CrackedPlanetoid.cycleGravity).
+    if (key === 'g' && !isrepeat && state.player) {
+      const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
+      if (p && p.cycleGravity) p.cycleGravity();
+    }
   };
 
   love.keyreleased = function (loveKey) {

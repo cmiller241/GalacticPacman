@@ -537,6 +537,9 @@ function CollisionSystem:handlePlayerSkyDomeContainment(player, dome)
 end
 
 function CollisionSystem:tryLandOnPlanet(player, planet)
+  -- Planets with their own player collision (CrackedPlanetoid.lua: caves,
+  -- ceilings and walls, not just a surface to land on).
+  if planet.collidePlayer then return planet:collidePlayer(player) end
   if planet.isRoundedRect then
     -- SkyDome: only land inside gravity window, while falling / neutral
     if planet.isSkyDome then
@@ -705,8 +708,9 @@ function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
   if not ooombas then return flattened end
 
   for _, o in ipairs(ooombas) do
-    -- (Not while it's partway through a portal — see PortalGun.tryEnterOoomba.)
-    if not o.isSquashing and not player.isDying and not o.portalTransit then
+    -- (Not while it's partway through a portal — see PortalGun.tryEnterOoomba —
+    -- or frozen in an ice cube: see WaterSystem.lua's "Ice".)
+    if not o.isSquashing and not player.isDying and not o.portalTransit and not o.frozen then
       local dx, dy = player.pos.x - o.pos.x, player.pos.y - o.pos.y
       local r = player.radius + o.hitRadius
       if dx * dx + dy * dy <= r * r then
@@ -734,7 +738,8 @@ function CollisionSystem:handleFireballOoombaCollisions(fireballs, ooombas)
 
   for _, f in ipairs(fireballs) do
     for _, o in ipairs(ooombas) do
-      if not killedOoombas[o] then
+      -- (A frozen one's ice takes the hit instead — see WaterSystem.fireHitsIce.)
+      if not killedOoombas[o] and not o.frozen then
         local dist = f.pos:subtract(o.pos):length()
         if dist < f.radius + o.hitRadius then
           hitFireballs[f] = true
@@ -888,8 +893,10 @@ function CollisionSystem:handleFireballWallCollisions(fireballs, walls)
           local closestY = math.max(boxMinY, math.min(f.pos.y, boxMaxY))
           local dx, dy = f.pos.x - closestX, f.pos.y - closestY
           if dx * dx + dy * dy < f.radius * f.radius then
-            hitFireballs[f] = true
-            break
+            -- (Which wall it hit — an obsidian block's, over any other it
+            -- touches too: see WaterSystem.meltObsidian.)
+            if not hitFireballs[f] or wall.obsidian then hitFireballs[f] = wall end
+            if wall.obsidian then break end
           end
         end
       end

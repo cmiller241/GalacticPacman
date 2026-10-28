@@ -150,6 +150,21 @@ class Ooomba {
     return o;
   }
 
+  // An Ooomba that patrols the ground of a dirt planet — one built from a
+  // Tiled map (see CrackedPlanetoid.fromTiledMap's objectSpawns, which is
+  // where main.js gets (fx, fy): where it was placed on the map, in the
+  // planet's own frame). It's set down on the ground under that point and
+  // walks along it round the planet, turning back at a wall, a drop or a
+  // gap (see CrackedPlanetoid.floorPath's canWalkTo).
+  static newOnCrackedPlanet(planet, fx, fy, options) {
+    const R = planet.floorBelow(fx, fy);
+    if (R === null) return null;
+    const angle = lua.mod(Math.atan2(fy, fx), 2 * Math.PI);
+    const o = new Ooomba(planet.floorPath(R), angle * R, options ?? {});
+    o.planet = planet;
+    return o;
+  }
+
   // A round planet's circumference as a walkable loop, in the same shape
   // as a TerrainShape path.
   static planetPath(planet) {
@@ -231,7 +246,9 @@ class Ooomba {
 
   update() {
     // Stops dead the moment it's stepped on.
-    if (this.isSquashing) return;
+    // (Or frozen in an ice cube — see WaterSystem.js's "Ice": it walks on
+    // once that melts.)
+    if (this.isSquashing || this.frozen) return;
 
     const timeScale = state.timeScale ?? 1;
 
@@ -270,7 +287,12 @@ class Ooomba {
     // Measured before any wrap below, so a lap boundary doesn't read as
     // one enormous step.
     let actualDs = desiredArcPos - prevArcPos;
-    if (shape.isLoop || (shape.isRoundedRect && !shape.isOpenPath && !shape.isSkyDome)) {
+    if (shape.canWalkTo && !shape.canWalkTo(desiredArcPos, this.direction, this.halfWidth, this.halfHeight)) {
+      // A wall, a drop or a gap ahead (on a dirt planet — see
+      // Ooomba.newOnCrackedPlanet): turn around instead.
+      this.direction = -this.direction;
+      actualDs = 0;
+    } else if (shape.isLoop || (shape.isRoundedRect && !shape.isOpenPath && !shape.isSkyDome)) {
       // A round planetoid — or a rounded-rect one it's landed on after a
       // portal — has no ends to turn around at: it just keeps walking laps.
       this.surfaceArcPos = lua.mod(desiredArcPos, perimeter);

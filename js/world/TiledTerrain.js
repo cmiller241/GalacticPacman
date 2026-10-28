@@ -34,7 +34,6 @@ import love from '../love/index.js';
 import lua from '../love/lua.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
-import Lava from './Lava.js';
 
 const TiledTerrain = {};
 
@@ -1297,22 +1296,23 @@ function buildWallShapes(layer, tileProps, width, height, anchorX, anchorY) {
 }
 
 // ---------------------------------------------------------------------
-// Lava — see js/world/Lava.js for the actual entity. One instance per
-// lava-role tile, NOT merged (the wave is driven by absolute world X, so
-// adjacent tiles already line up).
+// Lava tiles: where the level's lava starts out. The lava itself is a
+// liquid, flowing like the water — see WaterSystem.js (WaterSystem.init
+// fills these tiles with it). Each is { x0, y0, size }: its top-left
+// corner in world units, and its size.
 // ---------------------------------------------------------------------
 
 function buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY) {
-  const lavas = [];
+  const lavaTiles = [];
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
       const gid = layer.data[row * width + col] ?? 0;
       if (gid !== 0 && classifyGid(tileProps, gid) === 'lava') {
-        lavas.push(Lava.new(anchorX + col * TILE_WORLD_SIZE, anchorY + row * TILE_WORLD_SIZE, TILE_WORLD_SIZE));
+        lavaTiles.push({ x0: anchorX + col * TILE_WORLD_SIZE, y0: anchorY + row * TILE_WORLD_SIZE, size: TILE_WORLD_SIZE });
       }
     }
   }
-  return lavas;
+  return lavaTiles;
 }
 
 // ---------------------------------------------------------------------
@@ -1401,8 +1401,10 @@ function getBlurShader() {
   return blurShader;
 }
 
-// Bakes the tile layers into one canvas. Lava tiles are skipped: Lava.js
-// draws its own animated shader quad over that same area every frame.
+// Bakes the tile layers into one canvas. Lava tiles are skipped: the lava
+// (WaterSystem.js's liquid) is drawn over it, and it flows away from
+// where it started — the sheet's flat red tile art would show wherever
+// it's run off from, as if still lava.
 function bakeLayers(tileLayers, tilesets, tileProps, width, height, img) {
   const drawLayerTiles = (l, scale, ox, oy) => {
     for (let row = 0; row < height; row++) {
@@ -1551,8 +1553,8 @@ TiledTerrain.load = function (mapData, anchorX, anchorY) {
   // Collision: solid walls, separate from the walkable shapes.
   const walls = buildWallShapes(layer, tileProps, width, height, anchorX, anchorY);
 
-  // Lava tiles.
-  const lavas = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY);
+  // Lava tiles — where the lava starts out (see buildLavaTiles above, and WaterSystem.init).
+  const lavaTiles = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY);
 
   // Entity spawn points authored via Tiled's own Object Layer — each
   // object's Class field says what kind of entity it is, matched against
@@ -1734,7 +1736,7 @@ TiledTerrain.load = function (mapData, anchorX, anchorY) {
   return new Level({
     shapes,
     walls,
-    lavas,
+    lavaTiles,
     ooombaSpawns,
     sphereSpawns,
     spikeySpawns,

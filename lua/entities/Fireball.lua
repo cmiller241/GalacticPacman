@@ -62,8 +62,12 @@ end
 
 function Fireball.new(x, y, angle)
   local self = setmetatable({}, Fireball)
-  self.pos = Vector2.new(x, y)
   self.vel = Vector2.new(math.cos(angle), math.sin(angle)):multiply(FIREBALL_SPEED)
+  -- Started one step back, so the update that follows (same frame,
+  -- before it's ever drawn) brings it exactly to (x, y) — the muzzle —
+  -- instead of a step out in front of it.
+  local ts = state.timeScale or 1
+  self.pos = Vector2.new(x - self.vel.x * ts, y - self.vel.y * ts)
   self.life = FIREBALL_LIFE
   self.trail = {}
   self.sparks = {}

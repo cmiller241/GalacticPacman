@@ -13,11 +13,17 @@
   const HERO_WIDTH = Planets.HERO_WIDTH;
   const HERO_HEIGHT = Planets.HERO_HEIGHT;
 
+  // The canvas's real pixel size matches its size on screen (times the
+  // screen's pixel density), so the browser never has to stretch or
+  // shrink the finished picture to fit — which blurs it. Drawing still
+  // happens in the fixed HERO_WIDTH x HERO_HEIGHT space, via the
+  // transform.
   function sizeHeroCanvas() {
     const dpr = window.devicePixelRatio || 1;
-    heroCanvas.width = HERO_WIDTH * dpr;
-    heroCanvas.height = HERO_HEIGHT * dpr;
-    heroCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const shownWidth = heroCanvas.clientWidth || HERO_WIDTH;
+    heroCanvas.width = Math.max(1, Math.round(shownWidth * dpr));
+    heroCanvas.height = Math.max(1, Math.round(heroCanvas.width * HERO_HEIGHT / HERO_WIDTH));
+    heroCtx.setTransform(heroCanvas.width / HERO_WIDTH, 0, 0, heroCanvas.height / HERO_HEIGHT, 0, 0);
     heroCtx.imageSmoothingEnabled = true;
     heroCtx.imageSmoothingQuality = "high";
   }
@@ -100,7 +106,10 @@
     const muzzle = rig.getBlasterMuzzle();
     if (!muzzle) return;
     const screenMuzzle = heroToViewport(muzzle.x, muzzle.y);
-    Fireball.spawn(screenMuzzle.x, screenMuzzle.y, muzzle.angle);
+    // How big the hero is shown (viewport px per hero unit), so the
+    // fireball is sized to match Bob.
+    const unit = heroCanvas.getBoundingClientRect().width / HERO_WIDTH;
+    Fireball.spawn(screenMuzzle.x, screenMuzzle.y, muzzle.angle, unit);
   });
 
   const startTime = performance.now();

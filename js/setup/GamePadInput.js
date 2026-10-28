@@ -284,7 +284,7 @@ function pollGamepad(dt) {
     // (nothing)
   } else if (state.portalMode) {
     if (l2Pressed && !lastL2Pressed) PortalGun.fire(state.player, 'red');
-  } else if (state.waterMode || state.recallMode) {
+  } else if (state.waterMode || state.recallMode || state.iceMode) {
     // (L2 does nothing in these modes for now)
   } else if (state.player) {
     if (l2Pressed && !lastL2Pressed) {
@@ -294,7 +294,8 @@ function pollGamepad(dt) {
     }
   }
   lastL2Pressed = l2Pressed;
-  state.gamepadPullHeld = l2Pressed && !riding && !state.portalMode && !state.waterMode && !state.recallMode;
+  state.gamepadPullHeld = l2Pressed && !riding && !state.portalMode && !state.waterMode && !state.recallMode
+    && !state.iceMode;
 
   // Right stick: aim (or the V.A.T.S. cursor).
   const rightX = axis('rightx');

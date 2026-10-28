@@ -10,7 +10,7 @@ return {
   tilewidth = 32,
   tileheight = 32,
   nextlayerid = 5,
-  nextobjectid = 112,
+  nextobjectid = 114,
   properties = {},
   tilesets = {
     {
@@ -24,7 +24,7 @@ return {
       columns = 9,
       image = "../img/platform.png",
       imagewidth = 288,
-      imageheight = 288,
+      imageheight = 576,
       objectalignment = "unspecified",
       tilerendersize = "tile",
       fillmode = "stretch",
@@ -41,7 +41,7 @@ return {
         ["role"] = ""
       },
       wangsets = {},
-      tilecount = 81,
+      tilecount = 162,
       tiles = {
         {
           id = 0,
@@ -427,6 +427,1344 @@ return {
             ["role"] = "top",
             ["slope"] = "rampRight"
           }
+        },
+        {
+          id = 90,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRightInner"
+          }
+        },
+        {
+          id = 94,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeftInner"
+          }
+        },
+        {
+          id = 97,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeft"
+          }
+        },
+        {
+          id = 100,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRight"
+          }
+        },
+        {
+          id = 102,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeft"
+          }
+        },
+        {
+          id = 105,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeftInner"
+          }
+        },
+        {
+          id = 117,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRight"
+          }
+        },
+        {
+          id = 120,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter1"
+          }
+        },
+        {
+          id = 121,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter2"
+          }
+        },
+        {
+          id = 123,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter2"
+          }
+        },
+        {
+          id = 124,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter1"
+          }
+        },
+        {
+          id = 127,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRightInner"
+          }
+        },
+        {
+          id = 129,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRight"
+          }
+        },
+        {
+          id = 130,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter3"
+          }
+        },
+        {
+          id = 132,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter3"
+          }
+        },
+        {
+          id = 133,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeft"
+          }
+        },
+        {
+          id = 144,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter3"
+          }
+        },
+        {
+          id = 145,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRight"
+          }
+        },
+        {
+          id = 147,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeft"
+          }
+        },
+        {
+          id = 148,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter3"
+          }
+        },
+        {
+          id = 153,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter2"
+          }
+        },
+        {
+          id = 154,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter1"
+          }
+        },
+        {
+          id = 156,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter1"
+          }
+        },
+        {
+          id = 157,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter2"
+          }
+        }
+      }
+    },
+    {
+      name = "Grass Tiles",
+      firstgid = 163,
+      class = "",
+      tilewidth = 32,
+      tileheight = 32,
+      spacing = 0,
+      margin = 0,
+      columns = 9,
+      image = "../img/platform.png",
+      imagewidth = 288,
+      imageheight = 576,
+      objectalignment = "unspecified",
+      tilerendersize = "tile",
+      fillmode = "stretch",
+      tileoffset = {
+        x = 0,
+        y = 0
+      },
+      grid = {
+        orientation = "orthogonal",
+        width = 32,
+        height = 32
+      },
+      properties = {
+        ["role"] = ""
+      },
+      wangsets = {},
+      tilecount = 162,
+      tiles = {
+        {
+          id = 0,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 1,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 2,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 3,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 4,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 5,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseRight"
+          }
+        },
+        {
+          id = 6,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseLeft"
+          }
+        },
+        {
+          id = 7,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseRight"
+          }
+        },
+        {
+          id = 8,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseLeft"
+          }
+        },
+        {
+          id = 9,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 10,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 11,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 12,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 13,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 14,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 15,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 16,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 17,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 18,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 19,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 20,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 21,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 22,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 23,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 24,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 25,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 26,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 27,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 28,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 29,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 30,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 31,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 32,
+          properties = {
+            ["role"] = "lava",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 33,
+          properties = {
+            ["role"] = "water",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 34,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 35,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 36,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 37,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 38,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 39,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 40,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 41,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 42,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 43,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 44,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 48,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 49,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 50,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeft"
+          }
+        },
+        {
+          id = 51,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRight"
+          }
+        },
+        {
+          id = 55,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRight"
+          }
+        },
+        {
+          id = 56,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeft"
+          }
+        },
+        {
+          id = 59,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRight"
+          }
+        },
+        {
+          id = 60,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeft"
+          }
+        },
+        {
+          id = 64,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeft"
+          }
+        },
+        {
+          id = 65,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRight"
+          }
+        },
+        {
+          id = 90,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRightInner"
+          }
+        },
+        {
+          id = 94,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeftInner"
+          }
+        },
+        {
+          id = 97,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeft"
+          }
+        },
+        {
+          id = 100,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRight"
+          }
+        },
+        {
+          id = 102,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeft"
+          }
+        },
+        {
+          id = 105,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeftInner"
+          }
+        },
+        {
+          id = 117,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRight"
+          }
+        },
+        {
+          id = 120,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter1"
+          }
+        },
+        {
+          id = 121,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter2"
+          }
+        },
+        {
+          id = 123,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter2"
+          }
+        },
+        {
+          id = 124,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter1"
+          }
+        },
+        {
+          id = 127,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRightInner"
+          }
+        },
+        {
+          id = 129,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRight"
+          }
+        },
+        {
+          id = 130,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter3"
+          }
+        },
+        {
+          id = 132,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter3"
+          }
+        },
+        {
+          id = 133,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeft"
+          }
+        },
+        {
+          id = 144,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter3"
+          }
+        },
+        {
+          id = 145,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRight"
+          }
+        },
+        {
+          id = 147,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeft"
+          }
+        },
+        {
+          id = 148,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter3"
+          }
+        },
+        {
+          id = 153,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter2"
+          }
+        },
+        {
+          id = 154,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter1"
+          }
+        },
+        {
+          id = 156,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter1"
+          }
+        },
+        {
+          id = 157,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter2"
+          }
+        }
+      }
+    },
+    {
+      name = "Grass Tiles",
+      firstgid = 325,
+      class = "",
+      tilewidth = 32,
+      tileheight = 32,
+      spacing = 0,
+      margin = 0,
+      columns = 9,
+      image = "../img/platform.png",
+      imagewidth = 288,
+      imageheight = 576,
+      objectalignment = "unspecified",
+      tilerendersize = "tile",
+      fillmode = "stretch",
+      tileoffset = {
+        x = 0,
+        y = 0
+      },
+      grid = {
+        orientation = "orthogonal",
+        width = 32,
+        height = 32
+      },
+      properties = {
+        ["role"] = ""
+      },
+      wangsets = {},
+      tilecount = 162,
+      tiles = {
+        {
+          id = 0,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 1,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 2,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 3,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 4,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 5,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseRight"
+          }
+        },
+        {
+          id = 6,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseLeft"
+          }
+        },
+        {
+          id = 7,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseRight"
+          }
+        },
+        {
+          id = 8,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "riseLeft"
+          }
+        },
+        {
+          id = 9,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 10,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 11,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 12,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 13,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 14,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 15,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 16,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 17,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 18,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 19,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 20,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 21,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 22,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 23,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 24,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 25,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 26,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 27,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 28,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 29,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 30,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 31,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 32,
+          properties = {
+            ["role"] = "lava",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 33,
+          properties = {
+            ["role"] = "water",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 34,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 35,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 36,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 37,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 38,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 39,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 40,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 41,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 42,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 43,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 44,
+          properties = {
+            ["role"] = "fill",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 48,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 49,
+          properties = {
+            ["role"] = "wall",
+            ["slope"] = "flat"
+          }
+        },
+        {
+          id = 50,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeft"
+          }
+        },
+        {
+          id = 51,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRight"
+          }
+        },
+        {
+          id = 55,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRight"
+          }
+        },
+        {
+          id = 56,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeft"
+          }
+        },
+        {
+          id = 59,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRight"
+          }
+        },
+        {
+          id = 60,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeft"
+          }
+        },
+        {
+          id = 64,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeft"
+          }
+        },
+        {
+          id = 65,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRight"
+          }
+        },
+        {
+          id = 90,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRightInner"
+          }
+        },
+        {
+          id = 94,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeftInner"
+          }
+        },
+        {
+          id = 97,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeft"
+          }
+        },
+        {
+          id = 100,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampRight"
+          }
+        },
+        {
+          id = 102,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "rampLeft"
+          }
+        },
+        {
+          id = 105,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingLeftInner"
+          }
+        },
+        {
+          id = 117,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRight"
+          }
+        },
+        {
+          id = 120,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter1"
+          }
+        },
+        {
+          id = 121,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter2"
+          }
+        },
+        {
+          id = 123,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter2"
+          }
+        },
+        {
+          id = 124,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter1"
+          }
+        },
+        {
+          id = 127,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "ceilingRightInner"
+          }
+        },
+        {
+          id = 129,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRight"
+          }
+        },
+        {
+          id = 130,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestRightOuter3"
+          }
+        },
+        {
+          id = 132,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeftOuter3"
+          }
+        },
+        {
+          id = 133,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "crestLeft"
+          }
+        },
+        {
+          id = 144,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter3"
+          }
+        },
+        {
+          id = 145,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRight"
+          }
+        },
+        {
+          id = 147,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeft"
+          }
+        },
+        {
+          id = 148,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter3"
+          }
+        },
+        {
+          id = 153,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter2"
+          }
+        },
+        {
+          id = 154,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archRightOuter1"
+          }
+        },
+        {
+          id = 156,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter1"
+          }
+        },
+        {
+          id = 157,
+          properties = {
+            ["role"] = "top",
+            ["slope"] = "archLeftOuter2"
+          }
         }
       }
     }
@@ -476,17 +1814,17 @@ return {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 0, 0, 19, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 47, 41, 41, 38, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 124, 125, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 55, 133, 51, 2, 2, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 47, 41, 41, 48, 11, 11, 11, 29, 0, 28, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 124, 125, 0, 0, 121, 122, 11, 11, 29, 0, 28, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 55, 133, 51, 2, 2, 52, 131, 58, 11, 29, 0, 28, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 37, 41, 41, 41, 41, 41, 41, 91, 0, 28, 11, 11, 29, 0, 95, 41, 91, 0, 28, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 20, 0, 0, 19, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66, 67, 11, 11, 64, 65, 0, 0, 0, 66, 67, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 0, 0, 28, 31, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 75, 11, 11, 11, 11, 74, 2, 2, 2, 75, 11, 11, 11, 31, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 0, 0, 28, 11, 11, 11, 11, 22, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 23, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 0, 0, 28, 11, 11, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 31, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 0, 0, 28, 11, 11, 11, 11, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 28, 11, 11, 11, 11, 11, 22, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 41, 23, 11, 11, 11, 11, 11, 11, 11, 47, 41, 41, 41, 41, 41, 41, 41, 41, 48, 11, 11, 47, 41, 41, 41, 41, 41, 48, 11, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -507,7 +1845,7 @@ return {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 21, 0, 0, 0, 0, 21, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 30, 0, 0, 0, 0, 30, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 30, 195, 195, 195, 195, 30, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 40, 2, 2, 2, 2, 49, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 11, 11, 11, 12, 0, 0, 10, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 0, 0, 28, 11, 11, 11, 11, 29, 0, 0, 0, 0
       }
@@ -686,6 +2024,19 @@ return {
       parallaxy = 1,
       properties = {},
       objects = {
+        {
+          id = 113,
+          name = "Tunnel plunger",
+          class = "RightPlunger",
+          shape = "rectangle",
+          x = 800,
+          y = 1120,
+          width = 32,
+          height = 32,
+          rotation = 0,
+          visible = true,
+          properties = {}
+        },
         {
           id = 2,
           name = "",
@@ -1761,21 +3112,6 @@ return {
           properties = {}
         },
         {
-          id = 92,
-          name = "",
-          class = "Sphere",
-          shape = "point",
-          x = 1012,
-          y = 916,
-          width = 0,
-          height = 0,
-          rotation = 0,
-          visible = true,
-          properties = {
-            ["radius"] = "100"
-          }
-        },
-        {
           id = 93,
           name = "",
           class = "Sphere",
@@ -1790,22 +3126,6 @@ return {
             ["gravity"] = "500",
             ["ooomba"] = "6",
             ["radius"] = "200"
-          }
-        },
-        {
-          id = 95,
-          name = "",
-          class = "Spikey-Orbit",
-          shape = "point",
-          x = 1375,
-          y = 868,
-          width = 0,
-          height = 0,
-          rotation = 0,
-          visible = true,
-          properties = {
-            ["orbit"] = "93",
-            ["speed"] = "5"
           }
         },
         {
@@ -1950,19 +3270,6 @@ return {
           shape = "point",
           x = 1926,
           y = 1146,
-          width = 0,
-          height = 0,
-          rotation = 0,
-          visible = true,
-          properties = {}
-        },
-        {
-          id = 106,
-          name = "",
-          class = "Ooomba",
-          shape = "point",
-          x = 1477,
-          y = 1145,
           width = 0,
           height = 0,
           rotation = 0,

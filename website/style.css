@@ -10,14 +10,25 @@
 
 * { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
+html {
   /* A navy-leaning gradient rather than a flat near-black — brighter,
      bluer near the top (behind the hero) and settling to near-black
      further down. #starfield sits on top of this (transparent, see
-     js/starfield.js's clearRect) so the gradient shows through it. */
-  background: var(--bg-bottom);
-  background: radial-gradient(ellipse 140% 70% at 50% -10%, var(--bg-top) 0%, var(--bg) 45%, var(--bg-bottom) 100%);
+     js/starfield.js's clearRect) so the gradient shows through it.
+     Sized to the window and fixed in place (like #starfield), so it
+     always fills the screen top to bottom — before, it was only as
+     tall as the page's content, and on a short page it ended partway
+     down and started over below. */
+  min-height: 100%;
+  background-color: var(--bg-bottom);
+  background-image: radial-gradient(ellipse 140% 70% at 50% -10%, var(--bg-top) 0%, var(--bg) 45%, var(--bg-bottom) 100%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: 100% 100vh;
+}
+
+html, body {
+  margin: 0;
   color: var(--text);
   font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   overflow-x: hidden;
@@ -208,6 +219,16 @@ main#content {
   line-height: 1.7;
   font-size: 15px;
   margin: 0;
+}
+.update-title {
+  font-size: 17px;
+  color: var(--text);
+  margin: 0 0 6px;
+}
+/* A video inside a post: full width of the post, but not huge. */
+.update-video {
+  max-width: 560px;
+  margin-top: 12px;
 }
 
 /* Media page — thumbnail grid (js/gallery.js builds this into

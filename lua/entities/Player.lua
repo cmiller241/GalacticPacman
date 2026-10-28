@@ -168,6 +168,9 @@ local BUBBLE_MAX_COUNT        = 10
 -- where its actual collision is.
 local BALL_RADIUS_MULTIPLIER = 0.792 -- 0.5 * 1.2 * 1.2 * 1.1 — bumped 20%, 20%, then another 10% bigger
 local BALL_SPEED_MULTIPLIER  = 2.1  -- 1.25 * 1.2 * 1.4 — bumped 20%, then another 40% faster
+-- On ice (see Player:move): how much of the gap between his speed and
+-- what the keys ask for closes each frame — small, so he slides.
+local ICE_GRIP = 0.035
 
 -- Curl-into-a-ball transition: two authored keyframes (see
 -- BALL_MORPH_FRAME_1/2 near drawBallMorphPose, in the Drawing section
@@ -586,6 +589,13 @@ function Player:exitBallMode()
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   if self.inPinball then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inPinball first)
   if self:isCannonRiding() then return end -- curled up for the whole ride, barrel and flight (see lua/world/Cannon.lua)
+  -- No room to stand up (in a ball tunnel — see CrackedPlanetoid:standingRoomAt).
+  local planet = self.currentPlanet or self.lastInfluencePlanet
+  if planet and planet.standingRoomAt and not planet:standingRoomAt(self) then return end
+  -- (Or in one of the sky dome's — see TiledTerrain.lua's Level:standingRoomAt.)
+  for _, level in ipairs(state.tiledLevels or {}) do
+    if level.standingRoomAt and not level:standingRoomAt(self) then return end
+  end
   self.morphState = "toHuman"
   self.morphElapsed = 0
 end
@@ -750,13 +760,15 @@ function Player:applyGravity()
   if planet then
     self.lastInfluencePlanet = planet
     local direction
-    if planet.isRoundedRect and planet.nearestSurfacePoint then
+    if planet.isRoundedRect and planet.nearestSurfacePoint and not planet.isCrackedPlanet then
       local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
       if surface.distance > 1e-6 then
         direction = Vector2.new(surface.point.x - self.pos.x, surface.point.y - self.pos.y):normalize()
       else
         direction = surface.normal:clone():multiply(-1)
       end
+    elseif planet.gravityDirAt then
+      direction = planet:gravityDirAt(self.pos.x, self.pos.y)
     else
       direction = planet.pos:subtract(self.pos):normalize()
     end
@@ -779,17 +791,32 @@ function Player:visualDownDirection(planet)
   -- (see lua/systems/PortalGun.lua).
   if self.portalDown then return self.portalDown:clone() end
   if not planet then return Vector2.new(0, 1) end
-  if planet.isRoundedRect then
+  -- Running along a cracked planet's wall (see CrackedPlanetoid:walkPlayer):
+  -- feet to the wall.
+  if planet.isCrackedPlanet and self.onSurface and self.climbNormal and self.climbPlanet == planet then
+    return Vector2.new(-self.climbNormal.x, -self.climbNormal.y)
+  end
+  -- (A cracked planet's bricky ground is all steps: he stays upright to
+  -- its center instead, below, like on a round planet.)
+  if planet.isRoundedRect and not planet.isCrackedPlanet then
     if planet.forceUprightJump then return Vector2.new(0, 1) end
     local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
     return surface.normal:clone():multiply(-1)
   end
+  -- (Feet the way its gravity pulls — see CrackedPlanetoid:cycleGravity.)
+  if planet.gravityDirAt then return planet:gravityDirAt(self.pos.x, self.pos.y) end
   return planet.pos:subtract(self.pos):normalize()
 end
 
 function Player:getOutwardLaunchDirection()
   if not self.currentPlanet then return Vector2.new(0, -1) end
-  if self.currentPlanet.isRoundedRect then
+  -- Running along a cracked planet's wall: straight off the wall.
+  if self.currentPlanet.isCrackedPlanet and self.climbNormal and self.climbPlanet == self.currentPlanet then
+    return Vector2.new(self.climbNormal.x, self.climbNormal.y)
+  end
+  -- (A cracked planet: straight out from its center, below, not off
+  -- whichever brick edge he's on.)
+  if self.currentPlanet.isRoundedRect and not self.currentPlanet.isCrackedPlanet then
     local surface = self.currentPlanet:nearestSurfacePoint(self.pos.x, self.pos.y)
     local direction = surface.normal
     -- forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
@@ -816,6 +843,7 @@ function Player:getOutwardLaunchDirection()
     -- again the next time either one gets adjusted.
     return direction
   end
+  if self.currentPlanet.upAtWorld then return self.currentPlanet:upAtWorld(self.pos.x, self.pos.y) end
   return self.pos:subtract(self.currentPlanet.pos):normalize()
 end
 
@@ -872,10 +900,19 @@ function Player:jump()
     -- hopping) could stack this every single time and compound into an
     -- ever-increasing "leapfrog" instead of settling at one running
     -- jump's own natural speed.
-    local carriedVelX = self.vel.x + (self.groundMoveSpeedX or 0) * self.jumpMomentumCarryScale
-    self.vel.x = math.max(-self.airControlMaxSpeed, math.min(self.airControlMaxSpeed, carriedVelX))
+    if self.currentPlanet.isCrackedPlanet then
+      -- (On a cracked planet — see CrackedPlanetoid.lua — the carry goes
+      -- round the planet, the way he was walking, not along the screen.)
+      local carry = (self.groundMoveSpeedX or 0) * self.jumpMomentumCarryScale
+      carry = math.max(-self.airControlMaxSpeed, math.min(self.airControlMaxSpeed, carry))
+      self.vel:add(Vector2.new(-direction.y, direction.x):multiply(carry))
+    else
+      local carriedVelX = self.vel.x + (self.groundMoveSpeedX or 0) * self.jumpMomentumCarryScale
+      self.vel.x = math.max(-self.airControlMaxSpeed, math.min(self.airControlMaxSpeed, carriedVelX))
+    end
     self.onSurface = false
     self.currentPlanet = nil
+    self.climbNormal, self.climbPlanet, self.climbDir = nil, nil, nil -- (off whatever wall he was running)
     if state.audioManager then state.audioManager:playJump() end
   elseif (not self.onSurface) and self.touchingWall and not self.isBall then
     -- Wall jump: kicks away from whichever wall was touched THIS FRAME
@@ -1092,6 +1129,53 @@ function Player:spawnWallJumpEffects()
   end
 end
 
+-- Walking off the end of an open path (a TiledTerrain run of ground, or
+-- one of its curve paths — see TiledTerrain.lua) at arc position
+-- desiredArcPos: does another one carry on from right there, the same
+-- way he's going? Either starting there, or passing through — the path
+-- over a hump runs on down the wall below it, so the path up that wall
+-- ends partway along it. It has to be heading the way he's travelling,
+-- and the key he's holding has to keep him going that way along it (a
+-- curve path can read the keys the other way round — controlsReversed).
+-- Returns it, and where on it he'd now be (the leftover distance carried
+-- on), or nil.
+local PATH_JOIN_DISTANCE = 6 -- world units: how close it must pass to where this one ends
+local function findPathContinuation(planet, desiredArcPos)
+  local perimeter = planet:getPerimeter()
+  local forward = desiredArcPos > perimeter
+  local edgeArc = forward and perimeter or 0
+  local edge = planet:worldPointAtArcPosition(edgeArc, 0).point
+  local seg = planet.segmentAtArcPosition and planet:segmentAtArcPosition(edgeArc)
+  if not seg then return nil end
+  local dir = forward and 1 or -1
+  local travelX, travelY = seg.tangent.x * dir, seg.tangent.y * dir
+  local keySign = dir * ((planet.isWallClimb and planet.controlsReversed) and -1 or 1)
+  local leftover = forward and (desiredArcPos - perimeter) or -desiredArcPos
+  local best, bestArc, bestD = nil, nil, PATH_JOIN_DISTANCE
+  for _, other in ipairs(state.planetoids) do
+    if other ~= planet and other.isOpenPath and other.arcPositionForWorldPoint and other.segmentAtArcPosition then
+      local len = other:getPerimeter()
+      local a = other:arcPositionForWorldPoint(edge.x, edge.y)
+      local p = other:worldPointAtArcPosition(a, 0).point
+      local d = math.sqrt((p.x - edge.x) ^ 2 + (p.y - edge.y) ^ 2)
+      local oseg = d < bestD and other:segmentAtArcPosition(a)
+      if oseg then
+        local along = oseg.tangent.x * travelX + oseg.tangent.y * travelY
+        local sigma = along > 0 and 1 or -1
+        local wanted = keySign * ((other.isWallClimb and other.controlsReversed) and -1 or 1)
+        if math.abs(along) > 0.5 and sigma == wanted then
+          local arc = math.max(0, math.min(len, a + sigma * leftover))
+          -- (Not one that just ends here too, the same way: nowhere to go on it.)
+          if (sigma > 0 and a < len - 1) or (sigma < 0 and a > 1) then
+            best, bestArc, bestD = other, arc, d
+          end
+        end
+      end
+    end
+  end
+  return best, bestArc
+end
+
 function Player:move(keys)
   -- Locked out while curling into/out of a ball (self.morphState — see
   -- enterBallMode/exitBallMode/updateBallMorph) OR while talking to an
@@ -1110,12 +1194,28 @@ function Player:move(keys)
   -- Player:update starting that timer.)
   if self.groundPoundImpactTimer > 0 or (self.wasGroundPounding and self.onSurface) then keys = {} end
 
+  -- Fired by a plunger (see lua/world/Plunger.lua): for a while he's
+  -- driven on its way, faster than he can run, easing back to normal —
+  -- unless he pushes back the other way, which ends it.
+  local boost = self.launchBoost
+  if boost then
+    boost.time = boost.time - state.timeScale
+    boost.mult = 1 + (boost.mult0 - 1) * math.max(0, boost.time / boost.time0)
+    if boost.time <= 0 or keys[boost.dir > 0 and "ArrowLeft" or "ArrowRight"] or self.isDying then
+      self.launchBoost, boost = nil, nil
+    end
+  end
+
   if self.onSurface and self.currentPlanet and self.currentPlanet.isRoundedRect then
     local planet = self.currentPlanet
     self.isWalking = false
     local ds = 0
     local rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld and self.runSpeedMultiplier or 1)
       * (self.isBall and BALL_SPEED_MULTIPLIER or 1)
+    if boost then
+      rawSpeed = rawSpeed * boost.mult
+      keys = { [boost.dir > 0 and "ArrowRight" or "ArrowLeft"] = true }
+    end
     local speed = rawSpeed * state.timeScale
 
     -- Unscaled (no state.timeScale) current ground speed+direction —
@@ -1130,7 +1230,28 @@ function Player:move(keys)
     if keys["ArrowLeft"] then ds = -speed; self.facingDirection = -1; self.isWalking = true; self.groundMoveSpeedX = -rawSpeed end
     if keys["ArrowRight"] then ds = speed; self.facingDirection = 1; self.isWalking = true; self.groundMoveSpeedX = rawSpeed end
 
-    if planet.isSkyDome then
+    -- On ice (an ice block's top — see WaterSystem.lua's "Ice" — or an
+    -- ice tile of a dirt planet), his footing's slippery: his speed only
+    -- eases toward what the keys ask for, so he slides on when he lets
+    -- go and takes a moment to get going or turn round, the way ice is
+    -- in most platformers. Anywhere else his speed is just what the keys
+    -- say, as always (kept in iceSlide, so stepping onto ice carries it).
+    local onIce = planet.isIce or (planet.iceUnder and planet:iceUnder(self))
+    if onIce then
+      local grip = math.min(1, ICE_GRIP * state.timeScale)
+      self.iceSlide = (self.iceSlide or 0) + (ds - (self.iceSlide or 0)) * grip
+      if math.abs(self.iceSlide) < 0.02 then self.iceSlide = 0 end
+      ds = self.iceSlide
+      self.groundMoveSpeedX = state.timeScale > 0 and ds / state.timeScale or 0
+    else
+      self.iceSlide = ds
+    end
+
+    if planet.walkPlayer then
+      -- Planets that walk him themselves (CrackedPlanetoid.lua: steps,
+      -- walls and drops in its dirt).
+      planet:walkPlayer(self, ds)
+    elseif planet.isSkyDome then
       local coreHalfWidth = planet.halfWidth - (planet.cornerRadius or 0)
       local minX = planet.pos.x - coreHalfWidth
       local maxX = planet.pos.x + coreHalfWidth
@@ -1227,7 +1348,25 @@ function Player:move(keys)
         -- surfaces without this method (every existing one) behave
         -- exactly as before.
         if type(planet.getArcSpeedMultiplier) == "function" then
-          ds = ds * planet:getArcSpeedMultiplier(self.surfaceArcPos, ds)
+          local slopeMul = planet:getArcSpeedMultiplier(self.surfaceArcPos, ds)
+          -- Fired from a plunger (see self.launchBoost), climbing doesn't
+          -- slow him: the boost only wears off over time.
+          if self.launchBoost and slopeMul < 1 then slopeMul = 1 end
+          ds = ds * slopeMul
+        end
+        -- Nor round the inside of a curve: ds is a distance along the
+        -- ground, and on a curve that bends up into a wall his center
+        -- (inside it) only covers part of that. Fired from a plunger, the
+        -- step's stretched so he really moves the full distance.
+        if self.launchBoost and ds ~= 0 and planet.isOpenPath then
+          local len = planet:getPerimeter()
+          local target = math.max(0, math.min(len, self.surfaceArcPos + ds))
+          local p = planet:worldPointAtArcPosition(target, self.radius).point
+          local moved = math.sqrt((p.x - self.pos.x) ^ 2 + (p.y - self.pos.y) ^ 2)
+          local wanted = math.abs(target - self.surfaceArcPos)
+          if moved > 1e-3 and moved < wanted then
+            ds = ds * math.min(2, wanted / moved)
+          end
         end
 
         local desiredArcPos = self.surfaceArcPos + ds
@@ -1236,7 +1375,20 @@ function Player:move(keys)
         -- a closed loop like RoundedRectPlanetoid) fall off the end instead
         -- of wrapping around, same "carry momentum into a fall" pattern
         -- SkyDome's own edge-of-deck check above already uses.
+        -- Off the end of this one, but straight onto the start of the
+        -- next (see findPathContinuation): carries on along that one, at
+        -- any speed — instead of a moment in the air between the two,
+        -- which at a plunger's launch speed sent him flying off over a
+        -- hump in a ball tunnel.
+        local nextPlanet, nextArcPos
         if planet.isOpenPath and (desiredArcPos < 0 or desiredArcPos > planet:getPerimeter()) then
+          nextPlanet, nextArcPos = findPathContinuation(planet, desiredArcPos)
+        end
+        if nextPlanet then
+          self.currentPlanet = nextPlanet
+          self.surfaceArcPos = nextArcPos
+          self.pos = nextPlanet:worldPointAtArcPosition(nextArcPos, self.radius).point
+        elseif planet.isOpenPath and (desiredArcPos < 0 or desiredArcPos > planet:getPerimeter()) then
           -- Snap to the exact edge vertex before falling, rather than
           -- leaving self.pos wherever last frame's walk step landed (which
           -- can be up to one whole step short of the true end). Landing
@@ -1261,7 +1413,11 @@ function Player:move(keys)
           -- shape they were supposed to fall onto and catch.
           local edgeSeg = planet.segmentAtArcPosition and planet:segmentAtArcPosition(edgeArcPos)
           local carryDir = edgeSeg and edgeSeg.tangent or Vector2.new(1, 0)
-          self.vel = carryDir:multiply(ds * self.edgeFallCarryFraction)
+          -- (Fired from a plunger — self.launchBoost — he keeps ALL of it,
+          -- and flies off like a cannonball, instead of dropping off near
+          -- the edge the way walking off one does.)
+          local carry = self.launchBoost and 1 or self.edgeFallCarryFraction
+          self.vel = carryDir:multiply(ds * carry)
         else
           self.surfaceArcPos = desiredArcPos
           local worldSurface = planet:worldPointAtArcPosition(self.surfaceArcPos, self.radius)
@@ -1325,7 +1481,8 @@ function Player:move(keys)
     end
 
   elseif (not self.onSurface) and self.lastInfluencePlanet
-      and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump or self.submergedIn) then
+      and (self.lastInfluencePlanet.isSkyDome or self.lastInfluencePlanet.forceUprightJump or self.submergedIn
+        or self.lastInfluencePlanet.isCrackedPlanet) then
     -- Ordinary circular planets deliberately don't get this fixed
     -- screen-space left/right air control at all — "sideways" isn't a
     -- well-defined direction on a sphere you could be approaching from
@@ -1333,7 +1490,12 @@ function Player:move(keys)
     -- reading fine with a plain fixed left/right.
     local lockedDir = self.wallJumpLockTimer > 0 and self.wallJumpLockBlockedDir or nil
 
-    if self.submergedIn then
+    if self.submergedIn or self.lastInfluencePlanet.isCrackedPlanet then
+      -- (A cracked planet — see CrackedPlanetoid.lua — gets this too: he
+      -- stands upright to its center, so left and right in the air go
+      -- round it, the same as walking, so he can jump up a ledge in its
+      -- dirt and steer onto it.)
+      --
       -- Orbits around the water body's own center instead of a fixed
       -- screen-space direction — same idea Player:move's own
       -- onSurface-on-a-round-planet branch above already uses for
@@ -1354,9 +1516,12 @@ function Player:move(keys)
       -- Player:jump's own swim-stroke impulse pushing straight out — is
       -- preserved untouched, so that stays the only way to actually
       -- move toward or away from the center.
-      local water = self.submergedIn
+      local water = self.submergedIn or self.lastInfluencePlanet
       local radial = self.pos:subtract(water.pos)
-      if radial:length() > 0.01 then
+      if water.upAtWorld then
+        -- (A cracked planet's "up" depends on its gravity mode.)
+        radial = water:upAtWorld(self.pos.x, self.pos.y)
+      elseif radial:length() > 0.01 then
         radial:normalize()
       else
         radial = Vector2.new(0, -1)
@@ -1521,6 +1686,19 @@ function Player:update()
       self.pos.x + down.x * self.radius, self.pos.y + down.y * self.radius,
       Vector2.new(-down.x, -down.y))
     if state.audioManager then state.audioManager:playGroundPound() end
+
+    -- Landed on a breakable tile (see CrackedPlanetoid:poundBreak): it
+    -- shatters and he drops into the hole — no sitting on the ground.
+    -- Jump still held, the pound carries on and breaks the next one he
+    -- lands on, and so on down; let go, and he just falls the rest.
+    local planet = self.currentPlanet
+    if planet and planet.poundBreak and planet:poundBreak(self) then
+      self.groundPoundImpactTimer = 0
+      local jumpHeld = state.keys[' '] or state.gamepadJumpHeld
+      if jumpHeld and not self.onSurface then
+        self.isGroundPounding = true
+      end
+    end
   elseif self.groundPoundImpactTimer > 0 then
     self.groundPoundImpactTimer = self.onSurface and math.max(0, self.groundPoundImpactTimer - state.timeScale) or 0
   end
@@ -2126,7 +2304,8 @@ end
 -- the arm has to show it.
 function Player:isUsingBlaster()
   if WaterSystem.isSpraying() then return true end
-  if state.gamepadFireHeld or (state.mouseDown and (state.weaponMode or "blaster") == "blaster") then return true end
+  local mode = state.weaponMode or "fireball"
+  if state.gamepadFireHeld or (state.mouseDown and (mode == "fireball" or mode == "ice")) then return true end
   local now = love.timer.getTime()
   if self.lastShotTime and now - self.lastShotTime < BLASTER_IN_USE_LINGER then return true end
   if PortalGun.lastShotTime and now - PortalGun.lastShotTime < BLASTER_IN_USE_LINGER then return true end
@@ -2779,8 +2958,18 @@ function Player:getMuzzlePosition()
       worldVY = fx * sn + fy * c
     end
 
-    originX = self.aimShoulderPos.x + worldVX
-    originY = self.aimShoulderPos.y + worldVY
+    -- aimShoulderPos was worked out when he was last drawn. Shots are
+    -- fired during the update, after he's moved since then, so carry
+    -- the shoulder along by that same move — otherwise shots leave from
+    -- where the muzzle was a frame ago, behind it when he's moving.
+    local sx, sy = self.aimShoulderPos.x, self.aimShoulderPos.y
+    if self.aimAnchorPos then
+      sx = sx + (self.pos.x - self.aimAnchorPos.x)
+      sy = sy + (self.pos.y - self.aimAnchorPos.y)
+    end
+
+    originX = sx + worldVX
+    originY = sy + worldVY
   else
     originX = self.pos.x
     originY = self.pos.y
@@ -2811,6 +3000,27 @@ function Player:shootFireball()
   state.fireballs = state.fireballs or {}
   local Fireball = require("lua.entities.Fireball")
   table.insert(state.fireballs, Fireball.new(originX, originY, angle))
+end
+
+-- The ice blaster (see WeaponModes.lua's "ice" mode): the same as
+-- shootFireball, but an ice bolt (see lua/entities/IceBolt.lua), a
+-- little slower to fire.
+local ICE_FIRE_COOLDOWN = 0.25
+function Player:shootIceBolt()
+  if self.mode ~= "space" and self.mode ~= "platform" then return end
+  if self.isBall or self.isTeleporting or self.isDying then return end
+  if self:isCannonRiding() then return end
+  if state.vatsActive then return end
+
+  local now = love.timer.getTime()
+  if now - (self.lastShotTime or 0) < ICE_FIRE_COOLDOWN then return end
+  self.lastShotTime = now
+
+  local angle = (self.aimWorldAngle or 0) + (self.blasterAngleOffset or 0)
+  local originX, originY = self:getMuzzlePosition()
+  state.iceBolts = state.iceBolts or {}
+  local IceBolt = require("lua.entities.IceBolt")
+  table.insert(state.iceBolts, IceBolt.new(originX, originY, angle))
 end
 
 -- ----------------------------

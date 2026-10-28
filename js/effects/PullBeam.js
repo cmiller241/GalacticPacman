@@ -303,7 +303,8 @@ function drawPullIndicator() {
   drawGlow(endX, endY, 26, COLOR_HOT[0], COLOR_HOT[1], COLOR_HOT[2], 1);
 
   // Outline around the target
-  if (target.isRoundedRect) {
+  // (A cracked planet is round: it gets the circle below.)
+  if (target.isRoundedRect && !target.isCrackedPlanet) {
     // A true rotated rounded-rect outline, matching the target's own
     // actual silhouette. Each half-extent AND the corner radius all get
     // the same OUTLINE_PADDING added, so the outline sits evenly outset

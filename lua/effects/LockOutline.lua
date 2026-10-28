@@ -47,7 +47,8 @@ function LockOutline.drawRingAround(target)
   local glowColor = { OUTLINE_R, OUTLINE_G, OUTLINE_B, 0.35 * (0.35 + pulse * 0.25) }
   local coreColor = { OUTLINE_R, OUTLINE_G, OUTLINE_B, 0.8 + pulse * 0.2 }
 
-  if target.isRoundedRect then
+  -- (A cracked planet is round: it gets the circle.)
+  if target.isRoundedRect and not target.isCrackedPlanet then
     local hw = (target.halfWidth or target.radius or 0) + OUTLINE_PADDING
     local hh = (target.halfHeight or target.radius or 0) + OUTLINE_PADDING
     local cr = (target.cornerRadius or 0) + OUTLINE_PADDING

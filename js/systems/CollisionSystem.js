@@ -330,6 +330,9 @@ class CollisionSystem {
   }
 
   tryLandOnPlanet(player, planet) {
+    // Planets with their own player collision (CrackedPlanetoid.js: caves,
+    // ceilings and walls, not just a surface to land on).
+    if (planet.collidePlayer) return planet.collidePlayer(player);
     if (planet.isRoundedRect) {
       if (planet.isSkyDome) {
         if (typeof planet.isWithinGravityWindow === 'function'
@@ -449,7 +452,8 @@ class CollisionSystem {
     if (!ooombas) return flattened;
 
     for (const o of ooombas) {
-      if (!o.isSquashing && !player.isDying && !o.portalTransit) {
+      // (Not frozen in an ice cube, either: see WaterSystem.js's "Ice".)
+      if (!o.isSquashing && !player.isDying && !o.portalTransit && !o.frozen) {
         const dx = player.pos.x - o.pos.x, dy = player.pos.y - o.pos.y;
         const r = player.radius + o.hitRadius;
         if (dx * dx + dy * dy <= r * r) {
@@ -468,7 +472,7 @@ class CollisionSystem {
     const killed = new Set();
     for (const f of fireballs) {
       for (const o of ooombas) {
-        if (killed.has(o)) continue;
+        if (killed.has(o) || o.frozen) continue; // (a frozen one's ice takes the hit — see WaterSystem.fireHitsIce)
         const dist = f.pos.subtract(o.pos).length();
         if (dist < f.radius + o.hitRadius) {
           hitFireballs.add(f);
@@ -576,8 +580,10 @@ class CollisionSystem {
   }
 
   // Fireball vs WALL tiles (only those flagged isWall). -> Set
+  // -> Map: fireball -> the wall it hit (an obsidian block's, over any
+  // other it touches too: see WaterSystem.meltObsidian).
   handleFireballWallCollisions(fireballs, walls) {
-    const hitFireballs = new Set();
+    const hitFireballs = new Map();
     if (!walls) return hitFireballs;
 
     for (const f of fireballs) {
@@ -590,8 +596,8 @@ class CollisionSystem {
         const closestY = Math.max(boxMinY, Math.min(f.pos.y, boxMaxY));
         const dx = f.pos.x - closestX, dy = f.pos.y - closestY;
         if (dx * dx + dy * dy < f.radius * f.radius) {
-          hitFireballs.add(f);
-          break;
+          if (!hitFireballs.has(f) || wall.obsidian) hitFireballs.set(f, wall);
+          if (wall.obsidian) break;
         }
       }
     }

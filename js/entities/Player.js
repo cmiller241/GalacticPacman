@@ -20,6 +20,7 @@ import WaterSystem from '../systems/WaterSystem.js';
 import PortalGun from '../systems/PortalGun.js';
 import WallContactPulse from './WallContactPulse.js';
 import Fireball from './Fireball.js';
+import IceBolt from './IceBolt.js';
 import Explosion from './Explosion.js';
 
 // How long, once the door-opening intro ends (state.introLocked flips
@@ -155,6 +156,10 @@ const BUBBLE_MAX_COUNT = 10;
 // exactly match where its actual collision is.
 const BALL_RADIUS_MULTIPLIER = 0.792; // 0.5 * 1.2 * 1.2 * 1.1
 const BALL_SPEED_MULTIPLIER = 2.1;    // 1.25 * 1.2 * 1.4
+// On ice (see move): how much of the gap between his speed and what the
+// keys ask for closes each frame — small, so he slides.
+const ICE_GRIP = 0.035;
+const ICE_FIRE_COOLDOWN = 0.25; // (seconds — see shootIceBolt)
 
 // Curl-into-a-ball transition: two authored keyframes (see
 // BALL_MORPH_FRAME_1/2 near drawBallMorphPose) played in order on the
@@ -569,13 +574,15 @@ class Player {
     if (planet) {
       this.lastInfluencePlanet = planet;
       let direction;
-      if (planet.isRoundedRect && planet.nearestSurfacePoint) {
+      if (planet.isRoundedRect && planet.nearestSurfacePoint && !planet.isCrackedPlanet) {
         const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
         if (surface.distance > 1e-6) {
           direction = new Vector2(surface.point.x - this.pos.x, surface.point.y - this.pos.y).normalize();
         } else {
           direction = surface.normal.clone().multiply(-1);
         }
+      } else if (planet.gravityDirAt) {
+        direction = planet.gravityDirAt(this.pos.x, this.pos.y);
       } else {
         direction = planet.pos.subtract(this.pos).normalize();
       }
@@ -595,17 +602,32 @@ class Player {
     // (see js/systems/PortalGun.js).
     if (this.portalDown) return this.portalDown.clone();
     if (!planet) return new Vector2(0, 1);
-    if (planet.isRoundedRect) {
+    // Running along a cracked planet's wall (see CrackedPlanetoid.walkPlayer):
+    // feet to the wall.
+    if (planet.isCrackedPlanet && this.onSurface && this.climbNormal && this.climbPlanet === planet) {
+      return new Vector2(-this.climbNormal.x, -this.climbNormal.y);
+    }
+    // (A cracked planet's bricky ground is all steps: he stays upright to
+    // its center instead, below, like on a round planet.)
+    if (planet.isRoundedRect && !planet.isCrackedPlanet) {
       if (planet.forceUprightJump) return new Vector2(0, 1);
       const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
       return surface.normal.clone().multiply(-1);
     }
+    // (Feet the way its gravity pulls — see CrackedPlanetoid.cycleGravity.)
+    if (planet.gravityDirAt) return planet.gravityDirAt(this.pos.x, this.pos.y);
     return planet.pos.subtract(this.pos).normalize();
   }
 
   getOutwardLaunchDirection() {
     if (!this.currentPlanet) return new Vector2(0, -1);
-    if (this.currentPlanet.isRoundedRect) {
+    // Running along a cracked planet's wall: straight off the wall.
+    if (this.currentPlanet.isCrackedPlanet && this.climbNormal && this.climbPlanet === this.currentPlanet) {
+      return new Vector2(this.climbNormal.x, this.climbNormal.y);
+    }
+    // (A cracked planet: straight out from its center, below, not off
+    // whichever brick edge he's on.)
+    if (this.currentPlanet.isRoundedRect && !this.currentPlanet.isCrackedPlanet) {
       const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
       let direction = surface.normal;
       // forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
@@ -614,6 +636,7 @@ class Player {
       if (this.currentPlanet.forceUprightJump) direction = new Vector2(0, -1);
       return direction;
     }
+    if (this.currentPlanet.upAtWorld) return this.currentPlanet.upAtWorld(this.pos.x, this.pos.y);
     return this.pos.subtract(this.currentPlanet.pos).normalize();
   }
 
@@ -650,10 +673,19 @@ class Player {
       // Carries current ground speed into the jump — a running jump
       // launches you forward as well as up. Clamped to airControlMaxSpeed
       // so rapid repeat jumps can't compound into an ever-faster leapfrog.
-      const carriedVelX = this.vel.x + (this.groundMoveSpeedX ?? 0) * this.jumpMomentumCarryScale;
-      this.vel.x = Math.max(-this.airControlMaxSpeed, Math.min(this.airControlMaxSpeed, carriedVelX));
+      if (this.currentPlanet.isCrackedPlanet) {
+        // (On a cracked planet — see CrackedPlanetoid.js — the carry goes
+        // round the planet, the way he was walking, not along the screen.)
+        let carry = (this.groundMoveSpeedX ?? 0) * this.jumpMomentumCarryScale;
+        carry = Math.max(-this.airControlMaxSpeed, Math.min(this.airControlMaxSpeed, carry));
+        this.vel.add(new Vector2(-direction.y, direction.x).multiply(carry));
+      } else {
+        const carriedVelX = this.vel.x + (this.groundMoveSpeedX ?? 0) * this.jumpMomentumCarryScale;
+        this.vel.x = Math.max(-this.airControlMaxSpeed, Math.min(this.airControlMaxSpeed, carriedVelX));
+      }
       this.onSurface = false;
       this.currentPlanet = null;
+      this.climbNormal = null; this.climbPlanet = null; this.climbDir = null; // (off whatever wall he was running)
       if (state.audioManager) state.audioManager.playJump();
     } else if (!this.onSurface && this.touchingWall && !this.isBall) {
       // Wall jump: kicks away from whichever wall was touched THIS FRAME.
@@ -840,7 +872,28 @@ class Player {
       if (keys['ArrowLeft']) { ds = -speed; this.facingDirection = -1; this.isWalking = true; this.groundMoveSpeedX = -rawSpeed; }
       if (keys['ArrowRight']) { ds = speed; this.facingDirection = 1; this.isWalking = true; this.groundMoveSpeedX = rawSpeed; }
 
-      if (planet.isSkyDome) {
+      // On ice (an ice block's top — see WaterSystem.js's "Ice" — or an
+      // ice tile of a dirt planet), his footing's slippery: his speed only
+      // eases toward what the keys ask for, so he slides on when he lets
+      // go and takes a moment to get going or turn round, the way ice is
+      // in most platformers. Anywhere else his speed is just what the keys
+      // say, as always (kept in iceSlide, so stepping onto ice carries it).
+      const onIce = planet.isIce || (planet.iceUnder && planet.iceUnder(this));
+      if (onIce) {
+        const grip = Math.min(1, ICE_GRIP * state.timeScale);
+        this.iceSlide = (this.iceSlide ?? 0) + (ds - (this.iceSlide ?? 0)) * grip;
+        if (Math.abs(this.iceSlide) < 0.02) this.iceSlide = 0;
+        ds = this.iceSlide;
+        this.groundMoveSpeedX = state.timeScale > 0 ? ds / state.timeScale : 0;
+      } else {
+        this.iceSlide = ds;
+      }
+
+      if (planet.walkPlayer) {
+        // Planets that walk him themselves (CrackedPlanetoid.js: steps,
+        // walls and drops in its dirt).
+        planet.walkPlayer(this, ds);
+      } else if (planet.isSkyDome) {
         const coreHalfWidth = planet.halfWidth - (planet.cornerRadius ?? 0);
         const minX = planet.pos.x - coreHalfWidth;
         const maxX = planet.pos.x + coreHalfWidth;
@@ -974,22 +1027,30 @@ class Player {
         }
       }
     } else if (!this.onSurface && this.lastInfluencePlanet
-      && (this.lastInfluencePlanet.isSkyDome || this.lastInfluencePlanet.forceUprightJump || this.submergedIn)) {
+      && (this.lastInfluencePlanet.isSkyDome || this.lastInfluencePlanet.forceUprightJump || this.submergedIn
+        || this.lastInfluencePlanet.isCrackedPlanet)) {
       // Ordinary circular planets deliberately don't get fixed
       // screen-space left/right air control — "sideways" isn't
       // well-defined on a sphere. SkyDome / forceUprightJump surfaces are
       // the exception.
       const lockedDir = this.wallJumpLockTimer > 0 ? this.wallJumpLockBlockedDir : null;
 
-      if (this.submergedIn) {
+      if (this.submergedIn || this.lastInfluencePlanet.isCrackedPlanet) {
+        // (A cracked planet — see CrackedPlanetoid.js — gets this too: he
+        // stands upright to its center, so left and right in the air go
+        // round it, the same as walking, so he can jump up a ledge in its
+        // dirt and steer onto it.)
+        //
         // Orbits around the water body's own center — a velocity nudge
         // along the current TANGENT. Only the tangential component is
         // touched; getting farther from the center is NOT something
         // left/right can do (that used to carry players out past the
         // shore). Gravity and the swim stroke stay the only radial movers.
-        const water = this.submergedIn;
+        const water = this.submergedIn ?? this.lastInfluencePlanet;
         let radial = this.pos.subtract(water.pos);
-        if (radial.length() > 0.01) radial.normalize();
+        // (A cracked planet's "up" depends on its gravity mode.)
+        if (water.upAtWorld) radial = water.upAtWorld(this.pos.x, this.pos.y);
+        else if (radial.length() > 0.01) radial.normalize();
         else radial = new Vector2(0, -1);
         const tangent = new Vector2(-radial.y, radial.x);
 
@@ -1540,7 +1601,8 @@ class Player {
   // drawFullBody) instead of drifting into the idle sway.
   isUsingBlaster() {
     if (WaterSystem.isSpraying()) return true;
-    if (state.gamepadFireHeld || (state.mouseDown && (state.weaponMode ?? 'blaster') === 'blaster')) return true;
+    const mode = state.weaponMode ?? 'blaster';
+    if (state.gamepadFireHeld || (state.mouseDown && (mode === 'blaster' || mode === 'ice'))) return true;
     const now = love.timer.getTime();
     if (this.lastShotTime != null && now - this.lastShotTime < BLASTER_IN_USE_LINGER) return true;
     if (PortalGun.lastShotTime != null && now - PortalGun.lastShotTime < BLASTER_IN_USE_LINGER) return true;
@@ -2066,6 +2128,25 @@ class Player {
 
     state.fireballs = state.fireballs ?? [];
     state.fireballs.push(Fireball.new(originX, originY, angle));
+  }
+
+  // The ice blaster (see WeaponModes.js's 'ice' mode): the same as
+  // shootFireball, but an ice bolt (see js/entities/IceBolt.js), a little
+  // slower to fire.
+  shootIceBolt() {
+    if (this.mode !== 'space' && this.mode !== 'platform') return;
+    if (this.isBall || this.isTeleporting || this.isDying) return;
+    if (this.isCannonRiding()) return;
+    if (state.vatsActive) return;
+
+    const now = love.timer.getTime();
+    if (now - (this.lastShotTime ?? 0) < ICE_FIRE_COOLDOWN) return;
+    this.lastShotTime = now;
+
+    const angle = (this.aimWorldAngle ?? 0) + (this.blasterAngleOffset ?? 0);
+    const [originX, originY] = this.getMuzzlePosition();
+    state.iceBolts = state.iceBolts ?? [];
+    state.iceBolts.push(IceBolt.new(originX, originY, angle));
   }
 
   // ----------------------------

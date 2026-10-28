@@ -9,6 +9,7 @@ local Asteroid = require("lua.entities.Asteroid")
 local Coin = require("lua.entities.Coin")
 local Ooomba = require("lua.entities.Ooomba")
 local Explosion = require("lua.entities.Explosion")
+local IceBolt = require("lua.entities.IceBolt")
 local Particle = require("lua.entities.Particle")
 local StompBurst = require("lua.effects.StompBurst")
 local TitleScreen = require("lua.ui.TitleScreen")
@@ -32,10 +33,12 @@ local TiledTerrain = require("lua.world.TiledTerrain")
 local Sphere = require("lua.world.Sphere")
 local SphereMove = require("lua.world.SphereMove")
 local RoundedRectPlanetoid = require("lua.world.RoundedRectPlanetoid")
+local CrackedPlanetoid = require("lua.world.CrackedPlanetoid")
 local Spikey = require("lua.world.Spikey")
 local SpikeyVertical = require("lua.world.SpikeyVertical")
 local SpikeyOrbit = require("lua.world.SpikeyOrbit")
 local Lever = require("lua.world.Lever")
+local Plunger = require("lua.world.Plunger")
 local Crank = require("lua.world.Crank")
 local Mirror = require("lua.world.Mirror")
 local Sign = require("lua.world.Sign")
@@ -56,6 +59,7 @@ local WaterPlanet = require("lua.world.WaterPlanet")
 local Fish = require("lua.entities.Fish")
 local PortalGun = require("lua.systems.PortalGun")
 local WaterSystem = require("lua.systems.WaterSystem")
+local ClipRecorder = require("lua.systems.ClipRecorder")
 local Recall = require("lua.systems.Recall")
 local CharacterShadows = require("lua.effects.CharacterShadows")
 local TileGlow = require("lua.effects.TileGlow")
@@ -65,8 +69,128 @@ local Cannon = require("lua.world.Cannon")
 local MissileOutpost = require("lua.world.MissileOutpost")
 local CameraShake = require("lua.effects.CameraShake")
 local WeaponModes = require("lua.systems.WeaponModes")
+local WeaponBar = require("lua.ui.WeaponBar")
 
 local collisionSystem
+
+-- =====================================================================
+-- START POSITION (for testing)
+-- =====================================================================
+-- Where Bob starts the game, and where every respawn puts him back.
+-- Set START_AT to one of:
+--
+--   "shelter"     normal game start: behind the Space Shelter's door,
+--                 with its door-opening intro
+--   "mining"      on top of the mining planet (and its prisms)
+--   "fisherman"   just above the fisherman's rounded-rectangle planet,
+--                 left of the fisherman, dropping onto it
+--   "cracked"     just above the cracked planet, dropping onto it
+--   "tiled"       just above the Tiled planet over map column
+--                 TILED_START_COLUMN (needs SHOW_TILED_PLANET = true)
+--   "tunnel"      on the sky dome's ground just left of Level1's ball
+--                 tunnel (curl into a ball to roll through it)
+--   "pinball"     on the pinball table's plunger, already a ball
+--   "expressway"  on the expressway's entry planet, beside its cannon
+--                 (needs SHOW_EXPRESSWAY = true)
+--
+-- If the planet you pick is switched off, he starts at the shelter and
+-- the console says why.
+local START_AT = "tunnel"
+local TILED_START_COLUMN = 146 -- counting from 0, like Tiled (146: over the middle of Level2's cracked, poundable column)
+
+-- Each option sets state.respawnPoint (see Player:respawn). Called near
+-- the end of love.load, once every planet exists. `expresswayEntry` is
+-- { planet, cannon } when the expressway was built, else nil.
+local START_POSITIONS = {
+  mining = function()
+    local planet = state.miningPlanet
+    if not planet then return false end
+    -- The planet drifts: followsPlanet keeps the point on top of it
+    -- every frame (see love.update).
+    return {
+      x = planet.pos.x, y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
+      planet = planet, followsPlanet = true,
+    }
+  end,
+
+  fisherman = function()
+    local rect = state.roundedRectPlanet
+    if not rect then return false end
+    -- No planet named: he lands through the ordinary collision pass.
+    return {
+      x = rect.pos.x - rect.halfWidth * 0.4,
+      y = rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
+    }
+  end,
+
+  cracked = function()
+    local planet = state.crackedPlanet
+    if not planet then return false end
+    return {
+      x = planet.pos.x,
+      y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS - 20,
+    }
+  end,
+
+  tiled = function()
+    local planet = state.tiledPlanet
+    if not planet then return false end
+    local columns = planet.rings[1].count
+    local angle = -math.pi / 2 + (TILED_START_COLUMN + 0.5) / columns * 2 * math.pi
+    local dist = planet.radius + constants.PLAYER_RADIUS + 20
+    return {
+      x = planet.pos.x + math.cos(angle) * dist,
+      y = planet.pos.y + math.sin(angle) * dist,
+    }
+  end,
+
+  tunnel = function()
+    -- On the sky dome's ground, a few steps left of the ball tunnel's
+    -- mouth in Level1 (map column 33, row 35),
+    -- dropping onto the floor (row 36).
+    local level = state.tiledLevels and state.tiledLevels[1]
+    if not level then return false end
+    local T = 64
+    return {
+      x = level.anchorX + 27.5 * T,
+      y = level.anchorY + 36 * T - constants.PLAYER_RADIUS - 20,
+    }
+  end,
+
+  pinball = function()
+    if not state.pinballPlanet then return false end
+    local portal = state.pinballPlanet.interior:getPortalPosition()
+    return { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
+  end,
+
+  expressway = function(expresswayEntry)
+    if not expresswayEntry then return false end
+    -- Standing a little round from the cannon, not in it.
+    local entryPlanet, entryCannon = expresswayEntry.planet, expresswayEntry.cannon
+    local standAngle = entryCannon.mountAngle - 0.45
+    local standDist = entryPlanet.radius + constants.PLAYER_RADIUS
+    return {
+      x = entryPlanet.pos.x + math.cos(standAngle) * standDist,
+      y = entryPlanet.pos.y + math.sin(standAngle) * standDist,
+      planet = entryPlanet,
+    }
+  end,
+}
+
+local function applyStartPosition(expresswayEntry)
+  if START_AT == "shelter" then return end
+  local place = START_POSITIONS[START_AT]
+  local point = place and place(expresswayEntry)
+  if not point then
+    print(string.format('main.lua: START_AT = "%s" %s - starting at the shelter instead.', START_AT,
+      place and "but that planet is switched off" or "isn't a known start position"))
+    return
+  end
+  state.respawnPoint = point
+  -- He isn't waiting behind the shelter door, so skip its intro.
+  state.spaceShelter.playerInFront = true
+  state.spaceShelter.introDone = true
+end
 
 local ZOOM_MIN = 0.6
 local ZOOM_MAX = 2.5
@@ -132,9 +256,11 @@ local function resetWorldState()
   state.fish, state.beams, state.lavas, state.tiledLevels = nil, nil, nil, nil
   state.ropeRocks, state.recallables = nil, nil
   state.ooombas, state.spikeys, state.mirrors, state.levers = nil, nil, nil, nil
+  state.plungers = nil
   state.cranks, state.signs, state.gates = nil, nil, nil
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
+  state.crackedPlanet, state.tiledPlanet = nil, nil
   state.beltLandingPlanet = nil
   state.miningPlanet, state.prisms = nil, nil
   state.cannons, state.clearLanes = nil, nil
@@ -143,8 +269,12 @@ local function resetWorldState()
   state.cannonZoomFlying, state.cannonZoomReturn = nil, nil
   state.elementPieces = {}
   state.portals, state.portalTracers = nil, nil
-  WeaponModes.set("blaster")
+  WeaponModes.set("fireball")
   WaterSystem.reset()
+  -- (The lava itself is a liquid, in WaterSystem; state.lavas holds the
+  -- effects played over lava turning to obsidian and back — see its
+  -- "Lava meeting water: obsidian".)
+  state.lavas = {}
   Recall.reset()
   state.portalCameraGlide = nil
 
@@ -174,12 +304,12 @@ function love.load()
   if firstLoad then
     love.window.setTitle("Asteroid Bob")
 
-    -- Starts large (filling the screen) without going into actual
-    -- fullscreen mode — conf.lua's window stays resizable with its normal
-    -- title bar/chrome (minimize, maximize, close, drag-to-resize) rather
-    -- than a borderless takeover; this just maximizes that ordinary
-    -- window on launch, exactly like clicking its own maximize button.
-    love.window.maximize()
+    -- conf.lua starts in 1920x1080 borderless fullscreen (16:9, for
+    -- trailer clips). If fullscreen is ever turned off there, fill the
+    -- screen with an ordinary maximized window instead.
+    if not love.window.getFullscreen() then
+      love.window.maximize()
+    end
   end
 
   -- Pixel-art default: LÖVE's own default is "linear" filtering, which
@@ -228,6 +358,7 @@ function love.load()
   state.elements = { rubinium = 0, asteroidium = 0 } -- how much of each he's mined (see lua/entities/ElementPiece.lua)
   state.level = 1
   state.fireballs = {}
+  state.iceBolts = {}
   state.explosions = {}
   state.wallContactPulses = {}
   state.fireBars = state.fireBars or {}
@@ -476,6 +607,40 @@ function love.load()
     state.roundedRectPlanet = roundedRectPlanet
   end
 
+  -- Cracked planet (see lua/world/CrackedPlanetoid.lua): rings of dirt
+  -- clods round a cracked core, which fireballs blow out (caves and
+  -- all). Out past the right end of the sky dome, a little above its deck.
+  local SHOW_CRACKED_PLANET = true
+  if SHOW_CRACKED_PLANET then
+    local CRACKED_PLANET_CORE_RADIUS = 320
+    local CRACKED_PLANET_BRICK_LAYERS = 14 -- 32 units each, so 768 to the outside
+    local CRACKED_PLANET_GAP = 1800 -- from the dome's right edge to the planet's center
+    local CRACKED_PLANET_ABOVE_DECK = 400
+    local cracked = CrackedPlanetoid.new(
+      domeX + domeHalfW + CRACKED_PLANET_GAP, domeY - CRACKED_PLANET_ABOVE_DECK,
+      CRACKED_PLANET_CORE_RADIUS, CRACKED_PLANET_BRICK_LAYERS, { 0.52, 0.36, 0.24, 1 })
+    table.insert(state.planetoids, cracked)
+    state.crackedPlanet = cracked
+  end
+
+  -- Tiled planet: the Tiled map tiled/Level2.lua wrapped round a planet
+  -- (see CrackedPlanetoid.fromTiledMap) — a test of building one from a
+  -- map, with a tunnel through it. Its size comes from the map. Straight
+  -- below the cracked planet (further right, it would sit on the
+  -- galactic expressway's track — see Cannon.lua's OUTLINE in main.lua).
+  local SHOW_TILED_PLANET = true
+  if SHOW_TILED_PLANET and state.crackedPlanet then
+    local TILED_PLANET_GAP = 1200 -- between the two planets' outsides
+    local map = require("tiled.Level2")
+    local radius = CrackedPlanetoid.tiledMapRadius(map)
+    local cracked = state.crackedPlanet
+    local tiledPlanet = CrackedPlanetoid.fromTiledMap(
+      cracked.pos.x, cracked.pos.y + cracked.radius + TILED_PLANET_GAP + radius,
+      map, { 0.45, 0.32, 0.2, 1 })
+    table.insert(state.planetoids, tiledPlanet)
+    state.tiledPlanet = tiledPlanet
+  end
+
   -- Robot butler NPC — paces back and forth just to the right of the
   -- shelter's own footprint (see RobotButler.lua). Positioned off the
   -- shelter's own right edge (pos.x + half its drawn width) plus a
@@ -658,7 +823,6 @@ function love.load()
           tostring(rope.id)))
       end
     end
-    state.lavas = terrainLevel.lavas
 
     -- Ooombas are placed explicitly via Tiled's own Object Layer now
     -- (see TiledTerrain.lua's ooombaSpawns) instead of auto-spawned onto
@@ -908,6 +1072,13 @@ function love.load()
       end
     end
 
+    -- Plungers (see lua/world/Plunger.lua): fire Bob along, e.g. into a
+    -- ball tunnel.
+    state.plungers = {}
+    for _, spawn in ipairs(terrainLevel.plungerSpawns or {}) do
+      table.insert(state.plungers, Plunger.new(spawn.x, spawn.y, spawn.dir))
+    end
+
     -- "Sign" objects (see lua/world/Sign.lua): same raycast-down
     -- ground placement as the levers/cranks above.
     state.signs = {}
@@ -1020,6 +1191,22 @@ function love.load()
       { texture = state.signPlanetTexture, up = up }))
   end
 
+  -- Ooombas placed on the Tiled planet's own map (tiled/Level2's object
+  -- layer — see CrackedPlanetoid.fromTiledMap's objectSpawns): each set
+  -- down on the ground under where it was placed, patrolling it round the
+  -- planet (see Ooomba.newOnCrackedPlanet). (Added after the dome's own,
+  -- above, which start state.ooombas afresh.)
+  if state.tiledPlanet then
+    state.ooombas = state.ooombas or {}
+    for _, spawn in ipairs(state.tiledPlanet.objectSpawns or {}) do
+      if spawn.class == "Ooomba" then
+        local direction = (math.random() < 0.5) and -1 or 1
+        local o = Ooomba.newOnCrackedPlanet(state.tiledPlanet, spawn.lx, spawn.ly, { direction = direction })
+        if o then table.insert(state.ooombas, o) end
+      end
+    end
+  end
+
   local topY = dome:trueSurfaceY()
   local doorwayX = state.spaceShelter and (state.spaceShelter:getDoorwayPosition()) or dome.pos.x
   state.player = Player.new(doorwayX, topY - constants.PLAYER_RADIUS)
@@ -1032,51 +1219,8 @@ function love.load()
   -- Where Player:respawn puts him back after dying — this same doorway.
   state.respawnPoint = { x = doorwayX, y = topY - constants.PLAYER_RADIUS, planet = dome }
 
-  -- TEMPORARY, for looking at the mining planet and its prisms: the
-  -- game starts him there instead of at the shelter door (and so does
-  -- every respawn). Set to false — or delete this block — to go back.
-  -- He's stood on the very top of it. The planet drifts, so the point
-  -- itself is kept on top of it every frame (see love.update — the
-  -- other half of this, marked TEMPORARY too). The shelter's
-  -- door-opening intro is marked already over, since he isn't there to
-  -- wait behind the door.
-  local TEMP_START_ON_MINING_PLANET = false
-  if TEMP_START_ON_MINING_PLANET and state.miningPlanet then
-    local planet = state.miningPlanet
-    state.respawnPoint = {
-      x = planet.pos.x, y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
-      planet = planet, followsPlanet = true,
-    }
-    state.spaceShelter.playerInFront = true
-    state.spaceShelter.introDone = true
-  end
-
-  -- TEMPORARY, for looking at the water planets: the game starts him
-  -- (and every respawn puts him) just above the fisherman's rounded-
-  -- rectangle planetoid, left of the fisherman, dropping onto it. No
-  -- planet is named, so he lands through the ordinary collision pass
-  -- rather than being placed on its surface. Set to false to go back.
-  local TEMP_START_ON_FISHERMAN_RECT = false
-  if TEMP_START_ON_FISHERMAN_RECT and state.roundedRectPlanet then
-    local rect = state.roundedRectPlanet
-    state.respawnPoint = {
-      x = rect.pos.x - rect.halfWidth * 0.4,
-      y = rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
-    }
-    state.spaceShelter.playerInFront = true
-    state.spaceShelter.introDone = true
-  end
-
-  -- TEMPORARY, for testing the pinball table: the game starts him on
-  -- its plunger, already a ball (and so does every respawn — see
-  -- Player:respawn's own point.pinball). Set to false to go back.
-  local TEMP_START_IN_PINBALL = false
-  if TEMP_START_IN_PINBALL and state.pinballPlanet then
-    local portal = state.pinballPlanet.interior:getPortalPosition()
-    state.respawnPoint = { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
-    state.spaceShelter.playerInFront = true
-    state.spaceShelter.introDone = true
-  end
+  -- Testing a different start spot? See START_AT near the top of this file.
+  local expresswayEntry -- filled in below if the expressway is built
 
   -- === The galactic expressway (see lua/world/Cannon.lua) ===
   -- A loop of track all the way round the sun — an irregular, zigzagging
@@ -1100,7 +1244,7 @@ function love.load()
   -- And random planetoids and asteroids are kept out of a lane down
   -- every straight and round every rail and bumper (state.clearLanes —
   -- see worldGen.isInClearLane), so normally nothing's in the way.
-  local SHOW_EXPRESSWAY = true -- false removes the expressway and its entry (and starts him at the shelter again)
+  local SHOW_EXPRESSWAY = false -- false removes the expressway and its entry (and starts him at the shelter again)
   if SHOW_EXPRESSWAY then
     local ENTRY_PLANET_INSET = 6500 -- how far inside the ring the entry planet sits
     local ENTRY_PLANET_RADIUS = 250
@@ -1430,23 +1574,8 @@ function love.load()
       end
     end end
 
-    -- true: he starts, and respawns, standing on the north entry planet
-    -- a little round from its cannon — not in it — instead of behind the
-    -- Space Shelter's door on the sky dome. The shelter's door-opening
-    -- intro is then marked already over, since he isn't there behind the
-    -- door.
-    local START_AT_EXPRESSWAY_ENTRY = false
-    if START_AT_EXPRESSWAY_ENTRY then
-      local standAngle = entryCannon.mountAngle - 0.45
-      local standDist = entryPlanet.radius + constants.PLAYER_RADIUS
-      state.respawnPoint = {
-        x = entryPlanet.pos.x + math.cos(standAngle) * standDist,
-        y = entryPlanet.pos.y + math.sin(standAngle) * standDist,
-        planet = entryPlanet,
-      }
-      state.spaceShelter.playerInFront = true
-      state.spaceShelter.introDone = true
-    end
+    -- For START_AT = "expressway" (top of this file).
+    expresswayEntry = { planet = entryPlanet, cannon = entryCannon }
   end
 
   -- Missile outposts just past the asteroid belt's outer edge (see
@@ -1464,6 +1593,10 @@ function love.load()
       table.insert(state.clearLanes, { p.pos.x, p.pos.y, p.pos.x, p.pos.y, p.radius + 700 })
     end
   end
+
+  -- Testing start spot (START_AT, top of this file), now that every
+  -- planet it could pick exists.
+  applyStartPosition(expresswayEntry)
 
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
@@ -1697,7 +1830,7 @@ function love.update(dt)
   --     — is dropped, back to the ordinary hold-to-pull rule.
   if state.vatsWasActive and not state.vatsActive and state.player then
     state.player:clearLockTarget()
-    if state.player.pullTarget and not (state.gamepadPullHeld or love.mouse.isDown(2)) then
+    if state.player.pullTarget and not (state.gamepadPullHeld or love.mouse.isDown(1)) then
       state.player:clearPullTarget()
     end
   end
@@ -1752,8 +1885,8 @@ function love.update(dt)
     if p.updateRotation and not p.recalling then p:updateRotation(state.timeScale) end
   end
 
-  -- TEMPORARY (goes with TEMP_START_ON_MINING_PLANET in love.load):
-  -- keeps the respawn point on top of the mining planet as it drifts.
+  -- Goes with START_AT = "mining" (top of this file): keeps the respawn
+  -- point on top of the mining planet as it drifts.
   if state.respawnPoint and state.respawnPoint.followsPlanet then
     local point, planet = state.respawnPoint, state.respawnPoint.planet
     point.x, point.y = planet.pos.x, planet.pos.y - planet.radius - constants.PLAYER_RADIUS
@@ -1946,6 +2079,10 @@ function love.update(dt)
   -- TitleScreen.lua) — the real keys never reach him there at all.
   -- Going through a portal: he follows the portal path instead of all
   -- the normal movement/gravity/collision below (see lua/systems/PortalGun.lua).
+  -- A left click since last frame (see InputHandlers.lua), fired below
+  -- once he's moved; dropped if he can't fire this frame.
+  local mouseFire = state.mouseFirePending
+  state.mouseFirePending = false
   if state.player.portalTransit then
     PortalGun.updateTransit(state.player, state.timeScale)
   else
@@ -1958,7 +2095,19 @@ function love.update(dt)
       -- dead straight — see lua/world/Cannon.lua.)
       local noSteering = state.introLocked or state.player.inPinball or state.vatsActive
         or state.player.inCannon or state.player.cannonFlight
+      -- Standing, he can't walk or run into a gap lower than he is tall —
+      -- a ball tunnel (see TiledTerrain.lua's Level:headroomAt) — unless
+      -- he's already somewhere that low.
+      local pl = state.player
+      local level = state.tiledLevels and state.tiledLevels[1]
+      local px, py, parc = pl.pos.x, pl.pos.y, pl.surfaceArcPos
+      local hadRoom = level and pl.onSurface and not pl.isBall and level:headroomAt(px, py, pl.radius)
       state.player:move(noSteering and {} or state.keys)
+      if hadRoom and pl.onSurface and not pl.isBall and not level:headroomAt(pl.pos.x, pl.pos.y, pl.radius) then
+        pl.pos.x, pl.pos.y, pl.surfaceArcPos = px, py, parc
+        pl.isWalking = false
+        pl.groundMoveSpeedX = 0
+      end
     end
 
     -- PinballInterior:updateBall entirely REPLACES normal gravity and
@@ -2007,8 +2156,9 @@ function love.update(dt)
     -- was missing before — GamePadInput.lua already set
     -- state.gamepadFireHeld every frame from the trigger's analog value,
     -- but nothing ever read it, so R2 silently did nothing.
-    if state.gamepadFireHeld and state.player then
-      state.player:shootFireball()
+    -- (A left click is handled here too — see mouseFire above.)
+    if (state.gamepadFireHeld or mouseFire) and state.player then
+      if state.iceMode then state.player:shootIceBolt() else state.player:shootFireball() end
     end
 
     -- Reset once per frame, before re-checking walls AND Spikeys below —
@@ -2024,8 +2174,13 @@ function love.update(dt)
     if state.tiledLevels then
       for _, level in ipairs(state.tiledLevels) do
         collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
+        -- Ball-tunnel pieces, and (standing, in the air) his head.
+        level:pushPlayer(state.player)
       end
     end
+    -- Plungers: solid to him, loaded by pushing into them, fire him
+    -- when he lets go (see lua/world/Plunger.lua).
+    for _, plunger in ipairs(state.plungers or {}) do plunger:update(state.player, state.timeScale) end
 
     collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
 
@@ -2185,6 +2340,18 @@ function love.update(dt)
       end
     end
 
+    -- Into a frozen Ooomba's ice cube: the ice melts into a splash of
+    -- water and steam, and the Ooomba walks on, unharmed (see
+    -- WaterSystem.fireHitsIce). (The level's ice blocks are walls: the
+    -- wall pass below melts those.)
+    for i = #state.fireballs, 1, -1 do
+      local f = state.fireballs[i]
+      if WaterSystem.fireHitsIce(f) then
+        table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
+        table.remove(state.fireballs, i)
+      end
+    end
+
     if #state.fireballs > 0 then
       -- Mirrors get first look: a reflected fireball just had its
       -- velocity/position adjusted, not destroyed, so it's excluded
@@ -2229,11 +2396,34 @@ function love.update(dt)
           if not reflected[hit.fireball] then
             table.insert(state.explosions, Explosion.new(hit.fireball.pos.x, hit.fireball.pos.y))
             if state.audioManager then state.audioManager:playFireball() end
+            -- An obsidian or ice block's walkable top: the block itself
+            -- melts (see WaterSystem.fireHitsWall).
+            if hit.planet.blockWall then WaterSystem.fireHitsWall(hit.planet.blockWall) end
+            -- Breakable planets (see lua/world/CrackedPlanetoid.lua) lose bricks.
+            if hit.planet.takeHit then
+              local f = hit.fireball
+              hit.planet:takeHit(f.pos.x, f.pos.y, f.vel.x, f.vel.y)
+            end
           end
         end
         for i = #state.fireballs, 1, -1 do
           if hitFireballs[state.fireballs[i]] and not reflected[state.fireballs[i]] then
             table.remove(state.fireballs, i)
+          end
+        end
+      end
+
+      -- Into a ball-tunnel piece (see TiledTerrain.lua's Level:tunnelSolidAt).
+      if state.tiledLevels then
+        for i = #state.fireballs, 1, -1 do
+          local f = state.fireballs[i]
+          for _, level in ipairs(state.tiledLevels) do
+            if level:tunnelSolidAt(f.pos.x, f.pos.y) then
+              table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
+              if state.audioManager then state.audioManager:playFireball() end
+              table.remove(state.fireballs, i)
+              break
+            end
           end
         end
       end
@@ -2246,11 +2436,14 @@ function love.update(dt)
         local hitWallFireballs = {}
         for _, level in ipairs(state.tiledLevels) do
           local hits = collisionSystem:handleFireballWallCollisions(state.fireballs, level.walls)
-          for f in pairs(hits) do hitWallFireballs[f] = true end
+          for f, wall in pairs(hits) do hitWallFireballs[f] = wall end
         end
         for i = #state.fireballs, 1, -1 do
           local f = state.fireballs[i]
           if hitWallFireballs[f] and not reflected[f] then
+            -- (An obsidian block starts melting back into lava; an ice
+            -- block melts into water.)
+            WaterSystem.fireHitsWall(hitWallFireballs[f])
             table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
             if state.audioManager then state.audioManager:playFireball() end
             table.remove(state.fireballs, i)
@@ -2292,6 +2485,49 @@ function love.update(dt)
             table.remove(state.fireballs, i)
           end
         end
+      end
+    end
+  end
+
+  -- Ice bolts (the ice blaster's — see lua/entities/IceBolt.lua): water
+  -- they reach freezes into an ice block, lava turns to water (and so to
+  -- obsidian) — see WaterSystem.iceBoltHit — and an Ooomba they hit is
+  -- frozen in an ice cube. Anything else solid, they shatter on.
+  if state.iceBolts and #state.iceBolts > 0 then
+    for i = #state.iceBolts, 1, -1 do
+      local b = state.iceBolts[i]
+      b:update()
+      if b:isDead() then table.remove(state.iceBolts, i) end
+    end
+    PortalGun.passFireballs(state.iceBolts, state.timeScale)
+    for i = #state.iceBolts, 1, -1 do
+      local b = state.iceBolts[i]
+      local hit = WaterSystem.iceBoltHit(b)
+      if not hit then
+        for _, o in ipairs(state.ooombas or {}) do
+          if not o.frozen and not o.isSquashing and not o.portalTransit then
+            local dx, dy = b.pos.x - o.pos.x, b.pos.y - o.pos.y
+            local r = b.radius + o.hitRadius * 1.3
+            if dx * dx + dy * dy < r * r then
+              WaterSystem.encaseOoomba(o)
+              hit = true
+              break
+            end
+          end
+        end
+      end
+      if not hit then
+        for _, level in ipairs(state.tiledLevels or {}) do
+          if next(collisionSystem:handleFireballWallCollisions({ b }, level.walls)) then hit = true end
+        end
+      end
+      if not hit then
+        local hitBolts = collisionSystem:handleFireballCollisions({ b }, collidablePlanetoids, {})
+        hit = hitBolts[b] or false
+      end
+      if hit then
+        IceBolt.burst(b.pos.x, b.pos.y, 12)
+        table.remove(state.iceBolts, i)
       end
     end
   end
@@ -2763,6 +2999,12 @@ function love.draw()
     end
   end
 
+  if state.plungers then
+    for _, plunger in ipairs(state.plungers) do
+      if utils.isOnScreen(plunger.pos.x, plunger.pos.y, plunger.radius, 20) then plunger:draw() end
+    end
+  end
+
   if state.cranks then
     for _, crank in ipairs(state.cranks) do
       if utils.isOnScreen(crank.pos.x, crank.pos.y, 80, 20) then
@@ -2848,6 +3090,8 @@ function love.draw()
         PortalGun.drawOoomba(o)
         -- ...with the shadows of any in front of it falling on it.
         CharacterShadows.drawOntoOoomba(i)
+        -- ...and, frozen, the ice cube round it (see WaterSystem.lua's "Ice").
+        if o.iceBlock then WaterSystem.drawIceCube(o.iceBlock) end
       end
     end
   end
@@ -3069,6 +3313,7 @@ function love.draw()
       f:draw()
     end
   end
+  for _, b in ipairs(state.iceBolts or {}) do b:draw() end
 
   if state.particles then
     for _, p in ipairs(state.particles) do
@@ -3134,32 +3379,50 @@ function love.draw()
     state.minimap:draw()
   end
 
-  local cell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+  -- Blaster selector, lower-left (see lua/ui/WeaponBar.lua).
+  WeaponBar.draw()
 
-  love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.print(string.format("Level %d - Score: %d", state.level, state.score), 20, 20)
-  love.graphics.print(string.format("FPS: %.1f", state.fps or 0), 20, 40)
-  love.graphics.print(string.format("Zoom: %.1fx (+/-)", state.zoom), 20, 60)
-  love.graphics.print(string.format("Cell: (%d, %d)", cell.col, cell.row), 20, 80)
-  love.graphics.print(string.format("Planetoids: %d  Coins: %d  Asteroids: %d  FireBars: %d",
-    #state.planetoids,
-    state.coins and #state.coins or 0,
-    state.asteroids and #state.asteroids or 0,
-    state.fireBars and #state.fireBars or 0
-  ), 20, 100)
-  love.graphics.print(string.format("Rubinium: %d  Asteroidium: %d", state.elements.rubinium, state.elements.asteroidium), 20, 120)
-  love.graphics.print(string.format("Mode: %s (P / D-pad left-right to switch)", WeaponModes.label()), 20, 140)
-  if state.portalMode then
-    love.graphics.print("Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump", 20, 160)
-  elseif state.waterMode then
-    love.graphics.print(string.format("Right-click / R2: spray water (%d / %d), Space to jump (or swim)",
-      math.floor(WaterSystem.totalWater() + 0.5), WaterSystem.waterCap()), 20, 160)
-  elseif state.recallMode then
-    love.graphics.print("Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
-  elseif state.recallMode then
-    love.graphics.print("Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
-  else
-    love.graphics.print("Right-click a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
+  -- Recording a trailer clip (P - see lua/systems/ClipRecorder.lua):
+  -- none of the top-left HUD/debug text goes into the video.
+  if not ClipRecorder.isRecording() then
+    local cell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print(string.format("Level %d - Score: %d", state.level, state.score), 20, 20)
+    love.graphics.print(string.format("FPS: %.1f", state.fps or 0), 20, 40)
+    love.graphics.print(string.format("Zoom: %.1fx (+/-)", state.zoom), 20, 60)
+    love.graphics.print(string.format("Cell: (%d, %d)", cell.col, cell.row), 20, 80)
+    love.graphics.print(string.format("Planetoids: %d  Coins: %d  Asteroids: %d  FireBars: %d",
+      #state.planetoids,
+      state.coins and #state.coins or 0,
+      state.asteroids and #state.asteroids or 0,
+      state.fireBars and #state.fireBars or 0
+    ), 20, 100)
+    love.graphics.print(string.format("Rubinium: %d  Asteroidium: %d", state.elements.rubinium, state.elements.asteroidium), 20, 120)
+    love.graphics.print(string.format("Mode: %s (Tab / D-pad left-right to switch)   P: record clip", WeaponModes.label()), 20, 140)
+    if state.portalMode then
+      love.graphics.print("Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump", 20, 160)
+    elseif state.waterMode then
+      love.graphics.print(string.format("Left-click / R2: spray water (%d / %d), Space to jump (or swim)",
+        math.floor(WaterSystem.totalWater() + 0.5), WaterSystem.waterCap()), 20, 160)
+    elseif state.recallMode then
+      love.graphics.print("Left-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
+    elseif state.iceMode then
+      love.graphics.print("Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump", 20, 160)
+    elseif state.pullBeamMode then
+      love.graphics.print("Left-click / R2 on a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
+    else
+      love.graphics.print("Left-click / R2: fireball (L2: pull beam), Space to jump, C to toggle collision debug", 20, 160)
+    end
+    -- On or near a dirt planet: which way its gravity pulls (see
+    -- CrackedPlanetoid:cycleGravity).
+    do
+      local p = state.player.currentPlanet or state.player.lastInfluencePlanet
+      if p and p.cycleGravity then
+        love.graphics.print(string.format("Gravity: %s (G to change)   Spin: %s (N clockwise, M counter-clockwise)",
+          p.GRAVITY_LABELS[p.gravityMode] or p.gravityMode, p.SPIN_LABELS[p.spinDir] or "Off"), 20, 180)
+      end
+    end
   end
 
   PauseMenu.draw()
@@ -3183,5 +3446,38 @@ do
     end
     drawFrame()
     state.camera = camera
+  end
+end
+
+-- Trailer clip recording (P - see lua/systems/ClipRecorder.lua).
+--   * Debug overlays (collision shapes, belt cells, influence rings) are
+--     switched off for recorded frames only, then put back.
+--   * Every finished frame is handed to the recorder.
+--   * Updates run on a fixed 1/60 s step while recording, so the video
+--     plays at perfect speed even if capturing slows the game down.
+do
+  local drawFrame = love.draw
+  function love.draw()
+    if ClipRecorder.isRecording() then
+      local c, b, r = state.showCollisionDebug, state.showBeltCellDebug, state.showInfluenceRings
+      state.showCollisionDebug, state.showBeltCellDebug, state.showInfluenceRings = false, false, false
+      drawFrame()
+      state.showCollisionDebug, state.showBeltCellDebug, state.showInfluenceRings = c, b, r
+      ClipRecorder.captureFrame()
+    else
+      drawFrame()
+    end
+  end
+
+  local updateFrame = love.update
+  function love.update(dt)
+    updateFrame(ClipRecorder.frameDt(dt))
+  end
+
+  -- Quitting mid-recording still saves the clip.
+  local quit = love.quit
+  function love.quit()
+    ClipRecorder.shutdown()
+    if quit then return quit() end
   end
 end

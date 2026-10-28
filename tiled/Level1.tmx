@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="5" nextobjectid="112">
+<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="5" nextobjectid="114">
  <editorsettings>
   <export target="Level1.lua" format="lua"/>
  </editorsettings>
- <tileset firstgid="1" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="81" columns="9">
+ <tileset firstgid="1" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
   <properties>
    <property name="role" value=""/>
   </properties>
-  <image source="../img/platform.png" width="288" height="288"/>
+  <image source="../img/platform.png" width="288" height="576"/>
   <tile id="0">
    <properties>
     <property name="role" value="top"/>
@@ -338,6 +338,1110 @@
     <property name="slope" value="rampRight"/>
    </properties>
   </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
+ </tileset>
+ <tileset firstgid="163" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
+  <properties>
+   <property name="role" value=""/>
+  </properties>
+  <image source="../img/platform.png" width="288" height="576"/>
+  <tile id="0">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="1">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="2">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="3">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="5">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="6">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="7">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="8">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="9">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="10">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="11">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="12">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="13">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="14">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="15">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="16">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="17">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="18">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="19">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="20">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="21">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="22">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="23">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="24">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="25">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="26">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="27">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="28">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="29">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="30">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="31">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="32">
+   <properties>
+    <property name="role" value="lava"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="33">
+   <properties>
+    <property name="role" value="water"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="34">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="35">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="36">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="37">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="38">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="39">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="40">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="41">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="42">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="43">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="44">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="48">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="49">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="50">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="51">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="55">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="56">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="59">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="60">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="64">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="65">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
+ </tileset>
+ <tileset firstgid="325" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
+  <properties>
+   <property name="role" value=""/>
+  </properties>
+  <image source="../img/platform.png" width="288" height="576"/>
+  <tile id="0">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="1">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="2">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="3">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="5">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="6">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="7">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="8">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="9">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="10">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="11">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="12">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="13">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="14">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="15">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="16">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="17">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="18">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="19">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="20">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="21">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="22">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="23">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="24">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="25">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="26">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="27">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="28">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="29">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="30">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="31">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="32">
+   <properties>
+    <property name="role" value="lava"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="33">
+   <properties>
+    <property name="role" value="water"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="34">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="35">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="36">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="37">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="38">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="39">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="40">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="41">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="42">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="43">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="44">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="48">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="49">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="50">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="51">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="55">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="56">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="59">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="60">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="64">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="65">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
  </tileset>
  <layer id="1" name="Back" width="120" height="60">
   <data encoding="csv">
@@ -367,17 +1471,17 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,19,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,19,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,19,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,47,41,41,38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,124,125,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,55,133,51,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,47,41,41,48,11,11,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,124,125,0,0,121,122,11,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,55,133,51,2,2,52,131,58,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,37,41,41,41,41,41,41,91,0,28,11,11,29,0,95,41,91,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,19,20,0,0,19,20,0,0,0,0,0,0,0,0,0,0,0,0,0,66,67,11,11,64,65,0,0,0,66,67,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,31,2,2,2,2,2,2,2,2,2,2,2,2,2,75,11,11,11,11,74,2,2,2,75,11,11,11,31,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,22,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,23,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,31,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,22,41,41,41,41,41,41,41,41,41,41,41,41,41,23,11,11,11,11,11,11,11,47,41,41,41,41,41,41,41,41,48,11,11,47,41,41,41,41,41,48,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
@@ -398,7 +1502,7 @@
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,21,0,0,0,0,21,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,30,0,0,0,0,30,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,30,195,195,195,195,30,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,40,2,2,2,2,49,0,0,0,0,
 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,28,11,11,11,11,29,0,0,0,0
 </data>
@@ -532,6 +1636,7 @@
 </data>
  </layer>
  <objectgroup id="2" name="Object Layer 1">
+  <object id="113" name="Tunnel plunger" class="RightPlunger" x="800" y="1120" width="32" height="32"/>
   <object id="2" class="Ooomba" x="3162" y="1565">
    <point/>
   </object>
@@ -851,24 +1956,11 @@
   <object id="91" class="Sphere" x="569" y="971">
    <point/>
   </object>
-  <object id="92" class="Sphere" x="1012" y="916">
-   <properties>
-    <property name="radius" value="100"/>
-   </properties>
-   <point/>
-  </object>
   <object id="93" class="Sphere" x="1378" y="686">
    <properties>
     <property name="gravity" value="500"/>
     <property name="ooomba" value="6"/>
     <property name="radius" value="200"/>
-   </properties>
-   <point/>
-  </object>
-  <object id="95" class="Spikey-Orbit" x="1375" y="868">
-   <properties>
-    <property name="orbit" value="93"/>
-    <property name="speed" value="5"/>
    </properties>
    <point/>
   </object>
@@ -924,9 +2016,6 @@
    <point/>
   </object>
   <object id="105" class="Ooomba" x="1926" y="1146">
-   <point/>
-  </object>
-  <object id="106" class="Ooomba" x="1477" y="1145">
    <point/>
   </object>
   <object id="110" class="Rock" x="1855" y="1788.25" width="130.5" height="35.5">

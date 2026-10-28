@@ -1,9 +1,11 @@
 // js/systems/WeaponModes.js
 //
 // What the blaster's two buttons do, cycled with P (keyboard) or D-pad
-// left/right (gamepad): blaster, portal, water, recall.
+// left/right (gamepad): blaster, ice (ice bolts — see js/entities/IceBolt.js:
+// water they hit freezes, lava turns to water, Ooombas freeze solid),
+// portal, water, recall.
 //
-// state.weaponMode holds the current one; state.portalMode/waterMode/recallMode
+// state.weaponMode holds the current one; state.iceMode/portalMode/waterMode/recallMode
 // are the same thing as plain flags, for the input code's checks.
 
 import state from '../state.js';
@@ -11,11 +13,12 @@ import lua from '../love/lua.js';
 
 const WeaponModes = {};
 
-WeaponModes.ORDER = ['blaster', 'portal', 'water', 'recall'];
-WeaponModes.LABELS = { blaster: 'Blaster', portal: 'Portal', water: 'Water', recall: 'Recall' };
+WeaponModes.ORDER = ['blaster', 'ice', 'portal', 'water', 'recall'];
+WeaponModes.LABELS = { blaster: 'Blaster', ice: 'Ice', portal: 'Portal', water: 'Water', recall: 'Recall' };
 
 WeaponModes.set = function (mode) {
   state.weaponMode = mode;
+  state.iceMode = mode === 'ice';
   state.portalMode = mode === 'portal';
   state.waterMode = mode === 'water';
   state.recallMode = mode === 'recall';

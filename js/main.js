@@ -17,6 +17,7 @@ import Asteroid from './entities/Asteroid.js';
 import Coin from './entities/Coin.js';
 import Ooomba from './entities/Ooomba.js';
 import Explosion from './entities/Explosion.js';
+import IceBolt from './entities/IceBolt.js';
 import Particle from './entities/Particle.js';
 import StompBurst from './effects/StompBurst.js';
 import TitleScreen from './ui/TitleScreen.js';
@@ -40,6 +41,7 @@ import TiledTerrain from './world/TiledTerrain.js';
 import Sphere from './world/Sphere.js';
 import SphereMove from './world/SphereMove.js';
 import RoundedRectPlanetoid from './world/RoundedRectPlanetoid.js';
+import CrackedPlanetoid from './world/CrackedPlanetoid.js';
 import Spikey from './world/Spikey.js';
 import SpikeyVertical from './world/SpikeyVertical.js';
 import SpikeyOrbit from './world/SpikeyOrbit.js';
@@ -74,6 +76,7 @@ import MissileOutpost from './world/MissileOutpost.js';
 import CameraShake from './effects/CameraShake.js';
 import WeaponModes from './systems/WeaponModes.js';
 import level1Map from './levels/Level1.js';
+import level2Map from './levels/Level2.js';
 import pinballMap from './levels/Pinball-Level2.js';
 
 const rnd = () => lua.random();
@@ -120,6 +123,7 @@ function resetWorldState() {
   state.cranks = null; state.signs = null; state.gates = null;
   state.zoomWindows = null; state.deathZones = null;
   state.pinballPlanet = null; state.waterPlanet = null; state.waterCore = null; state.roundedRectPlanet = null;
+  state.crackedPlanet = null; state.tiledPlanet = null;
   state.beltLandingPlanet = null;
   state.miningPlanet = null; state.prisms = null;
   state.cannons = null; state.clearLanes = null;
@@ -130,6 +134,10 @@ function resetWorldState() {
   state.portals = null; state.portalTracers = null;
   WeaponModes.set('blaster');
   WaterSystem.reset();
+  // (The lava itself is a liquid, in WaterSystem; state.lavas holds the
+  // effects played over lava turning to obsidian and back — see its
+  // "Lava meeting water: obsidian".)
+  state.lavas = [];
   Recall.reset();
   state.portalCameraGlide = null;
 
@@ -197,6 +205,7 @@ love.load = function () {
   state.elements = { rubinium: 0, asteroidium: 0 };
   state.level = 1;
   state.fireballs = [];
+  state.iceBolts = [];
   state.explosions = [];
   state.wallContactPulses = [];
   state.fireBars = state.fireBars ?? [];
@@ -321,6 +330,40 @@ love.load = function () {
     state.roundedRectPlanet = roundedRectPlanet;
   }
 
+  // Cracked planet (see CrackedPlanetoid.js): rings of dirt clods round a
+  // cracked core, which fireballs blow out (caves and all). Out past the
+  // right end of the sky dome, a little above its deck.
+  const SHOW_CRACKED_PLANET = true;
+  if (SHOW_CRACKED_PLANET) {
+    const CRACKED_PLANET_CORE_RADIUS = 320;
+    const CRACKED_PLANET_BRICK_LAYERS = 14; // 32 units each, so 768 to the outside
+    const CRACKED_PLANET_GAP = 1800; // from the dome's right edge to the planet's center
+    const CRACKED_PLANET_ABOVE_DECK = 400;
+    const cracked = CrackedPlanetoid.new(
+      domeX + domeHalfW + CRACKED_PLANET_GAP, domeY - CRACKED_PLANET_ABOVE_DECK,
+      CRACKED_PLANET_CORE_RADIUS, CRACKED_PLANET_BRICK_LAYERS, [0.52, 0.36, 0.24, 1]);
+    state.planetoids.push(cracked);
+    state.crackedPlanet = cracked;
+  }
+
+  // Tiled planet: the Tiled map tiled/Level2.lua (converted to
+  // js/levels/Level2.js) wrapped round a planet (see
+  // CrackedPlanetoid.fromTiledMap) — a test of building one from a map,
+  // with a tunnel through it. Its size comes from the map. Straight below
+  // the cracked planet (further right, it would sit on the galactic
+  // expressway's track — see the expressway's OUTLINE below).
+  const SHOW_TILED_PLANET = true;
+  if (SHOW_TILED_PLANET && state.crackedPlanet) {
+    const TILED_PLANET_GAP = 1200; // between the two planets' outsides
+    const radius = CrackedPlanetoid.tiledMapRadius(level2Map);
+    const cracked = state.crackedPlanet;
+    const tiledPlanet = CrackedPlanetoid.fromTiledMap(
+      cracked.pos.x, cracked.pos.y + cracked.radius + TILED_PLANET_GAP + radius,
+      level2Map, [0.45, 0.32, 0.2, 1]);
+    state.planetoids.push(tiledPlanet);
+    state.tiledPlanet = tiledPlanet;
+  }
+
   // Robot butler, just right of the shelter.
   const ROBOT_GAP_FROM_SHELTER = 60;
   const robotHomeX = state.spaceShelter.pos.x + state.spaceShelter.drawWidth / 2 + ROBOT_GAP_FROM_SHELTER;
@@ -422,7 +465,6 @@ love.load = function () {
         console.log(`main.js: Rope id ${rope.id} holds nothing (its "holds" property names no Rock) — not spawned.`);
       }
     }
-    state.lavas = terrainLevel.lavas;
 
     // Ooombas, snapped down onto the terrain under their Tiled points.
     const OOMBA_RAYCAST_DOWN = 6000;
@@ -585,6 +627,21 @@ love.load = function () {
       { texture: state.signPlanetTexture, up }));
   }
 
+  // Ooombas placed on the Tiled planet's own map (tiled/Level2's object
+  // layer — see CrackedPlanetoid.fromTiledMap's objectSpawns): each set
+  // down on the ground under where it was placed, patrolling it round the
+  // planet (see Ooomba.newOnCrackedPlanet). (Added after the dome's own,
+  // above, which start state.ooombas afresh.)
+  if (state.tiledPlanet) {
+    state.ooombas = state.ooombas ?? [];
+    for (const spawn of state.tiledPlanet.objectSpawns ?? []) {
+      if (spawn.class !== 'Ooomba') continue;
+      const direction = Math.random() < 0.5 ? -1 : 1;
+      const o = Ooomba.newOnCrackedPlanet(state.tiledPlanet, spawn.lx, spawn.ly, { direction });
+      if (o) state.ooombas.push(o);
+    }
+  }
+
   const topY = dome.trueSurfaceY();
   const doorwayX = state.spaceShelter ? state.spaceShelter.getDoorwayPosition()[0] : dome.pos.x;
   state.player = Player.new(doorwayX, topY - constants.PLAYER_RADIUS);
@@ -615,6 +672,39 @@ love.load = function () {
     state.respawnPoint = {
       x: rect.pos.x - rect.halfWidth * 0.4,
       y: rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
+    };
+    state.spaceShelter.playerInFront = true;
+    state.spaceShelter.introDone = true;
+  }
+
+  // TEMPORARY, for trying out the cracked planet: the game starts him
+  // (and every respawn puts him) just above its top, dropping onto it.
+  // Set to false to go back.
+  const TEMP_START_ON_CRACKED_PLANET = false;
+  if (TEMP_START_ON_CRACKED_PLANET && state.crackedPlanet) {
+    const planet = state.crackedPlanet;
+    state.respawnPoint = {
+      x: planet.pos.x,
+      y: planet.pos.y - planet.radius - constants.PLAYER_RADIUS - 20,
+    };
+    state.spaceShelter.playerInFront = true;
+    state.spaceShelter.introDone = true;
+  }
+
+  // TEMPORARY, for trying out the Tiled planet: the game starts him (and
+  // every respawn puts him) just above its surface over the map's column
+  // TILED_START_COLUMN (counting from 0, like Tiled), dropping onto it,
+  // a few steps before the tunnel's way in. Set to false to go back.
+  const TEMP_START_ON_TILED_PLANET = true;
+  if (TEMP_START_ON_TILED_PLANET && state.tiledPlanet) {
+    const planet = state.tiledPlanet;
+    const TILED_START_COLUMN = 5;
+    const columns = planet.rings[0].count;
+    const angle = -Math.PI / 2 + (TILED_START_COLUMN + 0.5) / columns * 2 * Math.PI;
+    const dist = planet.radius + constants.PLAYER_RADIUS + 20;
+    state.respawnPoint = {
+      x: planet.pos.x + Math.cos(angle) * dist,
+      y: planet.pos.y + Math.sin(angle) * dist,
     };
     state.spaceShelter.playerInFront = true;
     state.spaceShelter.introDone = true;
@@ -1206,7 +1296,9 @@ love.update = function (dt) {
     if (!player.inPinball && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
 
     // Gamepad R2 held: fire (shootFireball throttles itself).
-    if (state.gamepadFireHeld && player) player.shootFireball();
+    if (state.gamepadFireHeld && player) {
+      if (state.iceMode) player.shootIceBolt(); else player.shootFireball();
+    }
 
     player.touchingWall = null;
     player.wallContactNormal = null;
@@ -1281,6 +1373,16 @@ love.update = function (dt) {
 
     removeWhere(state.fireballs, (f) => WaterSystem.quenchFireball(f));
 
+    // Into a frozen Ooomba's ice cube: the ice melts into a splash of water
+    // and steam, and the Ooomba walks on, unharmed (see
+    // WaterSystem.fireHitsIce). (The level's ice blocks are walls: the
+    // wall pass below melts those.)
+    removeWhere(state.fireballs, (f) => {
+      if (!WaterSystem.fireHitsIce(f)) return false;
+      state.explosions.push(Explosion.new(f.pos.x, f.pos.y));
+      return true;
+    });
+
     if (state.fireballs.length > 0) {
       const boom = (x, y) => {
         state.explosions.push(Explosion.new(x, y));
@@ -1309,18 +1411,36 @@ love.update = function (dt) {
           breakAsteroid(a, null);
         }
         for (const hit of planetHits) {
-          if (!reflected.has(hit.fireball)) boom(hit.fireball.pos.x, hit.fireball.pos.y);
+          if (!reflected.has(hit.fireball)) {
+            boom(hit.fireball.pos.x, hit.fireball.pos.y);
+            // An obsidian or ice block's walkable top: the block itself melts
+            // (see WaterSystem.fireHitsWall).
+            if (hit.planet.blockWall) WaterSystem.fireHitsWall(hit.planet.blockWall);
+            // Breakable planets (see CrackedPlanetoid.js) lose bricks.
+            if (hit.planet.takeHit) {
+              const f = hit.fireball;
+              hit.planet.takeHit(f.pos.x, f.pos.y, f.vel.x, f.vel.y);
+            }
+          }
         }
         removeWhere(state.fireballs, (f) => hitFireballs.has(f) && !reflected.has(f));
       }
 
       if (state.tiledLevels && state.fireballs.length > 0) {
-        const hitWallFireballs = new Set();
+        const hitWallFireballs = new Map();
         for (const level of state.tiledLevels) {
-          for (const f of collisionSystem.handleFireballWallCollisions(state.fireballs, level.walls)) hitWallFireballs.add(f);
+          for (const [f, wall] of collisionSystem.handleFireballWallCollisions(state.fireballs, level.walls)) {
+            hitWallFireballs.set(f, wall);
+          }
         }
         removeWhere(state.fireballs, (f) => {
-          if (hitWallFireballs.has(f) && !reflected.has(f)) { boom(f.pos.x, f.pos.y); return true; }
+          if (hitWallFireballs.has(f) && !reflected.has(f)) {
+            // (An obsidian block starts melting back into lava; an ice block
+            // melts into water.)
+            WaterSystem.fireHitsWall(hitWallFireballs.get(f));
+            boom(f.pos.x, f.pos.y);
+            return true;
+          }
           return false;
         });
       }
@@ -1342,6 +1462,37 @@ love.update = function (dt) {
         removeWhere(state.fireballs, (f) => hitOoombaFireballs.has(f));
       }
     }
+  }
+
+  // Ice bolts (the ice blaster's — see js/entities/IceBolt.js): water
+  // they reach freezes into an ice block, lava turns to water (and so to
+  // obsidian) — see WaterSystem.iceBoltHit — and an Ooomba they hit is
+  // frozen in an ice cube. Anything else solid, they shatter on.
+  if (state.iceBolts && state.iceBolts.length > 0) {
+    removeWhere(state.iceBolts, (b) => { b.update(); return b.isDead(); });
+    PortalGun.passFireballs(state.iceBolts, state.timeScale);
+    removeWhere(state.iceBolts, (b) => {
+      let hit = WaterSystem.iceBoltHit(b);
+      if (!hit) {
+        for (const o of state.ooombas ?? []) {
+          if (o.frozen || o.isSquashing || o.portalTransit) continue;
+          const dx = b.pos.x - o.pos.x, dy = b.pos.y - o.pos.y;
+          const r = b.radius + o.hitRadius * 1.3;
+          if (dx * dx + dy * dy < r * r) { WaterSystem.encaseOoomba(o); hit = true; break; }
+        }
+      }
+      if (!hit) {
+        for (const level of state.tiledLevels ?? []) {
+          if (collisionSystem.handleFireballWallCollisions([b], level.walls).size > 0) hit = true;
+        }
+      }
+      if (!hit) {
+        const [hitBolts] = collisionSystem.handleFireballCollisions([b], collidablePlanetoids, []);
+        hit = hitBolts.has(b);
+      }
+      if (hit) IceBolt.burst(b.pos.x, b.pos.y, 12);
+      return hit;
+    });
   }
 
   if (state.explosions) removeWhere(state.explosions, (e) => { e.update(); return e.isDead(); });
@@ -1639,6 +1790,8 @@ function drawFrame() {
       if (o.portalTransit || utils.isOnScreen(o.pos.x, o.pos.y, Math.max(o.halfWidth, o.halfHeight), 20)) {
         PortalGun.drawOoomba(o);
         CharacterShadows.drawOntoOoomba(i);
+        // ...and, frozen, the ice cube round it (see WaterSystem.js's "Ice").
+        if (o.iceBlock) WaterSystem.drawIceCube(o.iceBlock);
       }
     });
   }
@@ -1753,6 +1906,7 @@ function drawFrame() {
   PullBeam.draw();
 
   if (state.fireballs) for (const f of state.fireballs) f.draw();
+  for (const b of state.iceBolts ?? []) b.draw();
   if (state.particles) for (const p of state.particles) p.draw();
   for (const piece of state.elementPieces) {
     if (utils.isOnScreen(piece.pos.x, piece.pos.y, piece.radius, 50)) piece.draw();
@@ -1799,8 +1953,18 @@ function drawFrame() {
     g.print(`Right-click / R2: spray water (${Math.floor(WaterSystem.totalWater() + 0.5)} / ${WaterSystem.waterCap()}), Space to jump (or swim)`, 20, 160);
   } else if (state.recallMode) {
     g.print('Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump', 20, 160);
+  } else if (state.iceMode) {
+    g.print('Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump', 20, 160);
   } else {
     g.print('Right-click a planet to pull toward it, Space to jump, C to toggle collision debug', 20, 160);
+  }
+  // On or near a dirt planet: which way its gravity pulls (see
+  // CrackedPlanetoid.cycleGravity).
+  {
+    const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
+    if (p && p.cycleGravity) {
+      g.print(`Gravity: ${p.GRAVITY_LABELS[p.gravityMode] ?? p.gravityMode} (G to change)   Spin: ${p.SPIN_LABELS[p.spinDir] ?? 'Off'} (N clockwise, M counter-clockwise)`, 20, 180);
+    }
   }
 
   PauseMenu.draw();
