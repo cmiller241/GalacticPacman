@@ -9,7 +9,7 @@
 //
 // A steady, ambient particle stream drifts from the base toward the tip;
 // the teleport moment itself gets its feedback from
-// Player.getTeleportPulse's scale/glow blip instead.
+// Player.getTransporterState's transporter shimmer instead.
 //
 // The beam's own glow fades smoothly from the planted base to nothing
 // at the tip, drawn as many short segments of linearly decreasing alpha
@@ -19,6 +19,7 @@ import love from '../love/index.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from './Interactable.js';
 
 // How many short slivers drawFadingLine splits the beam's length into —
 // fine enough that the alpha step between adjacent slivers reads as a
@@ -74,12 +75,6 @@ class Beam {
     return new Vector2(
       this.pos.x + Math.cos(this.angle) * Beam.LENGTH,
       this.pos.y + Math.sin(this.angle) * Beam.LENGTH);
-  }
-
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
   }
 
   // Called from InputHandlers.js (Enter) and GamePadInput.js (Circle).
@@ -164,5 +159,7 @@ Beam.LENGTH = 140;
 Beam.WIDTH = 14;
 Beam.PARTICLE_RADIUS = 3;
 Beam.DEFAULT_COLOR = [0.65, 0.25, 1.0]; // violet
+
+Beam.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default Beam;

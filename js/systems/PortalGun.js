@@ -344,18 +344,9 @@ function gravityAt(portal, offset, influence) {
   const gs = state.gravitySystem;
   const dominant = gs && gs.findDominantPlanet(Vector2.new(x, y), influence);
   if (!dominant) return Vector2.new(0, 0);
-  let dx, dy;
-  if (dominant.isRoundedRect && dominant.nearestSurfacePoint) {
-    const surface = dominant.nearestSurfacePoint(x, y);
-    if (surface.distance > 1e-6) { dx = surface.point.x - x; dy = surface.point.y - y; }
-    else { dx = -surface.normal.x; dy = -surface.normal.y; }
-  } else {
-    dx = dominant.pos.x - x; dy = dominant.pos.y - y;
-  }
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1e-6) return Vector2.new(0, 0);
+  const dir = dominant.gravityDirAt(x, y);
   const strength = dominant.gravityStrength ?? constants.GRAVITY_STRENGTH;
-  return Vector2.new(dx / len * strength, dy / len * strength);
+  return Vector2.new(dir.x * strength, dir.y * strength);
 }
 
 function beginTrip(color, along, out, speed, alongSpeed, down, trail, offset, influence) {

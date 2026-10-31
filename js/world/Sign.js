@@ -20,6 +20,7 @@ import state from '../state.js';
 import Vector2 from '../vector2.js';
 import DialogueBox from '../ui/DialogueBox.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from './Interactable.js';
 
 // img/sign.png (state.signTexture) is 40x48 pixel art, drawn at the same
 // 2x the terrain tiles use — bottom-center anchored on this.pos.
@@ -71,12 +72,6 @@ class Sign {
     this.dialogueActive = false;
     this.dialoguePages = null;
     this.dialoguePageIndex = 0;
-  }
-
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
   }
 
   // Paginates whichever message messageIndex points at and opens the
@@ -158,5 +153,7 @@ class Sign {
     DialogueBox.draw(pageText, hasMorePages || hasMoreMessages);
   }
 }
+
+Sign.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default Sign;

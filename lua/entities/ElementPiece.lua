@@ -3,11 +3,11 @@
 -- A piece of an element the astronaut mines by shooting things apart:
 --   rubinium     what the red prisms are made of (see lua/world/Prism.lua)
 --                — a handful are thrown out when a cluster of them is
---                shot apart (see main.lua's own breakPrismCluster).
+--                shot apart (see Breakage.breakPrismCluster in lua/systems/Breakage.lua).
 --   asteroidium  what asteroids are made of — left when he shoots an
 --                asteroid too small to break into smaller ones, and
 --                sometimes by a bigger one instead of breaking (see
---                main.lua's own breakAsteroid).
+--                Breakage.breakAsteroid in lua/systems/Breakage.lua).
 -- Each piece tumbles outward for a moment, then turns and flies to him
 -- on its own, wherever he is — as if pulled in by a tractor beam, though
 -- there isn't one — and is added to state.elements when it reaches him.

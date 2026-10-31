@@ -18,6 +18,7 @@ import state from '../state.js';
 import Vector2 from '../vector2.js';
 import constants from '../constants.js';
 import Planetoid from './Planetoid.js';
+import PlanetSurface from './PlanetSurface.js';
 
 class RoundedRectPlanetoid {
   // x, y: world center. halfWidth/halfHeight: half-extents of the core
@@ -404,5 +405,11 @@ class RoundedRectPlanetoid {
     love.graphics.pop();
   }
 }
+
+// The planet surface interface (see js/world/PlanetSurface.js): "up" is
+// the nearest face's normal, so he walks all the way round it.
+RoundedRectPlanetoid.prototype.upAt = PlanetSurface.upFromNormal;
+RoundedRectPlanetoid.prototype.gravityDirAt = PlanetSurface.gravityTowardSurface;
+RoundedRectPlanetoid.prototype.gravityDistance = PlanetSurface.gravityDistanceFromSurface;
 
 export default RoundedRectPlanetoid;

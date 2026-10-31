@@ -13,6 +13,7 @@ import lua from '../love/lua.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
 import constants from '../constants.js';
+import PlanetSurface from './PlanetSurface.js';
 
 // ---------------------------------------------------------------------
 // Glass radial shader (+ specular highlight)
@@ -1085,5 +1086,12 @@ class SkyDomePlanetoid {
   drawSunShading() {}
   drawEclipseShadow() {}
 }
+
+// The planet surface interface (see js/world/PlanetSurface.js): a flat
+// deck, so "up" is always straight up; its gravity holds anywhere inside
+// the bubble.
+SkyDomePlanetoid.prototype.upAt = PlanetSurface.upStraight;
+SkyDomePlanetoid.prototype.gravityDirAt = PlanetSurface.gravityTowardSurface;
+SkyDomePlanetoid.prototype.gravityDistance = PlanetSurface.gravityDistanceInWindow;
 
 export default SkyDomePlanetoid;

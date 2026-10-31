@@ -15,6 +15,7 @@ import DustPuff from '../effects/DustPuff.js';
 import Splash from '../effects/Splash.js';
 import GroundPoundBurst from '../effects/GroundPoundBurst.js';
 import SilhouetteGlow from '../effects/SilhouetteGlow.js';
+import TransporterEffect from '../effects/TransporterEffect.js';
 import TargetLock from '../systems/TargetLock.js';
 import WaterSystem from '../systems/WaterSystem.js';
 import PortalGun from '../systems/PortalGun.js';
@@ -168,14 +169,13 @@ const ICE_FIRE_COOLDOWN = 0.25; // (seconds — see shootIceBolt)
 // direction is playing — see Player.updateBallMorph.
 const BALL_MORPH_SEGMENT_TICKS = 8; // baseline (60fps) ticks each of the two keyframe blends takes
 
-// Teleport (Beam.js's own tryInteract) — a freeze-then-snap, not a
-// fade/cutscene: TELEPORT_OUT_TICKS is the pause before he vanishes
-// from the origin beam, with Player.getTeleportPulse's own scale/glow
-// blip playing out over it (ONLY this half gets the blip).
-// TELEPORT_IN_TICKS is the visually plain "arriving" pause right after
-// landing at the destination. Both in baseline (60fps) ticks.
-const TELEPORT_OUT_TICKS = 30;
-const TELEPORT_IN_TICKS = 30;
+// Teleport (Beam.js's own tryInteract) — a transporter shimmer (see
+// js/effects/TransporterEffect.js and Player.getTransporterState):
+// TELEPORT_OUT_TICKS to dematerialize at the origin beam,
+// TELEPORT_IN_TICKS to rematerialize at the destination (the same effect
+// played backward). Baseline (60fps) ticks; 48 = 0.8s each.
+const TELEPORT_OUT_TICKS = 48;
+const TELEPORT_IN_TICKS = 48;
 
 // Brief post-arrival invincibility, so an enemy sitting near the beam
 // entrance can't get a free kill the instant he arrives somewhere new.
@@ -216,6 +216,51 @@ function newBubble(centerX, centerY, angle, startR, targetR) {
 // Down/Triangle only ENTER/EXIT ball mode on a clean press. Flip to
 // false to turn the ball off.
 const BALL_MODE_ENABLED = true;
+
+// Walking off the end of an open path (a TiledTerrain run of ground, or
+// one of its curve paths — see TiledTerrain.js) at arc position
+// desiredArcPos: does another one carry on from right there, the same
+// way he's going? Either starting there, or passing through — the path
+// over a hump runs on down the wall below it, so the path up that wall
+// ends partway along it. It has to be heading the way he's travelling,
+// and the key he's holding has to keep him going that way along it (a
+// curve path can read the keys the other way round — controlsReversed).
+// -> [it, where on it he'd now be (the leftover distance carried on)],
+// or [null, null]. Port of the same function in lua/entities/Player.lua.
+const PATH_JOIN_DISTANCE = 6; // world units: how close it must pass to where this one ends
+function findPathContinuation(planet, desiredArcPos) {
+  const perimeter = planet.getPerimeter();
+  const forward = desiredArcPos > perimeter;
+  const edgeArc = forward ? perimeter : 0;
+  const edge = planet.worldPointAtArcPosition(edgeArc, 0).point;
+  const seg = planet.segmentAtArcPosition ? planet.segmentAtArcPosition(edgeArc) : null;
+  if (!seg) return [null, null];
+  const dir = forward ? 1 : -1;
+  const travelX = seg.tangent.x * dir, travelY = seg.tangent.y * dir;
+  const keySign = dir * ((planet.isWallClimb && planet.controlsReversed) ? -1 : 1);
+  const leftover = forward ? (desiredArcPos - perimeter) : -desiredArcPos;
+  let best = null, bestArc = null, bestD = PATH_JOIN_DISTANCE;
+  for (const other of state.planetoids) {
+    if (other === planet || !other.isOpenPath || !other.arcPositionForWorldPoint || !other.segmentAtArcPosition) continue;
+    const len = other.getPerimeter();
+    const a = other.arcPositionForWorldPoint(edge.x, edge.y);
+    const p = other.worldPointAtArcPosition(a, 0).point;
+    const d = Math.sqrt((p.x - edge.x) ** 2 + (p.y - edge.y) ** 2);
+    const oseg = d < bestD ? other.segmentAtArcPosition(a) : null;
+    if (!oseg) continue;
+    const along = oseg.tangent.x * travelX + oseg.tangent.y * travelY;
+    const sigma = along > 0 ? 1 : -1;
+    const wanted = keySign * ((other.isWallClimb && other.controlsReversed) ? -1 : 1);
+    if (Math.abs(along) > 0.5 && sigma === wanted) {
+      const arc = Math.max(0, Math.min(len, a + sigma * leftover));
+      // (Not one that just ends here too, the same way: nowhere to go on it.)
+      if ((sigma > 0 && a < len - 1) || (sigma < 0 && a > 1)) {
+        best = other; bestArc = arc; bestD = d;
+      }
+    }
+  }
+  return [best, bestArc];
+}
 
 class Player {
   static new(x, y) {
@@ -454,6 +499,13 @@ class Player {
     if (state.vatsActive) return;
     if (this.inPinball) return; // he's the pinball until he drains
     if (this.isCannonRiding()) return; // curled up for the whole ride
+    // No room to stand up (in a ball tunnel — see CrackedPlanetoid.standingRoomAt).
+    const planet = this.currentPlanet ?? this.lastInfluencePlanet;
+    if (planet && planet.standingRoomAt && !planet.standingRoomAt(this)) return;
+    // (Or in one of the sky dome's — see TiledTerrain.js's Level.standingRoomAt.)
+    for (const level of state.tiledLevels ?? []) {
+      if (level.standingRoomAt && !level.standingRoomAt(this)) return;
+    }
     this.morphState = 'toHuman';
     this.morphElapsed = 0;
   }
@@ -482,7 +534,7 @@ class Player {
 
   // Starts the teleport sequence toward another Beam's own planted base —
   // called from Beam.tryInteract. origin: the beam he's actually standing
-  // at (used only for getTeleportPulse's own glow color).
+  // at (used for getTransporterState's shimmer color).
   startTeleport(origin, destination) {
     if (this.isTeleporting || this.isDying || this.morphState || state.dialogueActive) return;
     if (this.isCannonRiding()) return;
@@ -573,19 +625,7 @@ class Player {
     if (!planet && this.lastInfluencePlanet) planet = this.lastInfluencePlanet;
     if (planet) {
       this.lastInfluencePlanet = planet;
-      let direction;
-      if (planet.isRoundedRect && planet.nearestSurfacePoint && !planet.isCrackedPlanet) {
-        const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
-        if (surface.distance > 1e-6) {
-          direction = new Vector2(surface.point.x - this.pos.x, surface.point.y - this.pos.y).normalize();
-        } else {
-          direction = surface.normal.clone().multiply(-1);
-        }
-      } else if (planet.gravityDirAt) {
-        direction = planet.gravityDirAt(this.pos.x, this.pos.y);
-      } else {
-        direction = planet.pos.subtract(this.pos).normalize();
-      }
+      const direction = planet.gravityDirAt(this.pos.x, this.pos.y);
       let grav = constants.GRAVITY_STRENGTH;
       if (this.isGroundPounding) grav *= constants.GROUND_POUND_GRAV_MULTIPLIER;
       this.vel.add(direction.multiply(grav));
@@ -604,40 +644,25 @@ class Player {
     if (!planet) return new Vector2(0, 1);
     // Running along a cracked planet's wall (see CrackedPlanetoid.walkPlayer):
     // feet to the wall.
-    if (planet.isCrackedPlanet && this.onSurface && this.climbNormal && this.climbPlanet === planet) {
+    if (this.onSurface && this.climbNormal && this.climbPlanet === planet) {
       return new Vector2(-this.climbNormal.x, -this.climbNormal.y);
     }
-    // (A cracked planet's bricky ground is all steps: he stays upright to
-    // its center instead, below, like on a round planet.)
-    if (planet.isRoundedRect && !planet.isCrackedPlanet) {
-      if (planet.forceUprightJump) return new Vector2(0, 1);
-      const surface = planet.nearestSurfacePoint(this.pos.x, this.pos.y);
-      return surface.normal.clone().multiply(-1);
-    }
-    // (Feet the way its gravity pulls — see CrackedPlanetoid.cycleGravity.)
-    if (planet.gravityDirAt) return planet.gravityDirAt(this.pos.x, this.pos.y);
-    return planet.pos.subtract(this.pos).normalize();
+    // Anywhere else: feet opposite the planet's own "up" (see
+    // js/world/PlanetSurface.js).
+    return planet.upAt(this.pos.x, this.pos.y).multiply(-1);
   }
 
   getOutwardLaunchDirection() {
     if (!this.currentPlanet) return new Vector2(0, -1);
     // Running along a cracked planet's wall: straight off the wall.
-    if (this.currentPlanet.isCrackedPlanet && this.climbNormal && this.climbPlanet === this.currentPlanet) {
+    if (this.climbNormal && this.climbPlanet === this.currentPlanet) {
       return new Vector2(this.climbNormal.x, this.climbNormal.y);
     }
-    // (A cracked planet: straight out from its center, below, not off
-    // whichever brick edge he's on.)
-    if (this.currentPlanet.isRoundedRect && !this.currentPlanet.isCrackedPlanet) {
-      const surface = this.currentPlanet.nearestSurfacePoint(this.pos.x, this.pos.y);
-      let direction = surface.normal;
-      // forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
-      // whatever this surface's own local normal is — jumping off a slope
-      // still launches straight up.
-      if (this.currentPlanet.forceUprightJump) direction = new Vector2(0, -1);
-      return direction;
-    }
-    if (this.currentPlanet.upAtWorld) return this.currentPlanet.upAtWorld(this.pos.x, this.pos.y);
-    return this.pos.subtract(this.currentPlanet.pos).normalize();
+    // Anywhere else: the planet's own "up" (see js/world/PlanetSurface.js)
+    // — straight out from a round planet, off a rounded rectangle's face,
+    // and straight up off the dome's deck and Tiled ground, slopes
+    // included.
+    return this.currentPlanet.upAt(this.pos.x, this.pos.y);
   }
 
   jump() {
@@ -856,12 +881,28 @@ class Player {
     // between touching down and update starting that timer.)
     if (this.groundPoundImpactTimer > 0 || (this.wasGroundPounding && this.onSurface)) keys = {};
 
+    // Fired by a plunger (see js/world/Plunger.js): for a while he's
+    // driven on its way, faster than he can run, easing back to normal —
+    // unless he pushes back the other way, which ends it.
+    let boost = this.launchBoost;
+    if (boost) {
+      boost.time -= state.timeScale;
+      boost.mult = 1 + (boost.mult0 - 1) * Math.max(0, boost.time / boost.time0);
+      if (boost.time <= 0 || keys[boost.dir > 0 ? 'ArrowLeft' : 'ArrowRight'] || this.isDying) {
+        this.launchBoost = null; boost = null;
+      }
+    }
+
     if (this.onSurface && this.currentPlanet && this.currentPlanet.isRoundedRect) {
       const planet = this.currentPlanet;
       this.isWalking = false;
       let ds = 0;
-      const rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1)
+      let rawSpeed = constants.PLAYER_LINEAR_SPEED * (state.gamepadRunHeld ? this.runSpeedMultiplier : 1)
         * (this.isBall ? BALL_SPEED_MULTIPLIER : 1);
+      if (boost) {
+        rawSpeed *= boost.mult;
+        keys = { [boost.dir > 0 ? 'ArrowRight' : 'ArrowLeft']: true };
+      }
       const speed = rawSpeed * state.timeScale;
 
       // Unscaled (no state.timeScale) current ground speed+direction —
@@ -955,14 +996,43 @@ class Player {
           // the player down climbing a 45-degree slope, speeding up
           // descending one), looked up at the CURRENT arc position.
           if (typeof planet.getArcSpeedMultiplier === 'function') {
-            ds *= planet.getArcSpeedMultiplier(this.surfaceArcPos, ds);
+            let slopeMul = planet.getArcSpeedMultiplier(this.surfaceArcPos, ds);
+            // Fired from a plunger (see this.launchBoost), climbing doesn't
+            // slow him: the boost only wears off over time.
+            if (this.launchBoost && slopeMul < 1) slopeMul = 1;
+            ds *= slopeMul;
+          }
+          // Nor round the inside of a curve: ds is a distance along the
+          // ground, and on a curve that bends up into a wall his center
+          // (inside it) only covers part of that. Fired from a plunger, the
+          // step's stretched so he really moves the full distance.
+          if (this.launchBoost && ds !== 0 && planet.isOpenPath) {
+            const len = planet.getPerimeter();
+            const target = Math.max(0, Math.min(len, this.surfaceArcPos + ds));
+            const p = planet.worldPointAtArcPosition(target, this.radius).point;
+            const moved = Math.sqrt((p.x - this.pos.x) ** 2 + (p.y - this.pos.y) ** 2);
+            const wanted = Math.abs(target - this.surfaceArcPos);
+            if (moved > 1e-3 && moved < wanted) ds *= Math.min(2, wanted / moved);
           }
 
           const desiredArcPos = this.surfaceArcPos + ds;
 
           // isOpenPath surfaces (a hill has two ends, not a closed loop)
-          // fall off the end instead of wrapping around.
+          // fall off the end instead of wrapping around — unless another
+          // path carries on from right there, the same way he's going (see
+          // findPathContinuation): then he carries on along that one, at
+          // any speed, instead of a moment in the air between the two,
+          // which at a plunger's launch speed sent him flying off over a
+          // hump in a ball tunnel.
+          let nextPlanet = null, nextArcPos = null;
           if (planet.isOpenPath && (desiredArcPos < 0 || desiredArcPos > planet.getPerimeter())) {
+            [nextPlanet, nextArcPos] = findPathContinuation(planet, desiredArcPos);
+          }
+          if (nextPlanet) {
+            this.currentPlanet = nextPlanet;
+            this.surfaceArcPos = nextArcPos;
+            this.pos = nextPlanet.worldPointAtArcPosition(nextArcPos, this.radius).point;
+          } else if (planet.isOpenPath && (desiredArcPos < 0 || desiredArcPos > planet.getPerimeter())) {
             // Snap to the exact edge vertex before falling, so the swept
             // landing test can exclude a re-land on the very next frame.
             const edgeArcPos = desiredArcPos < 0 ? 0 : planet.getPerimeter();
@@ -974,7 +1044,11 @@ class Player {
             // stretch runs backwards in world-x.
             const edgeSeg = planet.segmentAtArcPosition ? planet.segmentAtArcPosition(edgeArcPos) : null;
             const carryDir = edgeSeg ? edgeSeg.tangent : new Vector2(1, 0);
-            this.vel = carryDir.multiply(ds * this.edgeFallCarryFraction);
+            // (Fired from a plunger — this.launchBoost — he keeps ALL of it,
+            // and flies off like a cannonball, instead of dropping off near
+            // the edge the way walking off one does.)
+            const carry = this.launchBoost ? 1 : this.edgeFallCarryFraction;
+            this.vel = carryDir.multiply(ds * carry);
           } else {
             this.surfaceArcPos = desiredArcPos;
             const worldSurface = planet.worldPointAtArcPosition(this.surfaceArcPos, this.radius);
@@ -1048,10 +1122,11 @@ class Player {
         // shore). Gravity and the swim stroke stay the only radial movers.
         const water = this.submergedIn ?? this.lastInfluencePlanet;
         let radial = this.pos.subtract(water.pos);
-        // (A cracked planet's "up" depends on its gravity mode.)
-        if (water.upAtWorld) radial = water.upAtWorld(this.pos.x, this.pos.y);
-        else if (radial.length() > 0.01) radial.normalize();
-        else radial = new Vector2(0, -1);
+        // A planet's own "up" (a cracked planet's depends on its gravity
+        // mode); a pool of sprayed water has none, so straight out.
+        if (radial.length() <= 0.01) radial = new Vector2(0, -1);
+        else if (water.upAt) radial = water.upAt(this.pos.x, this.pos.y);
+        else radial.normalize();
         const tangent = new Vector2(-radial.y, radial.x);
 
         let tangentSpeed = this.vel.dot(tangent);
@@ -1813,16 +1888,21 @@ class Player {
     love.graphics.setColor(1, 1, 1, 1);
   }
 
-  // Scale/glow "blip" pulse during a Beam.js teleport: pulse = sin(t*pi),
-  // scale = 1 + pulse*1.2, glow intensity = pulse. ONLY plays over the
-  // "out" half (departing) — the arrival gets the invincibility flicker
-  // instead. Returns [scale, glow] — [1, 0] whenever he isn't departing.
-  getTeleportPulse() {
-    if (this.teleportState !== 'out') return [1, 0];
-    const elapsed = TELEPORT_OUT_TICKS - this.teleportTimer;
-    const t = (TELEPORT_OUT_TICKS > 0) ? Math.max(0, Math.min(1, elapsed / TELEPORT_OUT_TICKS)) : 1;
-    const pulse = Math.sin(t * Math.PI);
-    return [1 + pulse * 1.2, pulse];
+  // Where he is in a Beam.js teleport's transporter shimmer (see
+  // js/effects/TransporterEffect.js). Returns [bodyAlpha, glow, sparkle,
+  // color]: dematerializing on the way out, the same curve backward on
+  // arrival; color is the beam's own washed toward white. [1, 0, 0, null]
+  // when he isn't teleporting.
+  getTransporterState() {
+    if (!this.teleportState) return [1, 0, 0, null];
+    const total = this.teleportState === 'out' ? TELEPORT_OUT_TICKS : TELEPORT_IN_TICKS;
+    let t = total > 0 ? Math.max(0, Math.min(1, (total - this.teleportTimer) / total)) : 1;
+    if (this.teleportState === 'in') t = 1 - t;
+    const [bodyAlpha, glow, sparkle] = TransporterEffect.curves(t);
+    const beam = this.teleportState === 'out' ? this.teleportOrigin : this.teleportDestination;
+    const c = beam?.color ?? [0.6, 0.8, 1];
+    const color = [c[0] + (1 - c[0]) * 0.5, c[1] + (1 - c[1]) * 0.5, c[2] + (1 - c[2]) * 0.5];
+    return [bodyAlpha, glow, sparkle, color];
   }
 
   // Any Beam.js teleporter currently close enough to interact with, plus
@@ -1851,58 +1931,55 @@ class Player {
     // not seen while he's inside a cannon's barrel.
     if (this.isDying || this.inCannon) return;
 
-    const [scale, pulseGlow] = this.getTeleportPulse();
+    // Mid-teleport, he shimmers out (or back in) — see getTransporterState.
+    const [bodyAlpha, energize, sparkle, transporterColor] = this.getTransporterState();
 
     // Outer glow hugging his own real silhouette (SilhouetteGlow.js)
-    // whenever he's close enough to a beam to interact with it, tinted
-    // to match THAT beam's own color, fading with distance and boosted
-    // during the departure pulse. The mask drawFn applies the SAME scale
-    // transform the real draw below uses, so the glow follows his body
-    // ballooning up through the pulse.
+    // whenever he's close enough to a beam to interact with it, tinted to
+    // match THAT beam's own color, fading with distance and with his body
+    // as he dematerializes, brightening a little as he's energized.
     const [nearbyBeam, proximity] = this.getNearbyBeam();
     if (nearbyBeam) {
       SilhouetteGlow.draw(
         this.pos.x, this.pos.y,
-        this.radius * 4 * scale, 14,
-        nearbyBeam.color, 0.8 * proximity * (1 + pulseGlow * 0.6),
-        () => {
-          if (scale === 1) {
-            this.drawRig();
-            return;
-          }
-          love.graphics.push();
-          love.graphics.translate(this.pos.x, this.pos.y);
-          love.graphics.scale(scale, scale);
-          love.graphics.translate(-this.pos.x, -this.pos.y);
-          this.drawRig();
-          love.graphics.pop();
-        });
+        this.radius * 4, 14,
+        nearbyBeam.color, 0.8 * proximity * bodyAlpha * (1 + energize * 0.6),
+        () => this.drawRig());
     }
 
     // Post-arrival invincibility flicker — a hard on/off blink (skip
     // drawing him entirely on the "off" beat): drawRig sets its own
     // opaque colors, so an alpha around the whole call would just get
-    // overwritten. Real-time rate, not slowed by V.A.T.S.
-    if (this.isInvincible()) {
+    // overwritten. Real-time rate, not slowed by V.A.T.S. Not while he's
+    // still rematerializing — the shimmer is the arrival cue.
+    if (this.isInvincible() && this.teleportState !== 'in') {
       const phase = Math.floor(love.timer.getTime() / INVINCIBLE_FLICKER_INTERVAL) % 2;
       if (phase !== 0) return;
     }
 
     // Sun shading on every piece of the rig — see getBodyShadingShader.
-    const shadingShader = this.applyBodyShading();
+    const drawShaded = () => {
+      const shadingShader = this.applyBodyShading();
+      this.drawRig();
+      if (shadingShader) love.graphics.setShader();
+    };
 
-    if (scale === 1) {
-      this.drawRig();
-    } else {
-      love.graphics.push();
-      love.graphics.translate(this.pos.x, this.pos.y);
-      love.graphics.scale(scale, scale);
-      love.graphics.translate(-this.pos.x, -this.pos.y);
-      this.drawRig();
-      love.graphics.pop();
+    if (bodyAlpha >= 1 && energize <= 0) drawShaded();
+    else TransporterEffect.drawFaded(this.pos.x, this.pos.y, this.radius * 4, bodyAlpha, energize, transporterColor, drawShaded);
+
+    // The transporter sparkles, in a column covering him from boots to helmet.
+    if (sparkle > 0) {
+      const planet = (this.onSurface && this.currentPlanet) || this.lastInfluencePlanet;
+      const down = this.visualDownDirection(planet);
+      const upX = -down.x, upY = -down.y;
+      const r = this.radius;
+      const headTop = this.headReach ?? r * 2.5;
+      const height = headTop + r;
+      const mid = (headTop - r) / 2;
+      TransporterEffect.drawSparkles(
+        this.pos.x + upX * mid, this.pos.y + upY * mid, upX, upY,
+        height * 1.15, r * 2.4, sparkle, transporterColor, love.timer.getTime());
     }
-
-    if (shadingShader) love.graphics.setShader();
   }
 
   // Turns the body-shading shader on for whatever's drawn next, pointed

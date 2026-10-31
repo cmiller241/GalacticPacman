@@ -169,6 +169,31 @@ function Planetoid.new(x, y, radius, color)
   return self
 end
 
+-- The planet surface interface (see lua/world/PlanetSurface.lua), for a
+-- round body: "up" is straight out from the center, gravity pulls
+-- straight in, and its reach is influenceRadius from the center.
+function Planetoid:upAt(x, y)
+  return Vector2.new(x - self.pos.x, y - self.pos.y):normalize()
+end
+
+function Planetoid:gravityDirAt(x, y)
+  return Vector2.new(self.pos.x - x, self.pos.y - y):normalize()
+end
+
+-- Negative inside the planet.
+function Planetoid:distanceToSurface(x, y)
+  local dx, dy = x - self.pos.x, y - self.pos.y
+  return math.sqrt(dx * dx + dy * dy) - self.radius
+end
+
+-- (Ranked by distance from the center, not the surface.)
+function Planetoid:gravityDistance(x, y)
+  local dx, dy = x - self.pos.x, y - self.pos.y
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist < (self.influenceRadius or (self.radius + (constants.INFLUENCE_PADDING or 200))) then return dist end
+  return nil
+end
+
 -- Baking a body canvas (glow layers + stencil + tiled texture draw, at
 -- 2x supersampling) is real GPU/CPU work that's actually rendered every
 -- frame afterward. Left uncapped, a single frame where many

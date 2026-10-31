@@ -52,6 +52,8 @@ export default {
     "sounds/jump.wav",
     "sounds/jumpsmall.wav",
     "sounds/mario-fireball.mp3",
-    "sounds/mario-goomba-stomp.mp3"
+    "sounds/mario-goomba-stomp.mp3",
+    "sounds/music/let-all-exalt-navarre-hyperdrive-loop.ogg",
+    "sounds/music/wake-awake-2-battle-march-loop.ogg"
   ]
 };

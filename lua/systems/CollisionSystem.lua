@@ -16,10 +16,7 @@ function CollisionSystem.new()
 end
 
 function CollisionSystem:distanceToPlanetSurface(pos, planet)
-  if planet.isRoundedRect then
-    return planet:distanceToSurface(pos.x, pos.y)
-  end
-  return pos:subtract(planet.pos):length() - planet.radius
+  return planet:distanceToSurface(pos.x, pos.y)
 end
 
 function CollisionSystem:handleImmovableCollisions(immovables, movables)
@@ -817,7 +814,7 @@ end
 
 -- Returns { [asteroid] = the planetoid it hit } for every asteroid that
 -- touched a planetoid's surface this frame — the caller breaks them
--- (see main.lua's own breakAsteroid, which uses the planetoid to throw
+-- (see Breakage.breakAsteroid in lua/systems/Breakage.lua, which uses the planetoid to throw
 -- the pieces back off its surface).
 function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
   local toBreak = {}

@@ -16,6 +16,7 @@
 -- open/closed.
 
 local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
 local Vector2 = require("lua.vector2")
 local InteractPrompt = require("lua.ui.InteractPrompt")
 
@@ -142,11 +143,7 @@ function Lever.new(x, y)
   return self
 end
 
-function Lever:isPlayerNear(player)
-  if not player then return false end
-  local dx, dy = player.pos.x - self.pos.x, player.pos.y - self.pos.y
-  return (dx * dx + dy * dy) <= self.interactRadius * self.interactRadius
-end
+Lever.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
 
 -- Actually flips the lever and whatever Gate it controls — shared by
 -- :tryInteract below (the player pulling it directly) and

@@ -21,6 +21,7 @@
 -- for anything yet, but there if a future effect wants it.
 
 local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
 local Vector2 = require("lua.vector2")
 local InteractPrompt = require("lua.ui.InteractPrompt")
 
@@ -111,11 +112,7 @@ function Crank.new(x, y)
   return self
 end
 
-function Crank:isPlayerNear(player)
-  if not player then return false end
-  local dx, dy = player.pos.x - self.pos.x, player.pos.y - self.pos.y
-  return (dx * dx + dy * dy) <= self.interactRadius * self.interactRadius
-end
+Crank.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
 
 -- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
 -- both just call this unconditionally on their own press; it's the one

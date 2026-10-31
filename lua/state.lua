@@ -38,8 +38,6 @@ state.particles = {}
 
 state.score = 0
 state.level = 1
-state.gameOver = false
-state.levelComplete = false
 
 state.stars = {}
 

@@ -14,6 +14,15 @@ function cloneAndPlay(source) {
   return instance;
 }
 
+// Background music, by name. Each file is a seamless loop exported from
+// the composer (composer/README.md). volume: loudness at full fade-in.
+const MUSIC = {
+  skyDome: { path: 'sounds/music/let-all-exalt-navarre-hyperdrive-loop.ogg', volume: 0.45 },
+  belt: { path: 'sounds/music/wake-awake-2-battle-march-loop.ogg', volume: 0.45 },
+};
+const MUSIC_FADE_SECONDS = 1.5;  // how long a fade in/out takes
+const MUSIC_SWITCH_DELAY = 0.75; // a new choice has to hold this long before the music changes
+
 class AudioManager {
   static new() {
     return new AudioManager();
@@ -21,6 +30,17 @@ class AudioManager {
 
   constructor() {
     this.eatDotIndex = 0;
+
+    this.music = {};
+    for (const [name, info] of Object.entries(MUSIC)) {
+      const source = love.audio.newSource(info.path, 'stream');
+      source.setLooping(true);
+      source.setVolume(0);
+      this.music[name] = { source, volume: info.volume, level: 0 };
+    }
+    this.musicWanted = null;  // the track that should be playing (null = none)
+    this.musicPending = null; // a different track asked for, not yet held long enough
+    this.musicPendingTime = 0;
 
     this.eatDotAudio0 = love.audio.newSource('sounds/eat_dot_0.wav', 'static');
     this.eatDotAudio1 = love.audio.newSource('sounds/eat_dot_1.wav', 'static');
@@ -79,6 +99,41 @@ class AudioManager {
     instance.setVolume(vol);
     const started = instance.play();
     if (!started) console.log('Audio play failed for playBang');
+  }
+
+  // Call every frame with the name of the music that should be playing
+  // (a key of MUSIC above, or null for none). Tracks fade in and out
+  // rather than cutting, and a change only happens once it's been asked
+  // for steadily for MUSIC_SWITCH_DELAY.
+  updateMusic(name, dt) {
+    name = name ?? null;
+    if (name === this.musicWanted) {
+      this.musicPending = null;
+      this.musicPendingTime = 0;
+    } else {
+      if (name !== this.musicPending) {
+        this.musicPending = name;
+        this.musicPendingTime = 0;
+      }
+      this.musicPendingTime += dt;
+      if (this.musicPendingTime >= MUSIC_SWITCH_DELAY) {
+        this.musicWanted = name;
+        this.musicPending = null;
+        this.musicPendingTime = 0;
+      }
+    }
+
+    const step = dt / MUSIC_FADE_SECONDS;
+    for (const [trackName, m] of Object.entries(this.music)) {
+      const target = trackName === this.musicWanted ? 1 : 0;
+      if (m.level < target) m.level = Math.min(target, m.level + step);
+      else if (m.level > target) m.level = Math.max(target, m.level - step);
+      const playing = m.source.isPlaying();
+      if (target === 1 && !playing) m.source.play();
+      else if (target === 0 && !playing) m.level = 0; // already stopped (e.g. EXIT TO TITLE)
+      if (m.level > 0) m.source.setVolume(m.volume * m.level);
+      else if (playing) m.source.stop(); // fully faded out: next time it starts from the top
+    }
   }
 
   reset() {

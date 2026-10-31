@@ -20,7 +20,7 @@ local LockOutline = {}
 --
 -- Shape: a true rotated rounded rect for isRoundedRect targets
 -- (RoundedRectPlanetoid.lua's own halfWidth/halfHeight/cornerRadius/
--- rotationAngle — SkyDome/JumpPlatform are also isRoundedRect but
+-- rotationAngle — the sky dome is also isRoundedRect but
 -- isPullExempt and never reach pull-target/lock-target selection in the
 -- first place), a plain circle otherwise — matching PullBeam.lua's own
 -- target outline exactly, so the two keep reading as the same kind of

@@ -16,6 +16,7 @@ import PauseMenu from '../ui/PauseMenu.js';
 import PortalGun from '../systems/PortalGun.js';
 import WeaponModes from '../systems/WeaponModes.js';
 import Recall from '../systems/Recall.js';
+import WorldObjects from '../systems/WorldObjects.js';
 
 const KEY_NAME_MAP = {
   up: 'ArrowUp',
@@ -28,16 +29,6 @@ const KEY_NAME_MAP = {
 };
 
 const toJsStyleKey = (loveKey) => KEY_NAME_MAP[loveKey] ?? loveKey;
-
-// (The Lua version restarted/advanced levels through a levelSetup module
-// that was never ported; state.gameOver/levelComplete are never set by
-// the current game, so this only ever reports "nothing to do".)
-function tryRestartOrAdvance() {
-  if (state.gameOver || state.levelComplete) {
-    console.warn('tryRestartOrAdvance: level restart/advance is not implemented');
-  }
-  return false;
-}
 
 const ZOOM_WHEEL_STEP = 0.08;
 
@@ -57,7 +48,6 @@ function attachInputHandlers() {
     state.lastKeyboardMouseInputTime = love.timer.getTime();
     if (state.titleScreen) return;
     if (PauseMenu.isOpen()) return;
-    if (tryRestartOrAdvance()) return;
     if (state.player && state.player.isCannonRiding()) return;
     if (state.portalMode) {
       if (button === 1) PortalGun.fire(state.player, 'red');
@@ -143,17 +133,8 @@ function attachInputHandlers() {
       state.player.exitBallMode();
     }
 
-    if (key === 'Enter' && !riding) {
-      tryRestartOrAdvance();
-      if (state.player && !state.player.isBall) {
-        if (state.robotButler) state.robotButler.tryInteract(state.player);
-        if (state.fisherman) state.fisherman.tryInteract(state.player);
-        for (const lever of (state.levers ?? [])) lever.tryInteract(state.player);
-        for (const crank of (state.cranks ?? [])) crank.tryInteract(state.player);
-        for (const sign of (state.signs ?? [])) sign.tryInteract(state.player);
-        for (const beam of (state.beams ?? [])) beam.tryInteract(state.player);
-      }
-    }
+    // Interact: NPCs, levers, cranks, signs, beams (see WorldObjects.interact).
+    if (key === 'Enter' && !riding) WorldObjects.interact(state.player);
 
     if (key === 'c' && !isrepeat) state.showCollisionDebug = !state.showCollisionDebug;
 
@@ -184,4 +165,4 @@ function attachInputHandlers() {
   };
 }
 
-export default { attachInputHandlers, tryRestartOrAdvance };
+export default { attachInputHandlers };

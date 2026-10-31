@@ -1111,7 +1111,7 @@ local function beginGame()
   state.zoom = 1
   state.zoomTarget = nil
   -- Coins the autopilot picked up on the title screen don't count —
-  -- nor anything it mined (see main.lua's own breakAsteroid), including
+  -- nor anything it mined (see Breakage.breakAsteroid in lua/systems/Breakage.lua), including
   -- pieces still on their way to him.
   state.score = 0
   for name in pairs(state.elements or {}) do state.elements[name] = 0 end

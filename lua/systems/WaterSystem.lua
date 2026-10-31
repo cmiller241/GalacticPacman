@@ -1180,19 +1180,12 @@ local function gravityOn(d)
   local p = d.planet
   if not p then return 0, 0 end
   local s = p.gravityStrength or constants.GRAVITY_STRENGTH
-  if p.isSkyDome or p.forceUprightJump then return 0, s end
-  if p.isRoundedRect and not p.isCrackedPlanet then -- (a dirt planet pulls its own way: below)
-    local n = p:nearestSurfacePoint(d.x, d.y).normal
-    return -n.x * s, -n.y * s
-  end
-  if p.gravityDirAt then
-    local dir = p:gravityDirAt(d.x, d.y)
-    return dir.x * s, dir.y * s
-  end
-  local dx, dy = p.pos.x - d.x, p.pos.y - d.y
-  local len = math.sqrt(dx * dx + dy * dy)
-  if len < 1e-6 then return 0, 0 end
-  return dx / len * s, dy / len * s
+  -- Straight "down" for wherever it is: opposite the planet's own "up"
+  -- (see lua/world/PlanetSurface.lua) — so on the dome's deck and Tiled
+  -- ground it falls straight down the screen, and onto the nearest face
+  -- of a rounded rectangle.
+  local up = p:upAt(d.x, d.y)
+  return -up.x * s, -up.y * s
 end
 
 local function spray(player, dt)
@@ -2137,7 +2130,7 @@ function Ice.addTop(wall)
   local top = wall.pos.y - wall.halfHeight
   local s = TiledTerrain.newMovingSurface(wall.pos.x - wall.halfWidth, top, wall.pos.x + wall.halfWidth, top)
   s.jumpStrength = state.skyDomePlanet and state.skyDomePlanet.jumpStrength
-  s.blockWall = wall -- (a fireball hitting its top melts the block — see main.lua)
+  s.blockWall = wall -- (a fireball hitting its top melts the block — see lua/systems/Projectiles.lua)
   s.isIce = wall.ice ~= nil
   wall.surface = s
   state.planetoids = state.planetoids or {}
@@ -2516,7 +2509,7 @@ function WaterSystem.iceBoltHit(b)
   return false
 end
 
--- Ooomba o frozen solid (an ice bolt's hit it — see main.lua).
+-- Ooomba o frozen solid (an ice bolt's hit it — see lua/systems/Projectiles.lua).
 function WaterSystem.encaseOoomba(o)
   Ice.encase(o)
 end

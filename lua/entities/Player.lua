@@ -9,7 +9,7 @@
 --
 -- Not yet ported (deliberately): maze/platform modes, death animations,
 -- Pixi path, etc. Beam.lua teleport IS ported (Player:startTeleport/
--- updateTeleport/getTeleportPulse), including its own brief post-arrival
+-- updateTeleport/getTransporterState), including its own brief post-arrival
 -- invincibility flicker (Player:isInvincible).
 
 local state = require("lua.state")
@@ -19,6 +19,7 @@ local DustPuff = require("lua.effects.DustPuff")
 local Splash = require("lua.effects.Splash")
 local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
+local TransporterEffect = require("lua.effects.TransporterEffect")
 local TargetLock = require("lua.systems.TargetLock")
 local WaterSystem = require("lua.systems.WaterSystem")
 local PortalGun = require("lua.systems.PortalGun")
@@ -184,21 +185,14 @@ local ICE_GRIP = 0.035
 -- he's actually fully stood up.
 local BALL_MORPH_SEGMENT_TICKS = 8 -- baseline (60fps) ticks each of the two keyframe blends takes — a full transition either direction is 2x this, ~0.27s at 60fps
 
--- Teleport (Beam.lua's own :tryInteract) — a freeze-then-snap, not a
--- fade/cutscene: TELEPORT_OUT_TICKS is the pause before he vanishes
--- from the origin beam, with Player:getTeleportPulse's own scale/glow
--- blip playing out over it (see that function's own comment — ONLY this
--- half gets the blip, not the arrival half: a visible "launching" swell
--- on the way out, not a symmetric one on both ends). TELEPORT_IN_TICKS
--- is the equally paced, but visually plain, "arriving" pause right
--- after landing at the destination — just holds him still a beat longer
--- before normal input resumes, no scale/glow of its own. Both in
--- baseline (60fps) ticks; 30 = 0.5s, close to half of the old JS game's
--- own single 900ms teleportDuration (js/entities/Player.js), since that
--- one pulse covered a whole mode-switch and this one only needs to
--- cover the departure half.
-local TELEPORT_OUT_TICKS = 30
-local TELEPORT_IN_TICKS = 30
+-- Teleport (Beam.lua's own :tryInteract) — a transporter shimmer (see
+-- lua/effects/TransporterEffect.lua and Player:getTransporterState):
+-- TELEPORT_OUT_TICKS is how long he takes to dematerialize at the origin
+-- beam, TELEPORT_IN_TICKS how long he takes to rematerialize at the
+-- destination (the same effect played backward). He's frozen for both.
+-- Baseline (60fps) ticks; 48 = 0.8s each.
+local TELEPORT_OUT_TICKS = 48
+local TELEPORT_IN_TICKS = 48
 
 -- Brief post-arrival invincibility (same name/duration/flicker-rate as
 -- the old JS game's own invincibleDuration/isInvincible — see that
@@ -628,7 +622,7 @@ end
 -- called from Beam:tryInteract, same "the object itself decides whether
 -- the player's close enough" split Lever.lua's own tryInteract uses.
 -- origin: the beam he's actually standing at (used only for
--- Player:getTeleportPulse's own glow color — see that function's own
+-- Player:getTransporterState's shimmer color — see that function's own
 -- comment). Ignored while already teleporting, curling into/out of a
 -- ball, or talking to an NPC (same reasoning as enterBallMode's own
 -- guard above) — Beam:tryInteract also checks isTeleporting itself
@@ -646,9 +640,8 @@ function Player:startTeleport(origin, destination)
   self.vel.x, self.vel.y = 0, 0
 end
 
--- Advances the freeze-then-snap sequence above (see Player:getTeleportPulse
--- for the scale/glow blip, which only plays over the "out" half — see
--- that function's own comment on why not both). The actual position
+-- Advances the teleport sequence above (see Player:getTransporterState
+-- for the shimmer drawn over both halves). The actual position
 -- swap happens the instant the "out" pause reaches zero: lands at the
 -- destination beam's own PLANTED BASE (destination.pos), not its portal
 -- tip (Beam:getPortalPosition, Beam.LENGTH further out) — landing at the
@@ -759,19 +752,7 @@ function Player:applyGravity()
   if not planet and self.lastInfluencePlanet then planet = self.lastInfluencePlanet end
   if planet then
     self.lastInfluencePlanet = planet
-    local direction
-    if planet.isRoundedRect and planet.nearestSurfacePoint and not planet.isCrackedPlanet then
-      local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
-      if surface.distance > 1e-6 then
-        direction = Vector2.new(surface.point.x - self.pos.x, surface.point.y - self.pos.y):normalize()
-      else
-        direction = surface.normal:clone():multiply(-1)
-      end
-    elseif planet.gravityDirAt then
-      direction = planet:gravityDirAt(self.pos.x, self.pos.y)
-    else
-      direction = planet.pos:subtract(self.pos):normalize()
-    end
+    local direction = planet:gravityDirAt(self.pos.x, self.pos.y)
     local grav = constants.GRAVITY_STRENGTH
     if self.isGroundPounding then grav = grav * constants.GROUND_POUND_GRAV_MULTIPLIER end
     self.vel:add(direction:multiply(grav))
@@ -793,58 +774,30 @@ function Player:visualDownDirection(planet)
   if not planet then return Vector2.new(0, 1) end
   -- Running along a cracked planet's wall (see CrackedPlanetoid:walkPlayer):
   -- feet to the wall.
-  if planet.isCrackedPlanet and self.onSurface and self.climbNormal and self.climbPlanet == planet then
+  if self.onSurface and self.climbNormal and self.climbPlanet == planet then
     return Vector2.new(-self.climbNormal.x, -self.climbNormal.y)
   end
-  -- (A cracked planet's bricky ground is all steps: he stays upright to
-  -- its center instead, below, like on a round planet.)
-  if planet.isRoundedRect and not planet.isCrackedPlanet then
-    if planet.forceUprightJump then return Vector2.new(0, 1) end
-    local surface = planet:nearestSurfacePoint(self.pos.x, self.pos.y)
-    return surface.normal:clone():multiply(-1)
-  end
-  -- (Feet the way its gravity pulls — see CrackedPlanetoid:cycleGravity.)
-  if planet.gravityDirAt then return planet:gravityDirAt(self.pos.x, self.pos.y) end
-  return planet.pos:subtract(self.pos):normalize()
+  -- Anywhere else: feet opposite the planet's own "up" (see
+  -- lua/world/PlanetSurface.lua).
+  return planet:upAt(self.pos.x, self.pos.y):multiply(-1)
 end
 
 function Player:getOutwardLaunchDirection()
   if not self.currentPlanet then return Vector2.new(0, -1) end
   -- Running along a cracked planet's wall: straight off the wall.
-  if self.currentPlanet.isCrackedPlanet and self.climbNormal and self.climbPlanet == self.currentPlanet then
+  if self.climbNormal and self.climbPlanet == self.currentPlanet then
     return Vector2.new(self.climbNormal.x, self.climbNormal.y)
   end
-  -- (A cracked planet: straight out from its center, below, not off
-  -- whichever brick edge he's on.)
-  if self.currentPlanet.isRoundedRect and not self.currentPlanet.isCrackedPlanet then
-    local surface = self.currentPlanet:nearestSurfacePoint(self.pos.x, self.pos.y)
-    local direction = surface.normal
-    -- forceUprightJump (e.g. TiledTerrain's sloped segments) overrides
-    -- whatever this surface's own local normal is — a 45-degree slope's
-    -- normal points diagonally, but jumping off one should still launch
-    -- straight up, same as a flat SkyDome deck already does (there, it's
-    -- straight up only because a flat deck's own normal already equals
-    -- (0,-1) — this makes the same result explicit for surfaces whose
-    -- normal isn't vertical).
-    if self.currentPlanet.forceUprightJump then
-      direction = Vector2.new(0, -1)
-    end
-    -- Used to also tilt this direction sideways by a fixed fraction
-    -- (jumpHorizontalCarry) whenever a direction key was held — but
-    -- that tilt gets multiplied by the FULL jumpStrength once
-    -- normalized, and jump()'s own groundMoveSpeedX carry (added
-    -- separately, AFTER this direction is turned into a velocity) now
-    -- covers the same "carry your speed into the jump" need more
-    -- precisely (it actually distinguishes walking from running,
-    -- rather than a single fixed lean regardless of speed). The two
-    -- stacking together is what made even a plain walking jump launch
-    -- at roughly 3x normal walking speed — removed here rather than
-    -- retuned, since keeping both around invites this same conflict
-    -- again the next time either one gets adjusted.
-    return direction
-  end
-  if self.currentPlanet.upAtWorld then return self.currentPlanet:upAtWorld(self.pos.x, self.pos.y) end
-  return self.pos:subtract(self.currentPlanet.pos):normalize()
+  -- Anywhere else: the planet's own "up" (see lua/world/PlanetSurface.lua)
+  -- — straight out from a round planet, off a rounded rectangle's face,
+  -- and straight up off the dome's deck and Tiled ground, slopes
+  -- included (a 45-degree slope's normal points diagonally, but jumping
+  -- off one still launches straight up).
+  --
+  -- (This used to also tilt sideways whenever a direction key was held,
+  -- but jump()'s own groundMoveSpeedX carry covers that more precisely,
+  -- and the two stacked made a walking jump launch at ~3x walking speed.)
+  return self.currentPlanet:upAt(self.pos.x, self.pos.y)
 end
 
 function Player:jump()
@@ -1518,13 +1471,14 @@ function Player:move(keys)
       -- move toward or away from the center.
       local water = self.submergedIn or self.lastInfluencePlanet
       local radial = self.pos:subtract(water.pos)
-      if water.upAtWorld then
-        -- (A cracked planet's "up" depends on its gravity mode.)
-        radial = water:upAtWorld(self.pos.x, self.pos.y)
-      elseif radial:length() > 0.01 then
-        radial:normalize()
-      else
+      if radial:length() <= 0.01 then
         radial = Vector2.new(0, -1)
+      elseif water.upAt then
+        -- A planet's own "up" (a cracked planet's depends on its gravity
+        -- mode); a pool of sprayed water has none, so straight out.
+        radial = water:upAt(self.pos.x, self.pos.y)
+      else
+        radial:normalize()
       end
       local tangent = Vector2.new(-radial.y, radial.x)
 
@@ -2607,22 +2561,23 @@ function Player:drawBallShading()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
--- Scale/glow "blip" pulse during a Beam.lua teleport — ported from the
--- old JS game's own teleportScale/teleportGlow (startTeleport/update in
--- js/entities/Player.js): pulse = sin(t*pi), scale = 1 + pulse*1.2, glow
--- intensity = pulse — 0 at the phase's own start/end, peaking at its own
--- midpoint. ONLY plays over the "out" half (departing the origin beam),
--- not the "in" half (arriving at the destination) — the arrival moment
--- gets its own, different cue instead (the post-arrival invincibility
--- flicker — see Player:isInvincible/draw), not a second scale/glow
--- blip. Returns 1, 0 (no pulse at all) whenever he isn't currently
--- departing.
-function Player:getTeleportPulse()
-  if self.teleportState ~= "out" then return 1, 0 end
-  local elapsed = TELEPORT_OUT_TICKS - self.teleportTimer
-  local t = (TELEPORT_OUT_TICKS > 0) and math.max(0, math.min(1, elapsed / TELEPORT_OUT_TICKS)) or 1
-  local pulse = math.sin(t * math.pi)
-  return 1 + pulse * 1.2, pulse
+-- Where he is in a Beam.lua teleport's transporter shimmer (see
+-- lua/effects/TransporterEffect.lua). Returns bodyAlpha, glow, sparkle
+-- (each 0..1 — see TransporterEffect.curves) and the {r,g,b} the light
+-- should be: the beam's own color washed toward white, like a
+-- transporter's glow. Dematerializing on the way out; arriving is the
+-- same curve played backward, so he shimmers back in. Returns 1, 0, 0
+-- (fully here, no effect) when he isn't teleporting.
+function Player:getTransporterState()
+  if not self.teleportState then return 1, 0, 0, nil end
+  local total = (self.teleportState == "out") and TELEPORT_OUT_TICKS or TELEPORT_IN_TICKS
+  local t = (total > 0) and math.max(0, math.min(1, (total - self.teleportTimer) / total)) or 1
+  if self.teleportState == "in" then t = 1 - t end
+  local bodyAlpha, glow, sparkle = TransporterEffect.curves(t)
+  local beam = (self.teleportState == "out") and self.teleportOrigin or self.teleportDestination
+  local c = beam and beam.color or { 0.6, 0.8, 1 }
+  local color = { c[1] + (1 - c[1]) * 0.5, c[2] + (1 - c[2]) * 0.5, c[3] + (1 - c[3]) * 0.5 }
+  return bodyAlpha, glow, sparkle, color
 end
 
 -- Any Beam.lua teleporter currently close enough to interact with — nil
@@ -2657,49 +2612,24 @@ function Player:draw()
   -- not seen while he's inside a cannon's barrel (see lua/world/Cannon.lua).
   if self.isDying or self.inCannon then return end
 
-  local scale, pulseGlow = self:getTeleportPulse()
+  -- Mid-teleport, he shimmers out (or back in) — see
+  -- Player:getTransporterState / lua/effects/TransporterEffect.lua.
+  local bodyAlpha, energize, sparkle, transporterColor = self:getTransporterState()
 
   -- Outer glow hugging his own real silhouette (SilhouetteGlow.lua —
   -- not a plain circle, an actual shader-dilated copy of his rendered
   -- shape) whenever he's close enough to a beam to interact with it,
-  -- tinted to match THAT beam's own color (Beam.lua's own self.color)
-  -- rather than a hardcoded color — both of main.lua's current beams
-  -- are violet, so this reads as purple today, but it'll follow
-  -- whatever color a future beam actually uses. Fades out with distance
-  -- (proximity, 1 right at the beam down to 0 at its own interactRadius
-  -- — see Player:getNearbyBeam) rather than snapping on at full
-  -- strength the instant he's in range, and is boosted a bit extra
-  -- during the departure pulse itself (pulseGlow, see
-  -- Player:getTeleportPulse) so interacting still reads as more intense
-  -- than just standing nearby, without needing a second, separate glow
-  -- effect for that moment.
-  --
-  -- The mask drawFn below applies the SAME scale transform the real
-  -- draw further down uses (see the scale~=1 branch there) rather than
-  -- always rendering him at scale=1 — without this, the glow stayed
-  -- silhouette-shaped for his NORMAL size the whole time, visibly
-  -- mismatched against his own body actually ballooning up through the
-  -- pulse. boundWorldRadius is scaled right along with it (self.radius*
-  -- 4*scale, not a fixed *4) so the mask canvas stays big enough to fit
-  -- him without clipping at the pulse's own largest point.
+  -- tinted to match THAT beam's own color (Beam.lua's own self.color).
+  -- Fades out with distance (proximity, 1 right at the beam down to 0 at
+  -- its own interactRadius — see Player:getNearbyBeam), and with his
+  -- body as he dematerializes, brightening a little as he's energized.
   local nearbyBeam, proximity = self:getNearbyBeam()
   if nearbyBeam then
     SilhouetteGlow.draw(
       self.pos.x, self.pos.y,
-      self.radius * 4 * scale, 14,
-      nearbyBeam.color, 0.8 * proximity * (1 + pulseGlow * 0.6),
-      function()
-        if scale == 1 then
-          self:drawRig()
-          return
-        end
-        love.graphics.push()
-        love.graphics.translate(self.pos.x, self.pos.y)
-        love.graphics.scale(scale, scale)
-        love.graphics.translate(-self.pos.x, -self.pos.y)
-        self:drawRig()
-        love.graphics.pop()
-      end)
+      self.radius * 4, 14,
+      nearbyBeam.color, 0.8 * proximity * bodyAlpha * (1 + energize * 0.6),
+      function() self:drawRig() end)
   end
 
   -- Post-arrival invincibility flicker (Player:isInvincible) — a hard
@@ -2715,26 +2645,39 @@ function Player:draw()
   -- rather than state.timeScale-scaled ticks since it's a pure visual
   -- readability cue, not gameplay timing: it should blink at a
   -- consistent real-world rate regardless of VATS slow-mo.
-  if self:isInvincible() then
+  -- (Not while he's still rematerializing — the shimmer is the arrival
+  -- cue; the flicker takes over once he's fully back.)
+  if self:isInvincible() and self.teleportState ~= "in" then
     local phase = math.floor(love.timer.getTime() / INVINCIBLE_FLICKER_INTERVAL) % 2
     if phase ~= 0 then return end
   end
 
   -- Sun shading on every piece of the rig — see getBodyShadingShader.
-  local shadingShader = self:applyBodyShading()
-
-  if scale == 1 then
+  local function drawShaded()
+    local shadingShader = self:applyBodyShading()
     self:drawRig()
-  else
-    love.graphics.push()
-    love.graphics.translate(self.pos.x, self.pos.y)
-    love.graphics.scale(scale, scale)
-    love.graphics.translate(-self.pos.x, -self.pos.y)
-    self:drawRig()
-    love.graphics.pop()
+    if shadingShader then love.graphics.setShader() end
   end
 
-  if shadingShader then love.graphics.setShader() end
+  if bodyAlpha >= 1 and energize <= 0 then
+    drawShaded()
+  else
+    TransporterEffect.drawFaded(self.pos.x, self.pos.y, self.radius * 4, bodyAlpha, energize, transporterColor, drawShaded)
+  end
+
+  -- The transporter sparkles, in a column covering him from boots to helmet.
+  if sparkle > 0 then
+    local planet = self.onSurface and self.currentPlanet or self.lastInfluencePlanet
+    local down = self:visualDownDirection(planet)
+    local upX, upY = -down.x, -down.y
+    local r = self.radius
+    local headTop = self.headReach or (r * 2.5)
+    local height = headTop + r
+    local mid = (headTop - r) / 2
+    TransporterEffect.drawSparkles(
+      self.pos.x + upX * mid, self.pos.y + upY * mid, upX, upY,
+      height * 1.15, r * 2.4, sparkle, transporterColor, love.timer.getTime())
+  end
 end
 
 -- Turns the body-shading shader on for whatever's drawn next, pointed

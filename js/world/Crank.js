@@ -17,6 +17,7 @@ import love from '../love/index.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from './Interactable.js';
 
 const POST_WIDTH = 10;
 const POST_HEIGHT = 34;
@@ -97,12 +98,6 @@ class Crank {
 
     this.interactRadius = 140;
     this.playerNearby = false;
-  }
-
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
   }
 
   // Called from InputHandlers.js (Enter) and GamePadInput.js (Circle).
@@ -228,5 +223,7 @@ class Crank {
     InteractPrompt.draw(this.pos.x, this.wheelCenterY - WHEEL_RADIUS - TOOLTIP_GAP_ABOVE);
   }
 }
+
+Crank.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default Crank;

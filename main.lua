@@ -4,19 +4,12 @@ local state = require("lua.state")
 local constants = require("lua.constants")
 local Vector2 = require("lua.vector2")
 local Planetoid = require("lua.world.Planetoid")
-local Player = require("lua.entities.Player")
 local Asteroid = require("lua.entities.Asteroid")
-local Coin = require("lua.entities.Coin")
-local Ooomba = require("lua.entities.Ooomba")
-local Explosion = require("lua.entities.Explosion")
-local IceBolt = require("lua.entities.IceBolt")
-local Particle = require("lua.entities.Particle")
 local StompBurst = require("lua.effects.StompBurst")
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
 local GravitySystem = require("lua.systems.GravitySystem")
 local CollisionSystem = require("lua.systems.CollisionSystem")
-local CameraDirector = require("lua.systems.CameraDirector")
 local Starfield = require("lua.world.Starfield")
 local Sun = require("lua.world.Sun")
 local PullBeam = require("lua.effects.PullBeam")
@@ -24,39 +17,18 @@ local assetLoading = require("lua.setup.assetLoading")
 local inputHandlers = require("lua.setup.InputHandlers")
 local gamepadInput = require("lua.setup.GamePadInput")
 local worldGen = require("lua.setup.WorldGen")
+local World = require("lua.levels.World")
+local WorldObjects = require("lua.systems.WorldObjects")
+local Projectiles = require("lua.systems.Projectiles")
+local Breakage = require("lua.systems.Breakage")
+local Camera = require("lua.systems.Camera")
 local MiniMap = require("lua.ui.MiniMap")
-local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
-local SpaceShelter = require("lua.world.SpaceShelter")
-local RobotButler = require("lua.entities.RobotButler")
-local Fisherman = require("lua.entities.Fisherman")
-local TiledTerrain = require("lua.world.TiledTerrain")
-local Sphere = require("lua.world.Sphere")
-local SphereMove = require("lua.world.SphereMove")
-local RoundedRectPlanetoid = require("lua.world.RoundedRectPlanetoid")
-local CrackedPlanetoid = require("lua.world.CrackedPlanetoid")
-local Spikey = require("lua.world.Spikey")
-local SpikeyVertical = require("lua.world.SpikeyVertical")
-local SpikeyOrbit = require("lua.world.SpikeyOrbit")
-local Lever = require("lua.world.Lever")
-local Plunger = require("lua.world.Plunger")
-local Crank = require("lua.world.Crank")
-local Mirror = require("lua.world.Mirror")
-local Sign = require("lua.world.Sign")
-local Prism = require("lua.world.Prism")
-local ElementPiece = require("lua.entities.ElementPiece")
-local CrystalPlanet = require("lua.world.CrystalPlanet")
-local PinballInterior = require("lua.interiors.PinballInterior")
-local Beam = require("lua.world.Beam")
-local Gate = require("lua.world.Gate")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
 local LockOutline = require("lua.effects.LockOutline")
 local InfluenceRing = require("lua.effects.InfluenceRing")
 local VatsOverlay = require("lua.effects.VatsOverlay")
 local VatsCursor = require("lua.effects.VatsCursor")
-local Lava = require("lua.world.Lava")
-local WaterPlanet = require("lua.world.WaterPlanet")
-local Fish = require("lua.entities.Fish")
 local PortalGun = require("lua.systems.PortalGun")
 local WaterSystem = require("lua.systems.WaterSystem")
 local ClipRecorder = require("lua.systems.ClipRecorder")
@@ -64,7 +36,6 @@ local Recall = require("lua.systems.Recall")
 local CharacterShadows = require("lua.effects.CharacterShadows")
 local TileGlow = require("lua.effects.TileGlow")
 local FireBarGlow = require("lua.effects.FireBarGlow")
-local RopeRock = require("lua.world.RopeRock")
 local Cannon = require("lua.world.Cannon")
 local MissileOutpost = require("lua.world.MissileOutpost")
 local CameraShake = require("lua.effects.CameraShake")
@@ -86,16 +57,16 @@ local collisionSystem
 --                 left of the fisherman, dropping onto it
 --   "cracked"     just above the cracked planet, dropping onto it
 --   "tiled"       just above the Tiled planet over map column
---                 TILED_START_COLUMN (needs SHOW_TILED_PLANET = true)
+--                 TILED_START_COLUMN (needs World.SHOW.tiledPlanet — see lua/levels/World.lua)
 --   "tunnel"      on the sky dome's ground just left of Level1's ball
 --                 tunnel (curl into a ball to roll through it)
 --   "pinball"     on the pinball table's plunger, already a ball
 --   "expressway"  on the expressway's entry planet, beside its cannon
---                 (needs SHOW_EXPRESSWAY = true)
+--                 (needs World.SHOW.expressway — see lua/levels/World.lua)
 --
 -- If the planet you pick is switched off, he starts at the shelter and
 -- the console says why.
-local START_AT = "tunnel"
+local START_AT = "shelter"
 local TILED_START_COLUMN = 146 -- counting from 0, like Tiled (146: over the middle of Level2's cracked, poundable column)
 
 -- Each option sets state.respawnPoint (see Player:respawn). Called near
@@ -192,14 +163,6 @@ local function applyStartPosition(expresswayEntry)
   state.spaceShelter.introDone = true
 end
 
-local ZOOM_MIN = 0.6
-local ZOOM_MAX = 2.5
-local ZOOM_STEP_PER_FRAME = 0.02
--- Zoom-Window easing (see the zoom-window pass in love.update): fraction
--- of the remaining distance to the target zoom covered each frame, and
--- how close counts as "arrived".
-local ZOOM_WINDOW_EASE_PER_FRAME = 0.03
-local ZOOM_WINDOW_SNAP = 0.002
 -- Upward speed (world units per baseline frame) the player hops off a
 -- freshly flattened Ooomba with — a small rebound, well under a jump.
 local OOOMBA_STOMP_BOUNCE = 7
@@ -212,25 +175,6 @@ local INFLUENCE_RING_FADE_DISTANCE = 700
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
-
--- Camera glide after a trip through a portal (see the camera pass in
--- love.update). How fast it closes the gap depends on how far apart the
--- two portals are: a very slow, gentle ease between portals close
--- together, quicker between far-apart ones (so he isn't off screen for
--- long). The rate scales evenly from MIN (portals touching) to MAX
--- (FAR_DISTANCE apart or more). Rough feel: 1 covers 90% of the gap in
--- ~2.3s, 2 in ~1.2s, 8 in ~0.3s. SETTLED: how close counts as caught up.
-local PORTAL_CAMERA_GLIDE_RATE_MIN = 1
-local PORTAL_CAMERA_GLIDE_RATE_MAX = 8
-local PORTAL_CAMERA_GLIDE_FAR_DISTANCE = 2500
-local PORTAL_CAMERA_SETTLED = 1
-
--- The home dome's cell — counted from the sun's own cell, so it stays in
--- the same place relative to the sun whatever size the map is (see
--- worldGen.GRID_SIZE). (It was cell 13, 9 on the original 20x20 map,
--- whose sun was in cell 10, 10.)
-local HOME_CELL_COL = worldGen.GRID_SIZE / 2 + 3
-local HOME_CELL_ROW = worldGen.GRID_SIZE / 2 - 1
 
 -- love.load runs once when the program starts — and again, in full,
 -- every time the pause menu's EXIT TO TITLE is chosen (see
@@ -248,43 +192,31 @@ local hasLoadedOnce = false
 -- a few are only ever APPENDED to there (or created with `or {}`), and
 -- would otherwise come back with last game's contents still in them.
 local function resetWorldState()
-  state.planetoids, state.asteroids, state.coins = {}, {}, {}
-  state.fireBars, state.particles, state.enemies = {}, {}, {}
+  state.planetoids, state.enemies = {}, {}
+  -- Every object list the registry knows (levers, coins, fish, ...).
+  WorldObjects.reset()
 
   -- Set only inside conditional blocks below — cleared so nothing from
   -- the last game survives if a block doesn't run.
-  state.fish, state.beams, state.lavas, state.tiledLevels = nil, nil, nil, nil
-  state.ropeRocks, state.recallables = nil, nil
-  state.ooombas, state.spikeys, state.mirrors, state.levers = nil, nil, nil, nil
-  state.plungers = nil
-  state.cranks, state.signs, state.gates = nil, nil, nil
+  state.tiledLevels, state.recallables = nil, nil
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
   state.crackedPlanet, state.tiledPlanet = nil, nil
   state.beltLandingPlanet = nil
-  state.miningPlanet, state.prisms = nil, nil
+  state.miningPlanet = nil
   state.cannons, state.clearLanes = nil, nil
   state.expressway, state.expresswayExits = nil, nil
   state.outposts, state.missiles = nil, nil
-  state.cannonZoomFlying, state.cannonZoomReturn = nil, nil
-  state.elementPieces = {}
   state.portals, state.portalTracers = nil, nil
   WeaponModes.set("fireball")
   WaterSystem.reset()
-  -- (The lava itself is a liquid, in WaterSystem; state.lavas holds the
-  -- effects played over lava turning to obsidian and back — see its
-  -- "Lava meeting water: obsidian".)
-  state.lavas = {}
   Recall.reset()
-  state.portalCameraGlide = nil
 
   -- Whatever was in progress.
-  state.camera = nil
+  Camera.reset()
   state.cameraDirector = nil
-  state.activeZoomWindow, state.zoomWindowReturn = nil, nil
   state.dialogueActive = false
   state.paused = false
-  state.gameOver, state.levelComplete = false, false
   state.keys = {}
   state.mouseDown = false
   state.vatsWasActive = false
@@ -329,10 +261,6 @@ function love.load()
   resetWorldState()
   worldGen.initWorldSize()
 
-  state.zoom = 1
-  state.zoomMax = ZOOM_MAX
-  state.zoomMin = ZOOM_MIN
-  state.zoomTarget = nil
   state.timeScale = 1
   state.timeScaleTarget = 1
   state.vatsMultiplier = 1
@@ -357,11 +285,6 @@ function love.load()
   state.score = 0
   state.elements = { rubinium = 0, asteroidium = 0 } -- how much of each he's mined (see lua/entities/ElementPiece.lua)
   state.level = 1
-  state.fireballs = {}
-  state.iceBolts = {}
-  state.explosions = {}
-  state.wallContactPulses = {}
-  state.fireBars = state.fireBars or {}
   state.cellCheckCounter = 0
   state.minimap = MiniMap.new()
 
@@ -375,1228 +298,13 @@ function love.load()
   collisionSystem = CollisionSystem.new()
   state.starfield = Starfield.new()
 
-  local cellSize = worldGen.CELL_SIZE
-  -- Doubled from the original 2000 (see :domeRadiusX/Y below, both tied
-  -- to this same value) — twice as long, and since domeRadiusY scales
-  -- with it too, twice as tall as well. domeX's own formula (below)
-  -- keeps the dome's LEFT edge anchored at a fixed point regardless of
-  -- this value (domeHalfW cancels out of domeX - domeHalfW), so growing
-  -- it only extends the dome further to the right, in the same cell —
-  -- no separate repositioning needed to keep it where it was relative
-  -- to the belt.
-  local domeHalfW = 4000
-  -- Left edge of cell 9,14, hull just inside the cell
-  local domeX = HOME_CELL_COL * cellSize + domeHalfW + 80
-  local domeY = HOME_CELL_ROW * cellSize + cellSize * 0.5
-
-  local dome = SkyDomePlanetoid.new(domeX, domeY, {
-    halfWidth = domeHalfW,
-    halfHeight = 32,
-    grassHeight = 32,
-    -- Tied to domeHalfW rather than repeating its own literal — these
-    -- default to halfWidth anyway when omitted (SkyDomePlanetoid.lua),
-    -- but were kept explicit as a plain hardcoded 2000 here; referencing
-    -- the variable instead means resizing the dome again later only
-    -- ever needs the one domeHalfW number changed.
-    domeRadiusX = domeHalfW,
-    domeRadiusY = domeHalfW,
-  })
-  dome.isPermanent = true
-  table.insert(state.planetoids, dome)
-
-  -- Astronaut's home shelter — purely decorative background scenery on
-  -- the dome's own deck, toward the left side of it. Drawn separately
-  -- (see love.draw below), right after the dome itself and before the
-  -- Tiled interior terrain, so the terrain's own hills draw over it
-  -- wherever the two happen to overlap rather than the shelter clipping
-  -- on top of gameplay geometry.
-  state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome:trueSurfaceY())
-  state.skyDomePlanet = dome
-
-  -- "Pinball" planet — a tall RoundedRectPlanetoid (see
-  -- lua/world/RoundedRectPlanetoid.lua; same typical baked body/
-  -- sun-shading look every rounded-rect landmark already uses, just a
-  -- different shape than a plain circular Planetoid) with a playable
-  -- pinball table on its face, built from the Tiled map
-  -- tiled/Pinball-Level2.lua (see lua/interiors/PinballInterior.lua,
-  -- drawn automatically for any planetoid with a .interior — see
-  -- main.lua's own draw loop below). Entered through the orange beam on
-  -- its top (set up further down), or by pull-beaming over from the belt.
-  --
-  -- The dome's mirror image across the sun: on the sun's LEFT, centered
-  -- on its height, with its right edge about the same distance from the
-  -- sun as the dome's left edge — just past the belt's outer edge, so
-  -- it's in view (and in pull-beam/lock-on reach) from the belt's left side.
-  -- Its cells are kept free of random spawns (see WorldGen.lua's
-  -- cellIntersectsLandmark and the isSpawnExclusion flag).
-  local SHOW_PINBALL_PLANET = true -- false removes the pinball planet and its entry beam
-  if SHOW_PINBALL_PLANET then
-    local pinballMap = require("tiled.Pinball-Level2")
-    -- The table is drawn centered on the planet at 64 world units per
-    -- tile; the planet is a margin bigger than it on every side, so the
-    -- table's square corners sit inside the planet's rounded ones.
-    local PINBALL_PLANET_MARGIN = 128
-    local halfW = pinballMap.width * 64 / 2 + PINBALL_PLANET_MARGIN
-    local halfH = pinballMap.height * 64 / 2 + PINBALL_PLANET_MARGIN
-    local sunX, sunY = worldGen.sunPos()
-    local domeEdgeFromSun = (dome.pos.x - domeHalfW) - sunX
-    local PINBALL_EXTRA_GAP = 100 -- nudged a little further out than the dome's mirror point
-    local planet = RoundedRectPlanetoid.new(
-      sunX - domeEdgeFromSun - PINBALL_EXTRA_GAP - halfW, sunY, halfW, halfH, 64, { 0.55, 0.57, 0.62, 1 })
-    planet.isImmovable = true
-    planet.isPermanent = true
-    planet.isSpawnExclusion = true
-    planet.vel.x, planet.vel.y = 0, 0
-    planet.rotationAngle = 0
-    -- Experimental: radians per frame the planet turns about its center
-    -- (0.0009 is about one full turn every two minutes). Off for now —
-    -- see docs/Pinball-Rotation-Ideas.md. The table turns with it (see
-    -- PinballInterior's tableToWorld/worldToTable), but the orange entry
-    -- beam does NOT, and at its current spot a turning planet swings
-    -- into the belt.
-    local TEMP_PINBALL_ROTATION_SPEED = 0
-    planet.rotationSpeed = TEMP_PINBALL_ROTATION_SPEED
-    -- Baked at 0.5x instead of the default 2x: at this size a 2x body
-    -- canvas would be over 20000 pixels tall, past GPUs' texture limits.
-    -- The table covers almost all of the face, so it barely shows.
-    planet.bodyCanvasScale = 0.5
-    planet.interior = PinballInterior.new(planet, pinballMap)
-    table.insert(state.planetoids, planet)
-    state.pinballPlanet = planet
-  end
-
-  -- Water planet landmark — an ordinary walkable/landable Planetoid
-  -- (see WaterPlanet.lua) with a shader-wavy edge instead of a plain
-  -- circle. Placed one cell diagonally past the belt's own outer edge,
-  -- toward the bottom-right of the sun (screen +x/+y), so it sits just
-  -- outside belt territory rather than overlapping it. Half the sun's
-  -- own radius (1920), per "not as big as the sun."
-  do
-    local sunCol, sunRow = worldGen.sunCell()
-    local cellSize = worldGen.CELL_SIZE
-    local waterCol, waterRow = sunCol + 3, sunRow + 3
-    local waterX = (waterCol + 0.5) * cellSize
-    local waterY = (waterRow + 0.5) * cellSize
-    local waterPlanet, waterCore = WaterPlanet.new(waterX, waterY, 960)
-    table.insert(state.planetoids, waterPlanet)
-    table.insert(state.planetoids, waterCore)
-    state.waterPlanet = waterPlanet
-    state.waterCore = waterCore
-
-    state.fish = {}
-    local FISH_COUNT = 6
-    for _ = 1, FISH_COUNT do
-      table.insert(state.fish, Fish.new(waterPlanet, waterCore))
-    end
-
-    -- A second, smaller water body — right and a little further down
-    -- from the first, with a ~336-unit gap between the two shores. Too
-    -- far for an ordinary in-place jump's reach (see Fish.lua's
-    -- JUMP_MAX_APEX_FRAC), which is deliberate: crossing this gap needs
-    -- Fish.lua's own dedicated cross-pool jump (JUMP_CROSS_* tunables,
-    -- decideToJump/startJump) — a fish specifically aiming for another
-    -- pool it can reach, launching much harder than an ordinary hop.
-    --
-    -- At THIS distance, reaching the far shore actually requires
-    -- Fish.lua's gravity hand-off (findDominantWaterInfluence): each
-    -- WaterPlanet's own influence ring (radius + constants.
-    -- INFLUENCE_PADDING) only reaches 1160 units from A's center and
-    -- 872 from B's own (smaller) center, and neither ring alone reaches
-    -- the far shore — but the two rings still overlap by about 64
-    -- units, just barely, so a strong enough launch from A can coast
-    -- into B's own ring before A's would have capped it, at which point
-    -- B's own gravity takes over and pulls it the rest of the way in.
-    -- Pushing the two pools any further apart than this will make the
-    -- rings stop overlapping entirely — at that point crossing becomes
-    -- flatly impossible without breaking the "never leave a pool's own
-    -- influence ring" rule this whole feature is built on, not just a
-    -- matter of retuning launch speed.
-    local water2X = waterX + 1820
-    local water2Y = waterY + 750
-    local waterPlanet2, waterCore2 = WaterPlanet.new(water2X, water2Y, 960 * 0.7)
-    table.insert(state.planetoids, waterPlanet2)
-    table.insert(state.planetoids, waterCore2)
-    state.waterPlanet2 = waterPlanet2
-    state.waterCore2 = waterCore2
-
-    local FISH_COUNT_2 = 4
-    for _ = 1, FISH_COUNT_2 do
-      table.insert(state.fish, Fish.new(waterPlanet2, waterCore2))
-    end
-
-    -- Three more, small water bodies below the second one (each offset
-    -- sideways by a different amount, so none of them sit directly
-    -- below it) — half its own radius (336). Placed with a comfortable
-    -- ~150-250 unit reach margin each way to/from water2 specifically
-    -- (not to each other, though none happen to overlap either), rather
-    -- than pushed to the tight limit the water1<->water2 gap already
-    -- is — see Fish.lua's own JUMP_CROSS_* tunables and
-    -- findDominantWaterInfluence for what that margin actually has to
-    -- absorb (randomized launch speed, tangential drift).
-    local SMALL_WATER_RADIUS = (960 * 0.7) * 0.5
-    local smallWaterOffsets = {
-      { -650, 1050 },
-      { 100, 1200 },
-      { 900, 900 },
-    }
-    for _, off in ipairs(smallWaterOffsets) do
-      local wp, wc = WaterPlanet.new(water2X + off[1], water2Y + off[2], SMALL_WATER_RADIUS)
-      table.insert(state.planetoids, wp)
-      table.insert(state.planetoids, wc)
-      for _ = 1, 3 do
-        table.insert(state.fish, Fish.new(wp, wc))
-      end
-    end
-  end
-
-  -- Rounded-rectangle landmark planetoid (see
-  -- lua/world/RoundedRectPlanetoid.lua, ported from the old JS game's
-  -- RoundedRectPlanetoid.js) — unlike every circular planetoid, the
-  -- player can land and walk all the way around this one, not just
-  -- stand on top. Placed directly above the SECOND water planet
-  -- (state.waterPlanet2, not the largest one) — needs that table
-  -- already populated, which is why this block runs AFTER the water
-  -- block above rather than right next to the dome the way an earlier
-  -- version of this did. Locked level (rotationAngle/rotationSpeed = 0,
-  -- overriding the random spin the constructor gives it by default) and
-  -- made a fixed landmark (isImmovable/isPermanent, vel zeroed) — same
-  -- override-after-construction convention the belt-landing Sphere
-  -- below already uses, not something the constructor itself forces.
-  do
-    -- Halved from this landmark's own original size (600x400, corner
-    -- 60) per explicit request.
-    local ROUNDED_RECT_HALF_WIDTH = 150
-    local ROUNDED_RECT_HALF_HEIGHT = 100
-    local ROUNDED_RECT_CORNER_RADIUS = 30
-    -- How far (world units) the fisherman's own hook dangles below
-    -- wherever he's standing, once planted at the rect's own top surface
-    -- — worked out from his actual rig, not guessed: his own origin
-    -- sits bodyHalfHeight (24.85, from Fisherman-Body.png's 497px height
-    -- * BODY_SCALE 0.1 / 2) ABOVE his feet, the rod tip (POSE.lineY =
-    -- -1118, same pre-scale units as every other POSE offset) sits
-    -- 111.8 world units above THAT, and the hook (the line's own far
-    -- end, 9920px long, jointY=26 near its top) hangs
-    -- (9920-26)*BODY_SCALE = 989.4 world units below the rod tip. Net:
-    -- 989.4 - 111.8 - 24.85 = 852.75 world units below his own feet.
-    local FISHERMAN_HOOK_REACH = 852.75
-    -- How far INTO the water the hook should actually end up, past its
-    -- own surface — purely a "does it look right" number, easiest of
-    -- all these to retune by eye once this is actually on screen.
-    local FISHERMAN_HOOK_WATER_DIP = 80
-    local groundY = state.waterPlanet2.pos.y - state.waterPlanet2.radius
-      - FISHERMAN_HOOK_WATER_DIP - FISHERMAN_HOOK_REACH
-    local rectY = groundY + ROUNDED_RECT_HALF_HEIGHT
-    local rectX = state.waterPlanet2.pos.x
-    -- Manual nudge on top of the computed placement above, per several
-    -- explicit requests after seeing it on screen each time — cumulative:
-    -- (-50, 80), then (-50, 50), then (-50, 80).
-    local ROUNDED_RECT_NUDGE_X = -150
-    local ROUNDED_RECT_NUDGE_Y = 210
-    rectX = rectX + ROUNDED_RECT_NUDGE_X
-    rectY = rectY + ROUNDED_RECT_NUDGE_Y
-    local roundedRectPlanet = RoundedRectPlanetoid.new(
-      rectX, rectY,
-      ROUNDED_RECT_HALF_WIDTH, ROUNDED_RECT_HALF_HEIGHT, ROUNDED_RECT_CORNER_RADIUS,
-      { 0.68, 0.56, 0.42, 1 })
-    roundedRectPlanet.isImmovable = true
-    roundedRectPlanet.isPermanent = true
-    roundedRectPlanet.vel.x, roundedRectPlanet.vel.y = 0, 0
-    roundedRectPlanet.rotationAngle = 0
-    roundedRectPlanet.rotationSpeed = 0
-    table.insert(state.planetoids, roundedRectPlanet)
-    state.roundedRectPlanet = roundedRectPlanet
-  end
-
-  -- Cracked planet (see lua/world/CrackedPlanetoid.lua): rings of dirt
-  -- clods round a cracked core, which fireballs blow out (caves and
-  -- all). Out past the right end of the sky dome, a little above its deck.
-  local SHOW_CRACKED_PLANET = true
-  if SHOW_CRACKED_PLANET then
-    local CRACKED_PLANET_CORE_RADIUS = 320
-    local CRACKED_PLANET_BRICK_LAYERS = 14 -- 32 units each, so 768 to the outside
-    local CRACKED_PLANET_GAP = 1800 -- from the dome's right edge to the planet's center
-    local CRACKED_PLANET_ABOVE_DECK = 400
-    local cracked = CrackedPlanetoid.new(
-      domeX + domeHalfW + CRACKED_PLANET_GAP, domeY - CRACKED_PLANET_ABOVE_DECK,
-      CRACKED_PLANET_CORE_RADIUS, CRACKED_PLANET_BRICK_LAYERS, { 0.52, 0.36, 0.24, 1 })
-    table.insert(state.planetoids, cracked)
-    state.crackedPlanet = cracked
-  end
-
-  -- Tiled planet: the Tiled map tiled/Level2.lua wrapped round a planet
-  -- (see CrackedPlanetoid.fromTiledMap) — a test of building one from a
-  -- map, with a tunnel through it. Its size comes from the map. Straight
-  -- below the cracked planet (further right, it would sit on the
-  -- galactic expressway's track — see Cannon.lua's OUTLINE in main.lua).
-  local SHOW_TILED_PLANET = true
-  if SHOW_TILED_PLANET and state.crackedPlanet then
-    local TILED_PLANET_GAP = 1200 -- between the two planets' outsides
-    local map = require("tiled.Level2")
-    local radius = CrackedPlanetoid.tiledMapRadius(map)
-    local cracked = state.crackedPlanet
-    local tiledPlanet = CrackedPlanetoid.fromTiledMap(
-      cracked.pos.x, cracked.pos.y + cracked.radius + TILED_PLANET_GAP + radius,
-      map, { 0.45, 0.32, 0.2, 1 })
-    table.insert(state.planetoids, tiledPlanet)
-    state.tiledPlanet = tiledPlanet
-  end
-
-  -- Robot butler NPC — paces back and forth just to the right of the
-  -- shelter's own footprint (see RobotButler.lua). Positioned off the
-  -- shelter's own right edge (pos.x + half its drawn width) plus a
-  -- small gap, rather than a hardcoded offset, so it stays adjacent
-  -- even if the shelter's own scale ever changes.
-  local ROBOT_GAP_FROM_SHELTER = 60
-  local robotHomeX = state.spaceShelter.pos.x + state.spaceShelter.drawWidth / 2 + ROBOT_GAP_FROM_SHELTER
-  state.robotButler = RobotButler.new(robotHomeX, dome:trueSurfaceY())
-
-  -- Fisherman NPC — same decorative/interactive role as the robot
-  -- butler above. Stands at the RIGHT edge of the new rounded-rect
-  -- landmark (state.roundedRectPlanet, directly above the second water
-  -- planet — see that block's own comment) rather than the dome, so his
-  -- line+hook actually dangle down into the water below instead of
-  -- dangling over empty space. FISHERMAN_GAP_FROM_EDGE here is a small
-  -- clip margin (the rect has a flat edge, not the dome's own huge
-  -- curve, so it doesn't need nearly as much inset to keep his art from
-  -- visually hanging off it).
-  local FISHERMAN_GAP_FROM_EDGE = 50
-  local fishermanHomeX = state.roundedRectPlanet.pos.x + state.roundedRectPlanet.halfWidth - FISHERMAN_GAP_FROM_EDGE
-  local fishermanGroundY = state.roundedRectPlanet.pos.y - state.roundedRectPlanet.halfHeight
-  state.fisherman = Fisherman.new(fishermanHomeX, fishermanGroundY)
-
-  -- === Beam pair: shelter <-> belt-edge landing planet ===
-  -- See lua/world/Beam.lua (ported from the old JS game's
-  -- BeamPlanetoid, minus the maze/platform "interior" concept that
-  -- version tied a beam to — this is just a point-to-point teleporter).
-  -- homeBeam sits just left of the shelter, on the dome's own deck.
-  -- beltBeam sits on TOP of a small new landing planet placed along the
-  -- SAME radial line from the sun the dome itself already sits on (the
-  -- closest "under the dome" can mean while ALSO being near the belt,
-  -- since the dome's own position is already well outside the belt's
-  -- outer edge — literally directly below the dome in x/y would never
-  -- be close enough), pulled in to just past the belt's outer radius —
-  -- then nudged further down the screen from there (BELT_PLANET_EXTRA_DOWN)
-  -- so it reads more clearly as its own separate landmark. Both beams
-  -- planted exactly like Lever.lua's own ground objects: pointing
-  -- straight up, away from whatever surface they're standing on.
-  do
-    local BEAM_GAP_FROM_SHELTER = 150
-    local homeBeam = Beam.new(
-      state.spaceShelter.pos.x - state.spaceShelter.drawWidth / 2 - BEAM_GAP_FROM_SHELTER,
-      dome:trueSurfaceY(), -math.pi / 2)
-
-    local sunX, sunY = worldGen.sunPos()
-    local _, beltOuterRadius = worldGen.beltRadii()
-    local dirX, dirY = domeX - sunX, domeY - sunY
-    local dirLen = math.sqrt(dirX * dirX + dirY * dirY)
-    dirX, dirY = dirX / dirLen, dirY / dirLen
-
-    local BELT_PLANET_RADIUS = 120
-    -- Clear space between the landing planet's own surface and the
-    -- belt's outer edge — real but short, same spirit as Fish.lua's own
-    -- cross-pool jump margins (a gap the player is clearly MEANT to
-    -- clear, not one that's borderline).
-    local BELT_PLANET_GAP = 260
-    local beltPlanetDist = beltOuterRadius + BELT_PLANET_RADIUS + BELT_PLANET_GAP
-    local beltPlanetX = sunX + dirX * beltPlanetDist
-    -- A plain screen-space downward nudge from there (NOT further along
-    -- dirX/dirY — the dome sits slightly ABOVE the sun, so dirY itself
-    -- is negative, and pushing further along it would actually move the
-    -- planet UP, the opposite of what's wanted here).
-    local BELT_PLANET_EXTRA_DOWN = 500
-    local beltPlanetY = sunY + dirY * beltPlanetDist + BELT_PLANET_EXTRA_DOWN
-
-    local beltLandingPlanet = Sphere.new(beltPlanetX, beltPlanetY, BELT_PLANET_RADIUS)
-    table.insert(state.planetoids, beltLandingPlanet)
-    state.beltLandingPlanet = beltLandingPlanet -- its own sign is planted further down, once state.signs exists
-
-    local beltBeam = Beam.new(beltPlanetX, beltPlanetY - BELT_PLANET_RADIUS, -math.pi / 2)
-
-    homeBeam.destination = beltBeam
-    beltBeam.destination = homeBeam
-    state.beams = { homeBeam, beltBeam }
-  end
-
-  -- === Mining planet ===
-  -- A ball of cyan glass (see lua/world/CrystalPlanet.lua) that turns,
-  -- drifts and can be ground-pounded along, with the mining
-  -- prisms (see lua/world/Prism.lua) growing out of it in clusters. Twice the
-  -- radius of the biggest planetoid the field generates (70 — see
-  -- WorldGen.lua's createPlanetoidsInCell). It STARTS directly below
-  -- the belt-edge landing planet, clear of the belt's outer edge.
-  do
-    local MINING_PLANET_RADIUS = 140
-    local MINING_PLANET_PRISM_CLUSTERS = 5
-    local MINING_PLANET_BELOW_LANDING_PLANET = 900 -- center to center
-    local anchor = state.beltLandingPlanet
-    local miningPlanet = CrystalPlanet.new(
-      anchor.pos.x, anchor.pos.y + MINING_PLANET_BELOW_LANDING_PLANET,
-      MINING_PLANET_RADIUS)
-    table.insert(state.planetoids, miningPlanet)
-    state.miningPlanet = miningPlanet
-    state.prisms = Prism.scatterClusters(miningPlanet, MINING_PLANET_PRISM_CLUSTERS)
-  end
-
-  -- === Pinball planet entry beam ===
-  -- Planted on top of the pinball planet (see the SHOW_PINBALL_PLANET
-  -- block above) — stepping through it drops the player onto the
-  -- plunger, already curled into a ball (see
-  -- lua/interiors/PinballInterior.lua:onEnter). Unlike the home<->belt
-  -- pair above, this is deliberately ONE-WAY: its own "destination" is
-  -- a plain synthetic table (not another Beam) — Player:updateTeleport
-  -- only ever reads destination.pos/destination.angle (see its own
-  -- comment), so anything with those two fields works as a valid
-  -- target, and destination.onArrive (a small extension this needed —
-  -- see Player:updateTeleport's own "out" phase) is what actually
-  -- curls him into a ball and hands control to PinballInterior the
-  -- instant he lands. Getting back OUT happens by draining off the
-  -- bottom of the table (PinballInterior:exitBall), not a return beam.
-  local function addPinballEntryBeam(pinball)
-    local PINBALL_BEAM_OFFSET_X = -pinball.halfWidth * 0.4 -- off-center so it doesn't sit exactly at the rounded top's own midpoint
-    local pinballBeamX = pinball.pos.x + PINBALL_BEAM_OFFSET_X
-    local pinballBeamY = pinball.pos.y - pinball.halfHeight
-    local pinballBeam = Beam.new(pinballBeamX, pinballBeamY, -math.pi / 2, { 0.95, 0.45, 0.15 }) -- orange, distinct from the home<->belt pair's own violet
-    pinballBeam.destination = {
-      pos = pinball.interior:getPortalPosition(),
-      angle = -math.pi / 2,
-      onArrive = function(player)
-        pinball.interior:onEnter(player)
-      end,
-    }
-    table.insert(state.beams, pinballBeam)
-    -- Draining puts him back on the planet's top, beside this beam.
-    pinball.interior.exitPosition = { x = pinballBeamX + pinball.halfWidth * 0.15 }
-  end
-  if state.pinballPlanet then addPinballEntryBeam(state.pinballPlanet) end
-
-  -- === TILED HILL TERRAIN above the sky dome's ground ===
-  -- Replaces the old hardcoded JumpPlatform zigzag: this dome's interior
-  -- is now authored in Tiled (tiled/Level1.lua) and loaded as real
-  -- walkable terrain (flat ground + 45-degree slopes) via
-  -- lua/world/TiledTerrain.lua. Centered horizontally on the dome and
-  -- bottom-aligned to its ground line; TiledTerrain.load itself just
-  -- takes a plain world-space anchor, so this centering math is the
-  -- dome-specific part, kept here rather than baked into that module.
-  do
-    local levelData = require("tiled.Level1")
-    local mapWorldWidth = levelData.width * 64
-    local mapWorldHeight = levelData.height * 64
-    local anchorX = dome.pos.x - mapWorldWidth / 2
-    local anchorY = dome:trueSurfaceY() - mapWorldHeight
-    local terrainLevel = TiledTerrain.load(levelData, anchorX, anchorY)
-
-    for _, shape in ipairs(terrainLevel.shapes) do
-      -- Every tile inside the dome should feel like standing on the
-      -- dome's own deck, jump-wise — Player:jump()'s launch speed reads
-      -- self.currentPlanet.jumpStrength directly, and self.currentPlanet
-      -- while standing on ordinary Tiled ground is the specific
-      -- TerrainShape tile itself, not the dome — so without this it
-      -- silently fell back to constants.JUMP_STRENGTH's plain global
-      -- value instead of the dome's own stronger, Mario-style one (see
-      -- SkyDomePlanetoid.lua's own jumpStrength comment), making jumps
-      -- noticeably weaker on ordinary tiles than on the bare deck.
-      -- gravityStrength doesn't need the same treatment: TerrainShape's
-      -- own isOpenPath flag excludes it from ever being picked as the
-      -- FALLING gravity source (see GravitySystem:findDominantPlanet) —
-      -- that's always the dome itself, tile or no tile underfoot.
-      shape.jumpStrength = dome.jumpStrength
-      table.insert(state.planetoids, shape)
-    end
-    state.tiledLevels = { terrainLevel }
-    -- The grid sprayed water flows and pools on (see WaterSystem.lua).
-    WaterSystem.init(terrainLevel)
-
-    -- Rocks hung on ropes: each Rope paired with the Rock its "holds"
-    -- property names (see lua/world/RopeRock.lua). After the water grid
-    -- (they move — a rock that's fallen mustn't leave its old place solid
-    -- to water); recallable (see lua/systems/Recall.lua).
-    state.ropeRocks = {}
-    state.recallables = state.ropeRocks
-    local rocksById = {}
-    for _, rock in ipairs(terrainLevel.rockSpawns or {}) do rocksById[rock.id] = rock end
-    for _, rope in ipairs(terrainLevel.ropeSpawns or {}) do
-      local rock = rope.holdsId and rocksById[rope.holdsId]
-      if rock then
-        table.insert(state.ropeRocks, RopeRock.new(rope, rock, terrainLevel, dome))
-      else
-        print(string.format("main.lua: Rope id %s holds nothing (its \"holds\" property names no Rock) — not spawned.",
-          tostring(rope.id)))
-      end
-    end
-
-    -- Ooombas are placed explicitly via Tiled's own Object Layer now
-    -- (see TiledTerrain.lua's ooombaSpawns) instead of auto-spawned onto
-    -- every long-enough walkable shape — that heuristic had no idea a
-    -- shape might be the sunken floor of a lava pit or some other spot
-    -- that looks walkable but isn't a good fit for a patrol. Each spawn
-    -- point can be placed loosely (anywhere above the intended surface,
-    -- doesn't need to sit exactly on it) and gets snapped straight down
-    -- onto whichever terrain shape it's actually standing over, via the
-    -- same swept findLandingCrossing test CollisionSystem itself uses
-    -- for landing on open-path terrain. Ramp-climb shapes (isWallClimb)
-    -- are excluded from the search — an ordinary edge-patrolling Ooomba
-    -- has no concept of "this surface needs active momentum to stay
-    -- attached" the way Player.lua's own isWallClimb check does.
-    local OOMBA_RAYCAST_DOWN = 6000
-    state.ooombas = {}
-    for _, spawn in ipairs(terrainLevel.ooombaSpawns or {}) do
-      local bestShape, bestDy = nil, nil
-      for _, shape in ipairs(terrainLevel.shapes) do
-        if not shape.isWallClimb then
-          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
-          if hit then
-            local dy = hit.point.y - spawn.y
-            if dy >= 0 and (not bestDy or dy < bestDy) then
-              bestDy = dy
-              bestShape = shape
-            end
-          end
-        end
-      end
-      if bestShape then
-        local arcPos = bestShape:arcPositionForWorldPoint(spawn.x, spawn.y)
-        local direction = (math.random() < 0.5) and -1 or 1
-        table.insert(state.ooombas, Ooomba.new(bestShape, arcPos, { direction = direction }))
-      end
-    end
-
-    -- "Sphere" objects (see lua/world/Sphere.lua): small fixed metal
-    -- balls the player can jump on and pull-beam to, exactly like any
-    -- other planetoid. Unlike Ooombas above, the spawn point IS the
-    -- sphere's own center — no raycast-onto-terrain needed for a
-    -- freestanding body.
-    --
-    -- entitiesById collects every spawned Sphere/Spikey by its own
-    -- Tiled object id as it goes, so a Spikey-Orbit object further down
-    -- this same loop set (spawned after all of these, see
-    -- spikeyOrbitSpawns below) can resolve its own "orbit" property —
-    -- just the raw id at this point, read by TiledTerrain.lua — back to
-    -- the actual entity it names, whichever of these two lists it came
-    -- from.
-    local entitiesById = {}
-    for _, spawn in ipairs(terrainLevel.sphereSpawns or {}) do
-      -- spawn.radius: the object's optional "radius" property in Tiled;
-      -- nil falls back to Sphere.DEFAULT_RADIUS.
-      local sphere = Sphere.new(spawn.x, spawn.y, spawn.radius)
-      table.insert(state.planetoids, sphere)
-      if spawn.id then entitiesById[spawn.id] = sphere end
-
-      -- spawn.gravityRadius: the object's optional "gravity" property —
-      -- how far out from the Sphere's center its gravity reaches. A
-      -- Sphere's own default reach is deliberately tiny (see Sphere.new),
-      -- so small that a jump off anywhere but the very top leaves its
-      -- pull and never comes back; setting this is how a Sphere becomes
-      -- somewhere he can jump around on. It has to reach past the
-      -- surface to do anything at all, so a value that doesn't is
-      -- reported rather than silently applied.
-      if spawn.gravityRadius then
-        if spawn.gravityRadius > sphere.radius then
-          sphere.influenceRadius = spawn.gravityRadius
-        else
-          print(string.format(
-            "main.lua: Sphere at (%.0f, %.0f) has gravity=%s, which is not beyond its own radius of %s — ignored.",
-            spawn.x, spawn.y, tostring(spawn.gravityRadius), tostring(sphere.radius)))
-        end
-      end
-
-      -- spawn.ooombaCount: the object's optional "ooomba" property —
-      -- that many Ooombas walking laps of this Sphere (see
-      -- Ooomba.newOnPlanet). Spaced evenly round it and all walking the
-      -- same way at the same speed, so they keep their spacing and
-      -- never bunch up or pass through one another; which way is
-      -- picked per Sphere, and the starting point is random so two
-      -- Spheres with Ooombas don't look like copies of each other.
-      -- Ordinary Ooombas in every other respect: lethal to touch, can
-      -- be stomped or shot.
-      if (spawn.ooombaCount or 0) > 0 then
-        local direction = math.random() < 0.5 and -1 or 1
-        local firstAngle = math.random() * math.pi * 2
-        for i = 1, spawn.ooombaCount do
-          local angle = firstAngle + (i - 1) / spawn.ooombaCount * math.pi * 2
-          table.insert(state.ooombas, Ooomba.newOnPlanet(sphere, angle, { direction = direction }))
-        end
-      end
-    end
-
-    -- "Sphere-Move" objects (see lua/world/SphereMove.lua): same Sphere,
-    -- just shuttling back and forth between two points instead of
-    -- sitting still. Added straight into state.planetoids too — it's a
-    -- full Planetoid in every other respect (gravity, landing,
-    -- pull-beam targeting), so it needs no separate list or wiring
-    -- anywhere else, just like plain Sphere above.
-    for _, spawn in ipairs(terrainLevel.sphereMoveSpawns or {}) do
-      table.insert(state.planetoids, SphereMove.new(
-        spawn.x, spawn.y, spawn.startX, spawn.startY, spawn.endX, spawn.endY, nil, spawn.speed))
-    end
-
-    -- "Spikey" objects (see lua/world/Spikey.lua): gray, spike-ringed
-    -- hazards that kill the player on contact
-    -- (CollisionSystem:handlePlayerSpikeyCollisions) — deliberately NOT
-    -- planetoids (no gravity, no landing/orbital walking around them),
-    -- so they get their own separate list rather than state.planetoids.
-    -- Stationary, same point-placement convention as the Sphere spawns
-    -- just above.
-    state.spikeys = {}
-    for _, spawn in ipairs(terrainLevel.spikeySpawns or {}) do
-      local spikey = Spikey.new(spawn.x, spawn.y)
-      table.insert(state.spikeys, spikey)
-      if spawn.id then entitiesById[spawn.id] = spikey end
-    end
-
-    -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua):
-    -- same hazard, but patrols up and down within a shaft.
-    -- TiledTerrain.lua's own tile-grid scan already resolved topY/
-    -- bottomY against the nearest WALL in each direction, where one
-    -- exists — this pass additionally clamps (or, if that scan found
-    -- no wall at all on a given side, ENTIRELY SUPPLIES) those bounds
-    -- against any Spikey (from the loop just above) sitting in the
-    -- same column, so "collides with a wall OR another Spikey" holds
-    -- as two genuinely equal alternatives, not "a wall, with Spikeys
-    -- only ever narrowing that further." A shaft with a wall ceiling
-    -- but no floor tile at all — bounded only by a stack of ordinary
-    -- Spikeys below it — is exactly the case this fixes: TiledTerrain's
-    -- own scan leaves bottomY nil there, and this pass is what actually
-    -- resolves it instead of leaving the whole spawn dead on arrival.
-    -- Added to the same state.spikeys list as everything else here, so
-    -- it's collided with/drawn exactly like a plain Spikey with zero
-    -- extra wiring anywhere else.
-    local SPIKEY_VERTICAL_RADIUS = Spikey.DEFAULT_RADIUS
-    for _, spawn in ipairs(terrainLevel.spikeyVerticalSpawns or {}) do
-      local topY, bottomY = spawn.topY, spawn.bottomY
-      for _, other in ipairs(state.spikeys) do
-        -- "Same column" fuzziness — both radii, not just one, since
-        -- either body's own width can bring them into contact even
-        -- when their CENTERS aren't perfectly aligned.
-        if math.abs(other.pos.x - spawn.x) < other.radius + SPIKEY_VERTICAL_RADIUS then
-          if other.pos.y < spawn.y then
-            local bound = other.pos.y + other.radius + SPIKEY_VERTICAL_RADIUS
-            topY = topY and math.max(topY, bound) or bound
-          elseif other.pos.y > spawn.y then
-            local bound = other.pos.y - other.radius - SPIKEY_VERTICAL_RADIUS
-            bottomY = bottomY and math.min(bottomY, bound) or bound
-          end
-        end
-      end
-      -- Only NOW (after both a wall AND a nearby-Spikey chance) is this
-      -- actually a failure — nothing at all bounds one side, which
-      -- would let it patrol forever in that direction with nothing to
-      -- ever turn it around.
-      if topY and bottomY and bottomY > topY then
-        table.insert(state.spikeys, SpikeyVertical.new(spawn.x, topY, bottomY, SPIKEY_VERTICAL_RADIUS, spawn.speed))
-      else
-        print(string.format(
-          "main.lua: Spikey-Vertical at (%.1f, %.1f) found no wall or nearby Spikey to bound it on one side (topY=%s, bottomY=%s) — not spawned.",
-          spawn.x, spawn.y, tostring(topY), tostring(bottomY)))
-      end
-    end
-
-    -- "Spikey-Orbit" objects (see lua/world/SpikeyOrbit.lua): same
-    -- hazard again, but orbits clockwise around whatever entity its own
-    -- "orbit" property names (resolved here against entitiesById, built
-    -- above as the Sphere/Spikey spawns happened — this is why this
-    -- loop has to come after both of those, not before). The orbit's
-    -- own radius/starting angle come from however far apart the two
-    -- objects actually are in Tiled right now — see SpikeyOrbit.new.
-    for _, spawn in ipairs(terrainLevel.spikeyOrbitSpawns or {}) do
-      local center = spawn.orbitId and entitiesById[spawn.orbitId]
-      if center then
-        table.insert(state.spikeys, SpikeyOrbit.new(spawn.x, spawn.y, center, Spikey.DEFAULT_RADIUS, spawn.speed))
-      else
-        print(string.format(
-          "main.lua: Spikey-Orbit at (%.1f, %.1f) names orbit id %s, which isn't a spawned Sphere/Spikey — not spawned.",
-          spawn.x, spawn.y, tostring(spawn.orbitId)))
-      end
-    end
-
-    -- "Mirror" objects (see lua/world/Mirror.lua): freestanding, same
-    -- point-placement convention as the Sphere/Spikey spawns above —
-    -- added to entitiesById too, so a Crank's own "Mirror" property
-    -- (resolved below, once this loop has run) can find it.
-    state.mirrors = {}
-    for _, spawn in ipairs(terrainLevel.mirrorSpawns or {}) do
-      local mirror = Mirror.new(spawn.x, spawn.y, spawn.angle)
-      table.insert(state.mirrors, mirror)
-      if spawn.id then entitiesById[spawn.id] = mirror end
-    end
-
-    -- "Lever" objects (see lua/world/Lever.lua): placed on the ground
-    -- via the exact same raycast-down approach as Ooombas above (loosely
-    -- placed in Tiled, snapped onto whatever TerrainShape surface
-    -- actually sits below it).
-    state.levers = {}
-    for _, spawn in ipairs(terrainLevel.leverSpawns or {}) do
-      local bestShape, bestDy, bestHit = nil, nil, nil
-      for _, shape in ipairs(terrainLevel.shapes) do
-        if not shape.isWallClimb then
-          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
-          if hit then
-            local dy = hit.point.y - spawn.y
-            if dy >= 0 and (not bestDy or dy < bestDy) then
-              bestDy = dy
-              bestShape = shape
-              bestHit = hit
-            end
-          end
-        end
-      end
-      if bestHit then
-        local lever = Lever.new(bestHit.point.x, bestHit.point.y)
-        lever.gateId = spawn.gateId
-        table.insert(state.levers, lever)
-      end
-    end
-
-    -- "Crank" objects (see lua/world/Crank.lua): same raycast-down
-    -- ground placement as the levers just above.
-    state.cranks = {}
-    for _, spawn in ipairs(terrainLevel.crankSpawns or {}) do
-      local bestShape, bestDy, bestHit = nil, nil, nil
-      for _, shape in ipairs(terrainLevel.shapes) do
-        if not shape.isWallClimb then
-          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
-          if hit then
-            local dy = hit.point.y - spawn.y
-            if dy >= 0 and (not bestDy or dy < bestDy) then
-              bestDy = dy
-              bestShape = shape
-              bestHit = hit
-            end
-          end
-        end
-      end
-      if bestHit then
-        local crank = Crank.new(bestHit.point.x, bestHit.point.y)
-        crank.mirrorId = spawn.mirrorId
-        crank.mirror = spawn.mirrorId and entitiesById[spawn.mirrorId]
-        table.insert(state.cranks, crank)
-      end
-    end
-
-    -- Plungers (see lua/world/Plunger.lua): fire Bob along, e.g. into a
-    -- ball tunnel.
-    state.plungers = {}
-    for _, spawn in ipairs(terrainLevel.plungerSpawns or {}) do
-      table.insert(state.plungers, Plunger.new(spawn.x, spawn.y, spawn.dir))
-    end
-
-    -- "Sign" objects (see lua/world/Sign.lua): same raycast-down
-    -- ground placement as the levers/cranks above.
-    state.signs = {}
-    for _, spawn in ipairs(terrainLevel.signSpawns or {}) do
-      local bestShape, bestDy, bestHit = nil, nil, nil
-      for _, shape in ipairs(terrainLevel.shapes) do
-        if not shape.isWallClimb then
-          local hit = shape:findLandingCrossing(spawn.x, spawn.y, spawn.x, spawn.y + OOMBA_RAYCAST_DOWN)
-          if hit then
-            local dy = hit.point.y - spawn.y
-            if dy >= 0 and (not bestDy or dy < bestDy) then
-              bestDy = dy
-              bestShape = shape
-              bestHit = hit
-            end
-          end
-        end
-      end
-      if bestHit then
-        table.insert(state.signs, Sign.new(bestHit.point.x, bestHit.point.y, spawn.message))
-      end
-    end
-
-    -- "Zoom-Window" objects: world-space rectangles, already fully
-    -- resolved by TiledTerrain.lua — see the zoom-window pass in
-    -- love.update for what they actually do.
-    state.zoomWindows = terrainLevel.zoomWindows or {}
-
-    -- "DeathZone" objects: dying inside one respawns the player at its
-    -- own respawn point rather than the shelter door (see
-    -- Player:startDeath/respawn). The point is loosely placed like the
-    -- signs/levers above: if there's ground within reach just below it
-    -- (searching from one tile above, in case it was clicked right at
-    -- ground level), he's stood on that ground instead of being left
-    -- overlapping it; otherwise the point is used exactly as given and
-    -- he simply drops from there.
-    local RESPAWN_SEARCH_UP, RESPAWN_SEARCH_DOWN = 64, 200
-    state.deathZones = terrainLevel.deathZones or {}
-    for _, zone in ipairs(state.deathZones) do
-      local bestY = nil
-      for _, shape in ipairs(terrainLevel.shapes) do
-        if not shape.isWallClimb then
-          local hit = shape:findLandingCrossing(
-            zone.respawnX, zone.respawnY - RESPAWN_SEARCH_UP, zone.respawnX, zone.respawnY + RESPAWN_SEARCH_DOWN)
-          if hit and (not bestY or hit.point.y < bestY) then
-            bestY = hit.point.y
-          end
-        end
-      end
-      if bestY then
-        zone.respawnY = bestY - constants.PLAYER_RADIUS - 1
-      end
-    end
-
-    -- "Gate" objects (see lua/world/Gate.lua): topY/bottomY/halfWidth
-    -- are already fully resolved by TiledTerrain.lua's own tile-grid
-    -- scan (see its gateSpawns). Inserted into BOTH terrainLevel.walls
-    -- (so CollisionSystem:handlePlayerWallCollisions blocks the player
-    -- with zero changes needed there) and state.gates (so main.lua's
-    -- own update/draw loops below can animate and render it) — the
-    -- exact same object serves both roles at once.
-    state.gates = {}
-    local gatesByTiledId = {}
-    for _, spawn in ipairs(terrainLevel.gateSpawns or {}) do
-      local gate = Gate.new(spawn.x, spawn.topY, spawn.bottomY, spawn.halfWidth)
-      table.insert(terrainLevel.walls, gate)
-      table.insert(state.gates, gate)
-      if spawn.id then
-        gatesByTiledId[spawn.id] = gate
-      end
-    end
-
-    -- Wires each lever to the Gate its own "gate" custom property names
-    -- (see leverSpawns' own gateId, set from that property in
-    -- TiledTerrain.lua) — a lever with no gateId, or one naming a gate
-    -- that didn't resolve, is just left unwired (Lever:tryInteract
-    -- already no-ops with self.gate == nil).
-    for _, lever in ipairs(state.levers) do
-      if lever.gateId and gatesByTiledId[lever.gateId] then
-        lever.gate = gatesByTiledId[lever.gateId]
-      end
-    end
-  end
-
-  -- Spawns at the shelter's own doorway, not dome center — the opening
-  -- beat (see SpaceShelter.lua's own intro state machine) has the
-  -- player standing behind its closed door when the game starts, the
-  -- door sliding open around them, then closing again once they've
-  -- stepped out. state.introLocked (checked in love.update) keeps
-  -- movement input from interrupting that sequence.
-
-  -- A sign on the belt-edge landing planet (the white one the home beam
-  -- arrives on — see the beam pair above), planted on the far side from
-  -- its beam: the beam stands on top, so the sign hangs off the
-  -- underside, turned to stand on the surface there — not at the very
-  -- bottom (the south pole) but SIGN_OFFSET_FROM_SOUTH_POLE round from
-  -- it, toward the lower left (the side facing the belt). Negative
-  -- would put it toward the lower right instead. Added here rather
-  -- than up by the planet itself because state.signs is created by the
-  -- Tiled level's own sign loop, which runs in between.
-  if state.beltLandingPlanet then
-    local planet = state.beltLandingPlanet
-    local SIGN_OFFSET_FROM_SOUTH_POLE = math.rad(35)
-    local signAngle = math.pi / 2 + SIGN_OFFSET_FROM_SOUTH_POLE -- pi/2 is straight down the screen
-    local up = Vector2.new(math.cos(signAngle), math.sin(signAngle)) -- away from the planet's center, where the sign stands
-    state.signs = state.signs or {}
-    table.insert(state.signs, Sign.new(
-      planet.pos.x + up.x * planet.radius, planet.pos.y + up.y * planet.radius,
-      "With so many planets clustered together, consider pressing **TRIANGLE** to slow down time. In this state, you can move the right joystick cursor around to select planets you can pull beam toward using the **L2** button. If you want time to go back to normal, press **TRIANGLE** again",
-      { texture = state.signPlanetTexture, up = up }))
-  end
-
-  -- Ooombas placed on the Tiled planet's own map (tiled/Level2's object
-  -- layer — see CrackedPlanetoid.fromTiledMap's objectSpawns): each set
-  -- down on the ground under where it was placed, patrolling it round the
-  -- planet (see Ooomba.newOnCrackedPlanet). (Added after the dome's own,
-  -- above, which start state.ooombas afresh.)
-  if state.tiledPlanet then
-    state.ooombas = state.ooombas or {}
-    for _, spawn in ipairs(state.tiledPlanet.objectSpawns or {}) do
-      if spawn.class == "Ooomba" then
-        local direction = (math.random() < 0.5) and -1 or 1
-        local o = Ooomba.newOnCrackedPlanet(state.tiledPlanet, spawn.lx, spawn.ly, { direction = direction })
-        if o then table.insert(state.ooombas, o) end
-      end
-    end
-  end
-
-  local topY = dome:trueSurfaceY()
-  local doorwayX = state.spaceShelter and (state.spaceShelter:getDoorwayPosition()) or dome.pos.x
-  state.player = Player.new(doorwayX, topY - constants.PLAYER_RADIUS)
-  state.player.onSurface = true
-  state.player.currentPlanet = dome
-  state.player.lastInfluencePlanet = dome
-  state.player.angle = -math.pi / 2
-  state.introLocked = true
-
-  -- Where Player:respawn puts him back after dying — this same doorway.
-  state.respawnPoint = { x = doorwayX, y = topY - constants.PLAYER_RADIUS, planet = dome }
-
-  -- Testing a different start spot? See START_AT near the top of this file.
-  local expresswayEntry -- filled in below if the expressway is built
-
-  -- === The galactic expressway (see lua/world/Cannon.lua) ===
-  -- A loop of track all the way round the sun — an irregular, zigzagging
-  -- ring of straights with a curved rail at every corner (see OUTLINE
-  -- below), and dressed
-  -- up along the way: a loop-the-loop on one straight, two on another, a
-  -- pinball pocket of bumpers on a third, an asteroid gauntlet on a
-  -- fourth. Once he's on it, he goes round and round, for ever (exits to
-  -- come later).
-  --
-  -- One way on, for now: a small planet just inside the ring, with a
-  -- cannon on top that fires him straight out at the expressway — its
-  -- route ending in an on-ramp: one last curve that lines him up exactly
-  -- with one of the expressway's straights, already heading its way (see
-  -- Cannon.trackMergeAt), never meeting any of the expressway's own
-  -- rails or bumpers. He starts the game (and respawns) on that planet,
-  -- beside its cannon: curl into a ball and jump in.
-  --
-  -- All of it well clear of the sun, the belt and every landmark —
-  -- checked below, with a warning printed if that's ever no longer true.
-  -- And random planetoids and asteroids are kept out of a lane down
-  -- every straight and round every rail and bumper (state.clearLanes —
-  -- see worldGen.isInClearLane), so normally nothing's in the way.
-  local SHOW_EXPRESSWAY = false -- false removes the expressway and its entry (and starts him at the shelter again)
-  if SHOW_EXPRESSWAY then
-    local ENTRY_PLANET_INSET = 6500 -- how far inside the ring the entry planet sits
-    local ENTRY_PLANET_RADIUS = 250
-    local CLEAR_LANE_HALF_WIDTH = 500
-    local RAIL_CLEARANCE = 250 -- beyond each rail's own curve (and each bumper)
-    local sunX, sunY = worldGen.sunPos()
-
-    -- The ring's corners, clockwise from the top, each as { angle round
-    -- the sun (degrees: -90 straight up, increasing clockwise), distance
-    -- from the sun }. Deliberately irregular: sides of every length,
-    -- corners anywhere from 21000 to 42500 out — and four switchbacks,
-    -- where it doubles back the way it came at a slant for a stretch
-    -- (3 to 4, 9 to 10, 14 to 15, 17 to 18) before swinging forward
-    -- again. (Each corner's a plain rail unless given something more —
-    -- see Cannon.new for what a corner can be.) Moving any of them: keep
-    -- the sides from crossing or crowding each other (7000 apart at the
-    -- closest, as it is), and well clear of the belt.
-    local OUTLINE = {
-      { -90, 30000 }, { -62, 34500 }, { -38, 27500 }, { -55, 20500 }, { -6, 22000 },
-      { 10, 33000 }, { 38, 28500 }, { 64, 36000 }, { 92, 31000 }, { 80, 41000 },
-      { 122, 42500 }, { 148, 33000 }, { 172, 26000 }, { 200, 30500 }, { 190, 38500 },
-      { 224, 40000 }, { 248, 32000 }, { 232, 24500 }, { 256, 21500 },
-    }
-    local corners = {}
-    for _, c in ipairs(OUTLINE) do
-      local a = math.rad(c[1])
-      corners[#corners + 1] = { sunX + math.cos(a) * c[2], sunY + math.sin(a) * c[2] }
-    end
-    -- (Corner n is reached by the straight from corner n-1 — so a
-    -- corner's loops and gauntlet are on the straight leading into it.)
-    corners[6].loops = 1         -- a loop-the-loop, down the right side
-    corners[11].loops = 2        -- two, one after the other, along the long bottom stretch
-    corners[12].gauntlet = true  -- an asteroid gauntlet, up the lower left
-    -- A corkscrew, down the lower right: CORKSCREW_LOOPS loops packed so
-    -- close they overlap like a stretched-out spring — round and round,
-    -- slowing to a rail's pace, then flung off the last one down the
-    -- rest of the straight (see the loopGap, loopsFirst and fling
-    -- options in Cannon.lua's buildTrack).
-    local CORKSCREW_LOOPS = 5
-    corners[9].loops = CORKSCREW_LOOPS
-    corners[9].loopRadius = 380
-    corners[9].loopGap = 300
-    corners[9].loopsFirst = true
-    corners[9].fling = true
-
-    -- Pinball pockets: bumpers in a tight zigzag either side of a
-    -- straight's line, he ping-pongs through before carrying on. Each:
-    -- on the straight from corner `from` to the next, `at` of the way
-    -- along it; `count` bumpers, `spacing` apart along it and `spread`
-    -- out to either side. (Kept off the straights with loops, the
-    -- gauntlet, and the entry's straight, corner 1 to 2.)
-    local POCKETS = {
-      { from = 2, at = 0.5, count = 5, spacing = 700, spread = 400 },
-      { from = 4, at = 0.45, count = 3, spacing = 800, spread = 350 },
-      { from = 7, at = 0.5, count = 5, spacing = 700, spread = 400 },
-      { from = 13, at = 0.5, count = 7, spacing = 650, spread = 380 },
-      { from = 15, at = 0.3, count = 3, spacing = 800, spread = 450 },
-      { from = 16, at = 0.55, count = 5, spacing = 700, spread = 420 },
-    }
-    -- (The bottom straight the south entry merges onto — see below —
-    -- noted before the pockets' bumpers are slotted in among the
-    -- corners, which renumbers them.)
-    local southLegA, southLegB = corners[10], corners[11]
-
-    -- (Inserted last straight first, so the earlier corners' numbers
-    -- stay put while it's done.)
-    table.sort(POCKETS, function(p, q) return p.from > q.from end)
-    for _, spec in ipairs(POCKETS) do
-      local a, b = corners[spec.from], corners[spec.from + 1]
-      local dx, dy = b[1] - a[1], b[2] - a[2]
-      local len = math.sqrt(dx * dx + dy * dy)
-      local ux, uy = dx / len, dy / len
-      local nx, ny = -uy, ux
-      local mx, my = a[1] + dx * spec.at, a[2] + dy * spec.at
-      for k = spec.count - 1, 0, -1 do
-        local along = (k - (spec.count - 1) / 2) * spec.spacing
-        local side = (k % 2 == 0) and spec.spread or -spec.spread
-        table.insert(corners, spec.from + 1,
-          { mx + ux * along + nx * side, my + uy * along + ny * side, bumper = true })
-      end
-    end
-
-    local expressway = Cannon.newTrack(corners)
-    state.expressway = expressway
-    state.cannons = { expressway }
-
-    -- The entries: each a planet inside the ring, ENTRY_PLANET_INSET in
-    -- from the middle of one of its straights (corner `a` to corner `b`)
-    -- — and its cannon, firing out at that straight and merging onto it
-    -- there. `mountAngle`: where on the planet the cannon sits (radians
-    -- from its centre); none, facing straight out at the straight.
-    local entryPlanets = {} -- { [planet] = true }, for every entry
-    local function makeEntry(a, b, mountAngle)
-      local midX, midY = (a[1] + b[1]) / 2, (a[2] + b[2]) / 2
-      local inX, inY = sunX - midX, sunY - midY
-      local inLen = math.sqrt(inX * inX + inY * inY)
-      inX, inY = inX / inLen, inY / inLen
-      local planet = Planetoid.new(midX + inX * ENTRY_PLANET_INSET, midY + inY * ENTRY_PLANET_INSET,
-        ENTRY_PLANET_RADIUS, { 0.5, 0.56, 0.68, 1 })
-      planet.isImmovable = true
-      planet.isPermanent = true
-      planet.vel = Vector2.new(0, 0)
-      table.insert(state.planetoids, planet)
-      entryPlanets[planet] = true
-      local cannon = Cannon.new(planet, mountAngle or math.atan2(-inY, -inX), nil, {},
-        Cannon.trackMergeAt(expressway, midX, midY))
-      table.insert(state.cannons, cannon)
-      return planet, cannon
-    end
-    -- The first, north of the sun: below the middle of the top straight
-    -- (corner 1 to 2), its cannon on top. He starts here (see below).
-    local entryPlanet, entryCannon = makeEntry(corners[1], corners[2], -math.pi / 2)
-    state.expresswayEntryPlanet = entryPlanet
-    -- The second, south of the sun: above the middle of the long bottom
-    -- straight (corner 10 to 11), its cannon underneath, facing down at it.
-    local southPlanet = makeEntry(southLegA, southLegB)
-    state.expresswaySouthEntryPlanet = southPlanet
-
-    -- The exits (see Cannon.newExit): one to each of these landmarks,
-    -- each with a flipper across the expressway — hold jump as he
-    -- reaches it and he bounces off it down the exit, crashing down on
-    -- the landmark like at the end of any cannon shot. For a rounded rectangle, onto the
-    -- middle of its top (nudged along it by `along` — a fraction of its
-    -- half-width, clear of the pinball planet's entry beam), coming
-    -- straight down from EXIT_APPROACH above it; for a round planet,
-    -- straight at its middle.
-    --
-    -- Each one leaves the expressway from whichever of its straights
-    -- gets it there shortest with nothing in the way: off the flipper
-    -- (turning him by at most EXIT_MAX_TURN), straight for the landmark
-    -- (or the point above it, then down). Never from the gauntlet's
-    -- straight, or too near either end of a straight (its corners'
-    -- curves); and never so that its way out crosses or crowds the
-    -- expressway's other straights or rails, the sun, the belt or
-    -- another landmark.
-    local EXIT_CURVE_RADIUS = 700 -- the curve down onto a rectangle's top
-    local EXIT_APPROACH = 2600
-    local EXIT_CLEARANCE = 1600  -- from the expressway's other straights and rails
-    local EXIT_END_MARGIN = 1300 -- from either end of the straight it leaves
-    local EXIT_LANDMARK_CLEARANCE = 500 -- from any other landmark's outline
-    local EXIT_MAX_TURN = math.rad(110) -- the sharpest it can curve off the straight
-    local EXIT_SAMPLE_STEP = 600 -- how finely each straight's tried for a place to leave from
-    local EXIT_TARGETS = {
-      { planet = state.beltLandingPlanet },
-      { planet = state.roundedRectPlanet, along = -0.3 },
-      { planet = state.pinballPlanet, along = 0.3 },
-    }
-    local _, beltOuterR = worldGen.beltRadii()
-    local function pointSegDist(x, y, ax, ay, bx, by)
-      local dx, dy = bx - ax, by - ay
-      local lenSq = dx * dx + dy * dy
-      local t = lenSq > 0 and math.max(0, math.min(1, ((x - ax) * dx + (y - ay) * dy) / lenSq)) or 0
-      return math.sqrt((x - ax - dx * t) ^ 2 + (y - ay - dy * t) ^ 2)
-    end
-    local function segSegDist(a, b, c, d)
-      local function cross(o, p, q) return (p[1] - o[1]) * (q[2] - o[2]) - (p[2] - o[2]) * (q[1] - o[1]) end
-      if cross(a, b, c) * cross(a, b, d) < 0 and cross(c, d, a) * cross(c, d, b) < 0 then return 0 end
-      return math.min(pointSegDist(a[1], a[2], c[1], c[2], d[1], d[2]), pointSegDist(b[1], b[2], c[1], c[2], d[1], d[2]),
-        pointSegDist(c[1], c[2], a[1], a[2], b[1], b[2]), pointSegDist(d[1], d[2], a[1], a[2], b[1], b[2]))
-    end
-    -- How near the segment a to b comes to landmark p's own outline: a
-    -- round one's circle; anything flat (a rounded rectangle, the dome)
-    -- its box — the dome's reaching up over its bubble. (Sampled along
-    -- the segment, which is plenty this far out.)
-    local function segClearance(p, a, b)
-      local len = math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
-      if not p.halfWidth then
-        return pointSegDist(p.pos.x, p.pos.y, a[1], a[2], b[1], b[2]) - (p.radius or 0)
-      end
-      local top = p.isSkyDome and (p.domeRadiusY or p.halfWidth) or p.halfHeight
-      local best = math.huge
-      for k = 0, math.max(1, math.ceil(len / 100)) do
-        local u = k / math.max(1, math.ceil(len / 100))
-        local x, y = a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u
-        local ox = math.max(0, math.abs(x - p.pos.x) - p.halfWidth)
-        local dy = y - p.pos.y
-        local oy = dy < 0 and math.max(0, -dy - top) or math.max(0, dy - p.halfHeight)
-        best = math.min(best, math.sqrt(ox * ox + oy * oy))
-      end
-      return best
-    end
-    -- Whether the legs of a would-be exit are clear. (Its first leg only
-    -- from EXIT_CLEARANCE on: it starts right on the expressway — on
-    -- piece `fromI` — and near that straight's own corners.)
-    local function exitIsClear(points, fromI, target)
-      for k = 1, #points - 1 do
-        local a, b = points[k], points[k + 1]
-        if k == 1 then
-          local len = math.sqrt((b[1] - a[1]) ^ 2 + (b[2] - a[2]) ^ 2)
-          local u = math.min(1, EXIT_CLEARANCE / len)
-          a = { a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u }
-        end
-        for i, pc in ipairs(expressway.pieces) do
-          if pc.kind == "line" and i ~= fromI and segSegDist(a, b, pc.from, pc.to) < EXIT_CLEARANCE then return false, "the expressway itself" end
-        end
-        for _, rail in ipairs(expressway.rails) do
-          if pointSegDist(rail.cx, rail.cy, a[1], a[2], b[1], b[2]) < rail.radius + EXIT_CLEARANCE then return false, "the expressway itself" end
-        end
-        for _, bp in ipairs(expressway.bumpers) do
-          if pointSegDist(bp.x, bp.y, a[1], a[2], b[1], b[2]) < bp.radius + EXIT_CLEARANCE then return false, "the expressway itself" end
-        end
-        if pointSegDist(sunX, sunY, a[1], a[2], b[1], b[2]) < beltOuterR + 200 then return false, "the belt" end
-        for _, p in ipairs(state.planetoids) do
-          -- (Its own landmark only counts on the last leg — the one
-          -- that's meant to hit it.)
-          if (p ~= target or k < #points - 1) and not entryPlanets[p] and p.pos
-              and segClearance(p, a, b) < EXIT_LANDMARK_CLEARANCE then
-            return false, string.format("a landmark at (%.0f, %.0f)", p.pos.x, p.pos.y)
-          end
-        end
-      end
-      return true
-    end
-    state.expresswayExits = {}
-    for _, spec in ipairs(EXIT_TARGETS) do
-      local target = spec.planet
-      if target then
-        -- Where the route's aimed: straight at a round planet's middle;
-        -- for a rounded rectangle, a point above its top, then down onto it.
-        local tail
-        if target.isRoundedRect then
-          local landX = target.pos.x + (spec.along or 0) * target.halfWidth
-          local landY = target.pos.y - target.halfHeight
-          tail = { { landX, landY - EXIT_APPROACH, radius = EXIT_CURVE_RADIUS }, { landX, landY } }
-        else
-          tail = { { target.pos.x, target.pos.y } }
-        end
-        local aimX, aimY = tail[1][1], tail[1][2]
-        local best, nearestBlocker
-        for i, pc in ipairs(expressway.pieces) do
-          if pc.kind == "line" and not pc.gauntlet then
-            local dx, dy = pc.dir[1], pc.dir[2]
-            local len = math.sqrt((pc.to[1] - pc.from[1]) ^ 2 + (pc.to[2] - pc.from[2]) ^ 2)
-            for s = EXIT_END_MARGIN, len - EXIT_END_MARGIN, EXIT_SAMPLE_STEP do
-              -- (The flipper's here, at q.)
-              local qx, qy = pc.from[1] + dx * s, pc.from[2] + dy * s
-              local points = { { qx, qy } }
-              for _, p in ipairs(tail) do points[#points + 1] = p end
-              local length = math.sqrt((aimX - qx) ^ 2 + (aimY - qy) ^ 2)
-              local ox, oy = (aimX - qx) / length, (aimY - qy) / length
-              -- (Not too sharp a bounce off the straight; and coming down
-              -- onto a rectangle's top, not up from below it, which would
-              -- need a hairpin back down at the point above.)
-              local tooSharp = math.acos(math.max(-1, math.min(1, ox * dx + oy * dy))) > EXIT_MAX_TURN
-              local fromBelow = target.isRoundedRect and oy < -0.3
-              if not tooSharp and not fromBelow and (not best or length < best.length) then
-                local clear, blocker = exitIsClear(points, i, target)
-                if clear then
-                  best = { piece = i, points = points, length = length }
-                elseif not nearestBlocker or length < nearestBlocker.length then
-                  nearestBlocker = { length = length, what = blocker }
-                end
-              end
-            end
-          end
-        end
-        if best then
-          local exit = Cannon.newExit(expressway, best.piece, best.points, target)
-          table.insert(state.cannons, exit)
-          table.insert(state.expresswayExits, exit)
-        else
-          print(string.format("main.lua: no clear way off the expressway to the landmark at (%.0f, %.0f) — no exit made for it (in the way: %s).",
-            target.pos.x, target.pos.y, nearestBlocker and nearestBlocker.what or "no straight lines up with it"))
-        end
-      end
-    end
-
-    -- A clear lane down every straight of every route (corner to corner —
-    -- and, round the expressway, from its last corner back to its first),
-    -- and round every rail and bumper (a loop's whole ring reaches well
-    -- past its straight).
-    state.clearLanes = {}
-    local isOurs = {}
-    for p in pairs(entryPlanets) do isOurs[p] = true end
-    local function segmentsOf(cannon)
-      local route, segs = cannon.points, {}
-      for i = 1, #route - 1 do segs[#segs + 1] = { route[i], route[i + 1] } end
-      if cannon.closed then segs[#segs + 1] = { route[#route], route[1] } end
-      return segs
-    end
-    for _, cannon in ipairs(state.cannons) do
-      if cannon.ledge then isOurs[cannon.ledge] = true end
-      for _, s in ipairs(segmentsOf(cannon)) do
-        table.insert(state.clearLanes, { s[1][1], s[1][2], s[2][1], s[2][2], CLEAR_LANE_HALF_WIDTH })
-      end
-      -- (Rails and bumpers alike: a circle round each.)
-      cannon.clearCircles = {}
-      for _, rail in ipairs(cannon.rails) do table.insert(cannon.clearCircles, { rail.cx, rail.cy, rail.radius }) end
-      for _, b in ipairs(cannon.bumpers) do table.insert(cannon.clearCircles, { b.x, b.y, b.radius }) end
-      for _, c in ipairs(cannon.clearCircles) do
-        table.insert(state.clearLanes, { c[1], c[2], c[1], c[2], c[3] + RAIL_CLEARANCE })
-      end
-    end
-
-    -- Each route's own sanity check: nearest it comes to the sun (versus
-    -- the belt's outer edge), and to every landmark that exists so far —
-    -- down its straights, and round its rails and bumpers (each taken as
-    -- its whole circle). The entry planet and its cannon don't count.
-    local function nearestOnRoute(cannon, x, y)
-      local best = math.huge
-      for _, s in ipairs(segmentsOf(cannon)) do
-        local ax, ay, bx, by = s[1][1], s[1][2], s[2][1], s[2][2]
-        local dx, dy = bx - ax, by - ay
-        local t = math.max(0, math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
-        best = math.min(best, math.sqrt((x - (ax + dx * t)) ^ 2 + (y - (ay + dy * t)) ^ 2))
-      end
-      for _, c in ipairs(cannon.clearCircles) do
-        local d = math.sqrt((x - c[1]) ^ 2 + (y - c[2]) ^ 2) - (c[3] + RAIL_CLEARANCE)
-        best = math.min(best, math.max(0, d))
-      end
-      return best
-    end
-    local _, beltOuter = worldGen.beltRadii()
-    -- (The exits were checked already, as they were laid out.)
-    for n, cannon in ipairs(state.cannons) do if not cannon.isExit then
-      local name = cannon.isTrack and "the expressway" or string.format("cannon %d", n)
-      if nearestOnRoute(cannon, sunX, sunY) < beltOuter + CLEAR_LANE_HALF_WIDTH then
-        print(string.format("main.lua: %s passes through the asteroid belt or the sun — move one of its corners.", name))
-      end
-      for _, p in ipairs(state.planetoids) do
-        if not isOurs[p] then
-          local reach = (p.radius or math.max(p.halfWidth or 0, p.halfHeight or 0)) + CLEAR_LANE_HALF_WIDTH
-          if nearestOnRoute(cannon, p.pos.x, p.pos.y) < reach then
-            print(string.format("main.lua: %s passes close to a landmark at (%.0f, %.0f).", name, p.pos.x, p.pos.y))
-          end
-        end
-      end
-    end end
-
-    -- For START_AT = "expressway" (top of this file).
-    expresswayEntry = { planet = entryPlanet, cannon = entryCannon }
-  end
-
-  -- Missile outposts just past the asteroid belt's outer edge (see
-  -- lua/world/MissileOutpost.lua): three small planets, each with a
-  -- missile cannon and an Ooomba that mans it once he comes near. Random
-  -- spawns are kept off them.
-  local SHOW_MISSILE_OUTPOSTS = true
-  if SHOW_MISSILE_OUTPOSTS then
-    local sunX, sunY = worldGen.sunPos()
-    local beltInner, beltOuter = worldGen.beltRadii()
-    state.outposts = MissileOutpost.createAll(sunX, sunY, beltInner, beltOuter)
-    state.clearLanes = state.clearLanes or {}
-    for _, o in ipairs(state.outposts) do
-      local p = o.planet
-      table.insert(state.clearLanes, { p.pos.x, p.pos.y, p.pos.x, p.pos.y, p.radius + 700 })
-    end
-  end
+  -- Every hand-placed landmark, the dome's Tiled interior and the
+  -- player (see lua/levels/World.lua).
+  local world = World.build()
 
   -- Testing start spot (START_AT, top of this file), now that every
   -- planet it could pick exists.
-  applyStartPosition(expresswayEntry)
+  applyStartPosition(world.expresswayEntry)
 
   -- Stream the 3x3 around the house, not world center — must run AFTER
   -- the dome above is created and assigned to state.skyDomePlanet, not
@@ -1605,7 +313,7 @@ function love.load()
   -- only do that for cells generated while state.skyDomePlanet is
   -- already set — which, for this exact starting neighborhood, is
   -- every cell that actually overlaps the dome's home area.
-  worldGen.generateStartingNeighborhood(HOME_CELL_COL, HOME_CELL_ROW)
+  worldGen.generateStartingNeighborhood(World.HOME_CELL_COL, World.HOME_CELL_ROW)
 
   state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 1920)
 
@@ -1618,153 +326,9 @@ function love.load()
   -- the rebuild isn't a hard cut.
   TitleScreen.enter(not firstLoad)
 
-  -- Pointed at the player from the very first frame. love.update keeps
-  -- this current from here on, but a draw can come before the first
-  -- update after a rebuild — and worldGen streams the world around the
-  -- camera (see worldGen.streamFocus), which must not be last game's.
-  state.visibleWidth = love.graphics.getWidth() / state.zoom
-  state.visibleHeight = love.graphics.getHeight() / state.zoom
-  state.camera = {
-    x = state.player.pos.x - state.visibleWidth / 2,
-    y = state.player.pos.y - state.visibleHeight / 2,
-  }
-end
-
--- Plain debris burst — port of js/utils.js's createParticles: `count`
--- of Particle.lua's default small yellow particles thrown out in every
--- direction.
-local function spawnDebrisParticles(pos, count)
-  for _ = 1, count do
-    local angle = math.random() * math.pi * 2
-    local speed = math.random() * 4 + 2
-    table.insert(state.particles, Particle.new(pos, Vector2.new(math.cos(angle) * speed, math.sin(angle) * speed)))
-  end
-end
-
--- What happens when a cluster of prisms takes its last shot (see
--- Prism.DESTROY_HITS): every prism of it goes up in an explosion and is
--- gone for good, and RUBINIUM_PER_CLUSTER pieces of rubinium (see
--- lua/entities/ElementPiece.lua) are thrown out of the wreck — each from
--- somewhere along one of the prisms, out the way that prism pointed —
--- and then make their own way to him.
---
--- prism: any one prism of the cluster.
-local RUBINIUM_PER_CLUSTER = 6
-local function breakPrismCluster(prism)
-  local cluster = prism.group.prisms
-
-  local gone = {}
-  for _, p in ipairs(cluster) do
-    gone[p] = true
-    local x, y = p:pointAlong(0.5)
-    table.insert(state.explosions, Explosion.new(x, y))
-  end
-  for i = #state.prisms, 1, -1 do
-    if gone[state.prisms[i]] then table.remove(state.prisms, i) end
-  end
-
-  local midX, midY = cluster[1]:pointAlong(0.5)
-  spawnDebrisParticles(Vector2.new(midX, midY), 60)
-  if state.audioManager then state.audioManager:playBang("large", Vector2.new(midX, midY)) end
-
-  for _ = 1, RUBINIUM_PER_CLUSTER do
-    local from = cluster[math.random(#cluster)]
-    local x, y, dirX, dirY = from:pointAlong(0.2 + math.random() * 0.7)
-    table.insert(state.elementPieces, ElementPiece.new("rubinium", x, y, dirX, dirY))
-  end
-end
-
--- Port of js/game.js's breakAsteroid — what happens to an asteroid
--- that's hit a planetoid or been shot: it's gone in a bang and a burst
--- of debris, and unless it was already small (radius under 15) it
--- leaves 2 smaller asteroids behind (3 if it was a big one, radius over
--- 30), each half its radius, flung apart.
---
--- One too small to leave any pieces (radius under ASTEROID_SPLIT_MIN_RADIUS)
--- just bursts.
---
--- Asteroidium (see lua/entities/ElementPiece.lua), only when it was
--- SHOT: a too-small one always leaves some; a bigger one has an
--- ASTEROIDIUM_CHANCE chance of leaving some INSTEAD of breaking into
--- smaller asteroids. How many is part size, part luck — see
--- asteroidiumCountFor. (The title screen's autopilot earns it too; what
--- it collected is thrown away when the game starts — see
--- TitleScreen.lua's own beginGame.)
---
--- planet: the planetoid it hit, or nil if it was shot. One deliberate
--- difference from the JS, for a round planetoid only: the pieces are
--- thrown AWAY from its surface, off the planetoid's own velocity. The
--- original threw them in any direction off the asteroid's own inbound
--- velocity, which sent about half of them straight back into the
--- planetoid to break again the very next frame.
-local ASTEROID_SPLIT_MIN_RADIUS = 15
-local ASTEROIDIUM_CHANCE = 0.3
--- The radius at which an asteroid gives the most it can (anything
--- bigger gives the same) — about the biggest the field generates.
-local ASTEROIDIUM_FULL_RADIUS = 45
-
--- How many pieces a shot asteroid of this radius leaves: a random number
--- in a range that climbs with its size — 1 to 2 for the smallest, 2 to 4
--- for a middling one, 3 to 6 for the biggest.
-local function asteroidiumCountFor(radius)
-  local size = (radius - ASTEROID_SPLIT_MIN_RADIUS) / (ASTEROIDIUM_FULL_RADIUS - ASTEROID_SPLIT_MIN_RADIUS)
-  size = math.max(0, math.min(1, size))
-  return math.random(1 + math.floor(size * 2), 2 + math.floor(size * 4 + 0.5))
-end
-
-local function breakAsteroid(ast, planet)
-  for i = #state.asteroids, 1, -1 do
-    if state.asteroids[i] == ast then
-      table.remove(state.asteroids, i)
-      break
-    end
-  end
-
-  if state.audioManager then
-    local size = (ast.radius > 30 and "large") or (ast.radius > 20 and "medium") or "small"
-    state.audioManager:playBang(size, ast.pos)
-  end
-  spawnDebrisParticles(ast.pos, 150)
-  local tooSmallToSplit = ast.radius < ASTEROID_SPLIT_MIN_RADIUS
-  if not planet and (tooSmallToSplit or math.random() < ASTEROIDIUM_CHANCE) then
-    for _ = 1, asteroidiumCountFor(ast.radius) do
-      local angle = math.random() * math.pi * 2
-      -- Starting a little way out from its middle, more for a bigger one.
-      local out = math.random() * ast.radius * 0.6
-      table.insert(state.elementPieces, ElementPiece.new("asteroidium",
-        ast.pos.x + math.cos(angle) * out, ast.pos.y + math.sin(angle) * out, math.cos(angle), math.sin(angle)))
-    end
-    return
-  end
-  if tooSmallToSplit then return end
-
-  local awayAngle, baseVel = nil, ast.vel
-  if planet and planet.radius and not planet.isRoundedRect then
-    awayAngle = math.atan2(ast.pos.y - planet.pos.y, ast.pos.x - planet.pos.x)
-    baseVel = planet.vel or ast.vel
-  end
-
-  local pieceCount = ast.radius > 30 and 3 or 2
-  for _ = 1, pieceCount do
-    local piece = Asteroid.new(ast.pos.x, ast.pos.y, ast.radius / 2)
-    local angle = awayAngle and (awayAngle + (math.random() - 0.5) * math.pi * 0.8) or (math.random() * math.pi * 2)
-    local speed = 2 + math.random() * 3
-    piece.vel = Vector2.new(baseVel.x + math.cos(angle) * speed, baseVel.y + math.sin(angle) * speed)
-    piece.angle = math.random() * math.pi * 2
-    piece.angularSpeed = (math.random() * 2 - 1) * 0.1
-    -- A title-screen asteroid's pieces stay title-screen asteroids (see
-    -- TitleScreen.lua's own updateTitleAsteroids): same idea, a drift
-    -- relative to the belt's orbit, worked out from the velocity each
-    -- piece was just given.
-    if ast.titleDrift then
-      piece.titleDrift = {
-        x = piece.vel.x - (ast.vel.x - ast.titleDrift.x),
-        y = piece.vel.y - (ast.vel.y - ast.titleDrift.y),
-      }
-    end
-    table.insert(state.asteroids, piece)
-  end
-  spawnDebrisParticles(ast.pos, 10)
+  -- Pointed at the player from the very first frame (love.update keeps
+  -- it current from here on).
+  Camera.pointAtPlayer()
 end
 
 local function updatePlanetoidsPhysics()
@@ -1794,6 +358,36 @@ local function updatePlanetoidsPhysics()
       end
     end
   end
+end
+
+-- Is he anywhere in the Sky Dome level? Standing on (or last pulled by)
+-- the dome's deck or any of its Tiled level's tiles (each tile is its own
+-- "planet" — see shape.inSkyDome where the level is loaded), or simply
+-- somewhere inside the dome's glass, e.g. mid-jump or shot from a plunger.
+local function isInSkyDome(player)
+  local dome = state.skyDomePlanet
+  if not dome then return false end
+  local planet = player.currentPlanet or player.lastInfluencePlanet
+  if planet and (planet == dome or planet.inSkyDome) then return true end
+  return dome:containsPoint(player.pos.x, player.pos.y)
+end
+
+-- Is he in one of the asteroid belt's cells (the same cells the belt-cell
+-- debug overlay highlights — see worldGen.cellIntersectsBelt)?
+local function isInBeltCell(player)
+  local col = math.floor(player.pos.x / worldGen.CELL_SIZE)
+  local row = math.floor(player.pos.y / worldGen.CELL_SIZE)
+  return worldGen.cellIntersectsBelt(col, row)
+end
+
+-- Which background music should be playing right now (a track name from
+-- lua/AudioManager.lua's MUSIC table, or nil for none). None on the
+-- title screen. The Sky Dome wins where it overlaps belt cells.
+local function musicForPlayer()
+  if state.titleScreen or not state.player then return nil end
+  if isInSkyDome(state.player) then return 'skyDome' end
+  if isInBeltCell(state.player) then return 'belt' end
+  return nil
 end
 
 function love.update(dt)
@@ -1838,6 +432,9 @@ function love.update(dt)
 
   TitleScreen.update(dt)
   VatsCursor.update(dt)
+
+  -- Background music fades to suit where he is (see lua/AudioManager.lua).
+  if state.audioManager then state.audioManager:updateMusic(musicForPlayer(), dt) end
 
   -- Normalizes this frame's real elapsed time to "how many 60fps-baseline
   -- frames this update represents" (1.0 at exactly 60fps) — clamped so a
@@ -1906,166 +503,16 @@ function love.update(dt)
   -- carried along on one that's rewinding. See lua/systems/Recall.lua.
   Recall.update(dt)
 
-  -- Rocks swinging on ropes — before the player moves, so one standing on
-  -- a rock is carried along (see lua/world/RopeRock.lua).
-  if state.ropeRocks then
-    for _, rr in ipairs(state.ropeRocks) do rr:update(state.timeScale) end
-  end
+  -- Everything in the world's object lists (rope rocks, asteroids, coins,
+  -- Ooombas, fire bars, levers, fish, NPCs, ...) — before the player
+  -- moves, so one standing on a rope rock is carried along. Order and
+  -- details: lua/systems/WorldObjects.lua.
+  WorldObjects.update("world", dt)
 
-  if state.asteroids then
-    for _, a in ipairs(state.asteroids) do
-      a:update()
-    end
-  end
-
-  if state.coins then
-    for _, c in ipairs(state.coins) do
-      c:update()
-    end
-  end
-
-  if state.ooombas then
-    for i = #state.ooombas, 1, -1 do
-      local o = state.ooombas[i]
-      o:update()
-      -- Flung off through a portal and never came down (see Ooomba:updateAirborne).
-      if o.lost then table.remove(state.ooombas, i) end
-    end
-  end
-
-  -- The belt outposts: their Ooombas noticing him, manning the cannons,
-  -- and the homing missiles (see lua/world/MissileOutpost.lua). Not while
-  -- the title screen's own autopilot is playing.
-  if state.outposts then
-    if state.titleScreen then
-      MissileOutpost.restock(state.outposts)
-    else
-      MissileOutpost.updateAll(state.outposts, state.player)
-    end
-  end
-
-  if state.fireBars then
-    for _, bar in ipairs(state.fireBars) do
-      bar:update()
-    end
-  end
-
-  if state.lavas then
-    Lava.updateSharedClock()
-    for _, lava in ipairs(state.lavas) do
-      lava:update()
-    end
-  end
-
-  WaterPlanet.updateSharedClock()
-  Spikey.updateSharedClock()
-
-  -- Duck-typed: a plain Spikey has no :update() at all (it never
-  -- moves), only SpikeyVertical does — this one loop covers both kinds
-  -- without state.spikeys needing to be split into separate lists.
-  if state.spikeys then
-    for _, sp in ipairs(state.spikeys) do
-      if sp.update then sp:update() end
-    end
-  end
-
-  if state.levers then
-    for _, lever in ipairs(state.levers) do
-      lever:update()
-    end
-  end
-
-  if state.cranks then
-    for _, crank in ipairs(state.cranks) do
-      crank:update()
-    end
-  end
-
-  if state.signs then
-    for _, sign in ipairs(state.signs) do
-      sign:update()
-    end
-  end
-
-  if state.mirrors then
-    for _, mirror in ipairs(state.mirrors) do
-      mirror:update()
-    end
-  end
-
-  if state.beams then
-    for _, beam in ipairs(state.beams) do
-      beam:update()
-    end
-  end
-
-  if state.gates then
-    for _, gate in ipairs(state.gates) do
-      gate:update(state.timeScale or 1)
-    end
-  end
-
-  if state.fish then
-    for _, fish in ipairs(state.fish) do
-      fish:update()
-    end
-  end
-
-  -- Held at the very start of its opening sequence for as long as the
-  -- title screen is up (see TitleScreen.lua) — the door only starts
-  -- opening once the game has actually begun.
-  if state.spaceShelter and not state.titleScreen then
-    state.spaceShelter:update(dt)
-    if state.introLocked and state.spaceShelter.introDone then
-      state.introLocked = false
-    end
-  end
-
-  if state.robotButler then
-    state.robotButler:update()
-  end
-
-  if state.fisherman then
-    state.fisherman:update()
-  end
-
-  if state.prisms then
-    for _, prism in ipairs(state.prisms) do
-      prism:update(dt * (state.timeScale or 1))
-    end
-  end
-
-  -- Rubinium and asteroidium on their way to him (see
-  -- lua/entities/ElementPiece.lua): each piece that arrives is counted
-  -- and gone.
-  for i = #state.elementPieces, 1, -1 do
-    local piece = state.elementPieces[i]
-    piece:update(dt * (state.timeScale or 1), state.player)
-    if piece.collected then
-      state.elements[piece.elementName] = state.elements[piece.elementName] + 1
-      if state.audioManager then state.audioManager:playEatDot() end
-      table.remove(state.elementPieces, i)
-    end
-  end
-
-  -- Recomputed fresh every frame (never a flag some NPC sets and might
-  -- forget to clear) from whichever NPCs actually have a dialogue box
-  -- open right now — Player.lua reads this to freeze movement/jumping
-  -- for as long as any conversation is showing, same "empty keys" trick
-  -- state.introLocked already uses just below, generalized to cover
-  -- every NPC's own dialogueActive rather than hardcoding one.
-  state.dialogueActive = (state.robotButler and state.robotButler.dialogueActive)
-    or (state.fisherman and state.fisherman.dialogueActive)
-    or false
-
-  if state.signs then
-    for _, sign in ipairs(state.signs) do
-      if sign.dialogueActive then
-        state.dialogueActive = true
-        break
-      end
-    end
-  end
+  -- Player.lua reads this to freeze movement/jumping for as long as any
+  -- conversation is showing, same "empty keys" trick state.introLocked
+  -- uses just below.
+  state.dialogueActive = WorldObjects.anyDialogueActive()
 
   -- Empty keys while the opening cutscene is running — the player
   -- still stands on the deck normally (gravity/collision below are
@@ -2298,10 +745,10 @@ function love.update(dt)
     -- be an empty stub.
     collisionSystem:handleElasticCollisions(state.asteroids)
 
-    -- An asteroid that hits a planetoid breaks apart — see breakAsteroid.
+    -- An asteroid that hits a planetoid breaks apart — see Breakage.breakAsteroid.
     local toBreak = collisionSystem:handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids)
     for asteroid, planet in pairs(toBreak) do
-      breakAsteroid(asteroid, planet)
+      Breakage.breakAsteroid(asteroid, planet)
     end
   end
 
@@ -2319,249 +766,13 @@ function love.update(dt)
   -- Spraying, droplets, and water flowing/pooling/evaporating.
   WaterSystem.update(dt)
 
-  if state.fireballs then
-    for i = #state.fireballs, 1, -1 do
-      local f = state.fireballs[i]
-      f:update()
-      if f:isDead() then
-        table.remove(state.fireballs, i)
-      end
-    end
+  -- Fireballs and ice bolts: moving, through portals, and everything they
+  -- can hit (see lua/systems/Projectiles.lua).
+  Projectiles.update(collisionSystem, collidablePlanetoids)
 
-    -- Through a portal, before anything below can see one hit the
-    -- portal's own surface (see PortalGun.passFireballs).
-    PortalGun.passFireballs(state.fireballs, state.timeScale)
-
-    -- Into water: it goes out in a burst of steam, boiling some of the
-    -- water off (see WaterSystem.quenchFireball).
-    for i = #state.fireballs, 1, -1 do
-      if WaterSystem.quenchFireball(state.fireballs[i]) then
-        table.remove(state.fireballs, i)
-      end
-    end
-
-    -- Into a frozen Ooomba's ice cube: the ice melts into a splash of
-    -- water and steam, and the Ooomba walks on, unharmed (see
-    -- WaterSystem.fireHitsIce). (The level's ice blocks are walls: the
-    -- wall pass below melts those.)
-    for i = #state.fireballs, 1, -1 do
-      local f = state.fireballs[i]
-      if WaterSystem.fireHitsIce(f) then
-        table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
-        table.remove(state.fireballs, i)
-      end
-    end
-
-    if #state.fireballs > 0 then
-      -- Mirrors get first look: a reflected fireball just had its
-      -- velocity/position adjusted, not destroyed, so it's excluded
-      -- below from every destructive check this same frame (its new
-      -- position is only a few pixels off the mirror's own face, not
-      -- far enough to trust a fresh destructive check against
-      -- whatever's sitting right next to it).
-      local reflected = state.mirrors and collisionSystem:handleFireballMirrorCollisions(state.fireballs, state.mirrors) or {}
-
-      -- Prisms (see lua/world/Prism.lua): a fireball that reaches one
-      -- goes off against it, and the whole cluster it belongs to lights
-      -- up — and, on its last hit, shatters into rubinium (see
-      -- breakPrismCluster). Checked before the planetoids below, since every prism is
-      -- standing on one.
-      if state.prisms then
-        for i = #state.fireballs, 1, -1 do
-          local f = state.fireballs[i]
-          local prism = not reflected[f] and Prism.findAt(state.prisms, f.pos.x, f.pos.y, f.radius)
-          if prism then
-            local shattered = prism:hit()
-            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
-            if state.audioManager then state.audioManager:playFireball() end
-            table.remove(state.fireballs, i)
-            if shattered then breakPrismCluster(prism) end
-          end
-        end
-      end
-
-      if state.asteroids then
-        local hitFireballs, toBreakAsteroids, planetHits = collisionSystem:handleFireballCollisions(
-          state.fireballs, collidablePlanetoids, state.asteroids
-        )
-        -- A shot asteroid breaks apart the same way one that hits a
-        -- planetoid does (see breakAsteroid), plus the fireball's own
-        -- explosion.
-        for a in pairs(toBreakAsteroids) do
-          table.insert(state.explosions, Explosion.new(a.pos.x, a.pos.y))
-          if state.audioManager then state.audioManager:playFireball() end
-          breakAsteroid(a, nil)
-        end
-        for _, hit in ipairs(planetHits) do
-          if not reflected[hit.fireball] then
-            table.insert(state.explosions, Explosion.new(hit.fireball.pos.x, hit.fireball.pos.y))
-            if state.audioManager then state.audioManager:playFireball() end
-            -- An obsidian or ice block's walkable top: the block itself
-            -- melts (see WaterSystem.fireHitsWall).
-            if hit.planet.blockWall then WaterSystem.fireHitsWall(hit.planet.blockWall) end
-            -- Breakable planets (see lua/world/CrackedPlanetoid.lua) lose bricks.
-            if hit.planet.takeHit then
-              local f = hit.fireball
-              hit.planet:takeHit(f.pos.x, f.pos.y, f.vel.x, f.vel.y)
-            end
-          end
-        end
-        for i = #state.fireballs, 1, -1 do
-          if hitFireballs[state.fireballs[i]] and not reflected[state.fireballs[i]] then
-            table.remove(state.fireballs, i)
-          end
-        end
-      end
-
-      -- Into a ball-tunnel piece (see TiledTerrain.lua's Level:tunnelSolidAt).
-      if state.tiledLevels then
-        for i = #state.fireballs, 1, -1 do
-          local f = state.fireballs[i]
-          for _, level in ipairs(state.tiledLevels) do
-            if level:tunnelSolidAt(f.pos.x, f.pos.y) then
-              table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
-              if state.audioManager then state.audioManager:playFireball() end
-              table.remove(state.fireballs, i)
-              break
-            end
-          end
-        end
-      end
-
-      -- WALL tiles (not Gate — see handleFireballWallCollisions' own
-      -- comment): a fireball explodes against one exactly like it does
-      -- against a planet or asteroid, instead of silently flying
-      -- straight through.
-      if state.tiledLevels and #state.fireballs > 0 then
-        local hitWallFireballs = {}
-        for _, level in ipairs(state.tiledLevels) do
-          local hits = collisionSystem:handleFireballWallCollisions(state.fireballs, level.walls)
-          for f, wall in pairs(hits) do hitWallFireballs[f] = wall end
-        end
-        for i = #state.fireballs, 1, -1 do
-          local f = state.fireballs[i]
-          if hitWallFireballs[f] and not reflected[f] then
-            -- (An obsidian block starts melting back into lava; an ice
-            -- block melts into water.)
-            WaterSystem.fireHitsWall(hitWallFireballs[f])
-            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
-            if state.audioManager then state.audioManager:playFireball() end
-            table.remove(state.fireballs, i)
-          end
-        end
-      end
-
-      -- Lever: a fireball hitting one engages it (see Lever:engage,
-      -- shared with the player's own direct pull) and detonates the
-      -- fireball, same "something solid stopped it" treatment as a
-      -- wall tile.
-      if state.levers and #state.fireballs > 0 then
-        local hitLeverFireballs = collisionSystem:handleFireballLeverCollisions(state.fireballs, state.levers)
-        for i = #state.fireballs, 1, -1 do
-          local f = state.fireballs[i]
-          if hitLeverFireballs[f] and not reflected[f] then
-            table.insert(state.explosions, Explosion.new(f.pos.x, f.pos.y))
-            if state.audioManager then state.audioManager:playFireball() end
-            table.remove(state.fireballs, i)
-          end
-        end
-      end
-
-      -- Ooomba: a fireball kills one outright — it's gone in an
-      -- explosion (Explosion.lua's own ring/flash/particle burst), and
-      -- the fireball is spent.
-      if state.ooombas and #state.ooombas > 0 and #state.fireballs > 0 then
-        local hitOoombaFireballs, killedOoombas = collisionSystem:handleFireballOoombaCollisions(state.fireballs, state.ooombas)
-        for i = #state.ooombas, 1, -1 do
-          local o = state.ooombas[i]
-          if killedOoombas[o] then
-            table.insert(state.explosions, Explosion.new(o.pos.x, o.pos.y))
-            if state.audioManager then state.audioManager:playFireball() end
-            table.remove(state.ooombas, i)
-          end
-        end
-        for i = #state.fireballs, 1, -1 do
-          if hitOoombaFireballs[state.fireballs[i]] then
-            table.remove(state.fireballs, i)
-          end
-        end
-      end
-    end
-  end
-
-  -- Ice bolts (the ice blaster's — see lua/entities/IceBolt.lua): water
-  -- they reach freezes into an ice block, lava turns to water (and so to
-  -- obsidian) — see WaterSystem.iceBoltHit — and an Ooomba they hit is
-  -- frozen in an ice cube. Anything else solid, they shatter on.
-  if state.iceBolts and #state.iceBolts > 0 then
-    for i = #state.iceBolts, 1, -1 do
-      local b = state.iceBolts[i]
-      b:update()
-      if b:isDead() then table.remove(state.iceBolts, i) end
-    end
-    PortalGun.passFireballs(state.iceBolts, state.timeScale)
-    for i = #state.iceBolts, 1, -1 do
-      local b = state.iceBolts[i]
-      local hit = WaterSystem.iceBoltHit(b)
-      if not hit then
-        for _, o in ipairs(state.ooombas or {}) do
-          if not o.frozen and not o.isSquashing and not o.portalTransit then
-            local dx, dy = b.pos.x - o.pos.x, b.pos.y - o.pos.y
-            local r = b.radius + o.hitRadius * 1.3
-            if dx * dx + dy * dy < r * r then
-              WaterSystem.encaseOoomba(o)
-              hit = true
-              break
-            end
-          end
-        end
-      end
-      if not hit then
-        for _, level in ipairs(state.tiledLevels or {}) do
-          if next(collisionSystem:handleFireballWallCollisions({ b }, level.walls)) then hit = true end
-        end
-      end
-      if not hit then
-        local hitBolts = collisionSystem:handleFireballCollisions({ b }, collidablePlanetoids, {})
-        hit = hitBolts[b] or false
-      end
-      if hit then
-        IceBolt.burst(b.pos.x, b.pos.y, 12)
-        table.remove(state.iceBolts, i)
-      end
-    end
-  end
-
-  -- Explosions: purely time-driven visuals (see lua/entities/Explosion.lua)
-  if state.explosions then
-    for i = #state.explosions, 1, -1 do
-      state.explosions[i]:update()
-      if state.explosions[i]:isDead() then
-        table.remove(state.explosions, i)
-      end
-    end
-  end
-
-  -- Wall-jump contact rings: purely time-driven visuals, same pattern as
-  -- explosions above (see lua/entities/WallContactPulse.lua)
-  if state.wallContactPulses then
-    for i = #state.wallContactPulses, 1, -1 do
-      state.wallContactPulses[i]:update()
-      if state.wallContactPulses[i]:isDead() then
-        table.remove(state.wallContactPulses, i)
-      end
-    end
-  end
-
-  -- Debris/death particles (explosion bursts, etc. — see lua/entities/Particle.lua)
-  if state.particles then
-    for i = #state.particles, 1, -1 do
-      state.particles[i]:update()
-      if state.particles[i].life <= 0 then
-        table.remove(state.particles, i)
-      end
-    end
-  end
+  -- Explosions, wall-jump contact rings and debris particles: purely
+  -- time-driven visuals (see lua/systems/WorldObjects.lua).
+  WorldObjects.update("effects", dt)
 
   BeltOrbit.apply(state.planetoids)
 
@@ -2581,151 +792,8 @@ function love.update(dt)
     worldGen.updateBeltSpawning()
   end
 
-  -- Manual zoom input is ignored while CameraDirector.lua is actively
-  -- directing (a scripted sequence — see RobotButler.lua's own intro
-  -- script) — fighting a scripted camera move with +/- would just look
-  -- broken, and it releases control back on its own once the sequence
-  -- ends anyway.
-  if not CameraDirector.isActive() then
-    if state.keys['+'] or state.keys['='] then
-      state.zoom = math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME)
-      state.zoomTarget = nil
-    end
-    if state.keys['-'] or state.keys['_'] then
-      state.zoom = math.max(ZOOM_MIN, state.zoom - ZOOM_STEP_PER_FRAME)
-      state.zoomTarget = nil
-    end
-  end
-
-  -- Zoom-Window pass: walking into one of state.zoomWindows eases the
-  -- camera to that window's own zoom; walking back out eases it back to
-  -- whatever zoom the player had on the way in. Only the enter/exit
-  -- EDGES set state.zoomTarget, so any manual zoom input (which clears
-  -- it — see just above, and InputHandlers.lua's own wheel handler)
-  -- simply wins until the player next crosses a window boundary.
-  local insideWindow = nil
-  local px, py = state.player.pos.x, state.player.pos.y
-  for _, w in ipairs(state.zoomWindows or {}) do
-    if px >= w.x and px <= w.x + w.width and py >= w.y and py <= w.y + w.height then
-      insideWindow = w
-      break
-    end
-  end
-  if insideWindow ~= state.activeZoomWindow then
-    local previous = state.activeZoomWindow
-    if insideWindow then
-      -- Stepping straight from one window into another keeps the
-      -- ORIGINAL pre-window zoom as the one to return to.
-      if not previous then
-        state.zoomWindowReturn = state.zoomTarget or state.zoom
-      end
-      state.zoomTarget = insideWindow.zoom
-    elseif state.zoomWindowReturn then
-      -- Skipped if the player re-zoomed by hand while inside — their
-      -- own choice shouldn't be undone just for walking out.
-      if state.zoomTarget == previous.zoom or math.abs(state.zoom - previous.zoom) < ZOOM_WINDOW_SNAP then
-        state.zoomTarget = state.zoomWindowReturn
-      end
-      state.zoomWindowReturn = nil
-    end
-    state.activeZoomWindow = insideWindow
-  end
-
-  -- A cannon shot (see lua/world/Cannon.lua): the moment he's fired,
-  -- ease all the way out (ZOOM_MIN) for the whole journey — and once
-  -- it's over (he's crashed into the target, or anything else ended it),
-  -- ease back to the zoom he had before. Same easing as the zoom
-  -- windows above, so a manual zoom mid-flight wins the same way.
-  local cannonFlying = state.player.cannonFlight ~= nil
-  if cannonFlying ~= (state.cannonZoomFlying or false) then
-    if cannonFlying then
-      state.cannonZoomReturn = state.zoomTarget or state.zoom
-      state.zoomTarget = ZOOM_MIN
-    elseif state.cannonZoomReturn then
-      state.zoomTarget = state.cannonZoomReturn
-      state.cannonZoomReturn = nil
-    end
-    state.cannonZoomFlying = cannonFlying
-  end
-
-  -- Safety net: CameraDirector may zoom out past the player's own
-  -- ZOOM_MIN during a script (see its SCRIPT_ZOOM_MIN) and normally
-  -- hands back at a regular zoom — but if it ever lets go while still
-  -- further out than the player is allowed, ease back in to the limit
-  -- rather than leaving him stuck there.
-  if not CameraDirector.isActive() and not state.zoomTarget and state.zoom < ZOOM_MIN then
-    state.zoomTarget = ZOOM_MIN
-  end
-
-  if state.zoomTarget and not CameraDirector.isActive() then
-    local target = math.min(ZOOM_MAX, math.max(ZOOM_MIN, state.zoomTarget))
-    state.zoom = state.zoom + (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME
-    if math.abs(target - state.zoom) < ZOOM_WINDOW_SNAP then
-      state.zoom = target
-      state.zoomTarget = nil
-    end
-  end
-
-  -- CameraDirector.update already sets state.camera/state.zoom itself
-  -- (and returns true) while a scripted sequence is driving — the
-  -- ordinary player-centered computation below only runs when it isn't,
-  -- so the handoff between the two is a single smooth eased transition
-  -- (CameraDirector.release), never a one-frame pop between two
-  -- independently-computed camera positions.
-  if not CameraDirector.update(state.timeScale) then
-    local zoom = state.zoom
-    local visibleWidth = love.graphics.getWidth() / zoom
-    local visibleHeight = love.graphics.getHeight() / zoom
-    -- Mid-portal, whichever side most of him is on (see PortalGun.updateTransit).
-    local transit = state.player.portalTransit
-    local focusX = transit and transit.cameraX or state.player.pos.x
-    local focusY = transit and transit.cameraY or state.player.pos.y
-    -- A trip through a portal glides the camera over to him instead of
-    -- cutting: from where it was when he went in, it closes a fixed share
-    -- of the remaining gap each moment (quick at first, settling in at
-    -- the end — how quick depends on how far apart the portals are, see
-    -- PORTAL_CAMERA_GLIDE_RATE_MIN/MAX), then hands back to following him
-    -- exactly once it's caught up.
-    if transit and not state.portalCameraGlide then
-      local prev = state.camera
-      state.portalCameraGlide = prev
-        and { x = prev.x + visibleWidth / 2, y = prev.y + visibleHeight / 2 }
-        or { x = focusX, y = focusY }
-    end
-    local glide = state.portalCameraGlide
-    if glide and transit then
-      -- Paced by how far apart the portals of this trip are.
-      local apart = math.sqrt((transit.to.x - transit.from.x) ^ 2 + (transit.to.y - transit.from.y) ^ 2)
-      local t = math.min(1, apart / PORTAL_CAMERA_GLIDE_FAR_DISTANCE)
-      glide.rate = PORTAL_CAMERA_GLIDE_RATE_MIN + (PORTAL_CAMERA_GLIDE_RATE_MAX - PORTAL_CAMERA_GLIDE_RATE_MIN) * t
-    end
-    if glide then
-      -- (Frame time capped, so one slow frame can't turn into a jump.)
-      local catchUp = 1 - math.exp(-(glide.rate or PORTAL_CAMERA_GLIDE_RATE_MAX) * math.min(dt, 1 / 30))
-      glide.x = glide.x + (focusX - glide.x) * catchUp
-      glide.y = glide.y + (focusY - glide.y) * catchUp
-      if not transit and (focusX - glide.x) ^ 2 + (focusY - glide.y) ^ 2 < PORTAL_CAMERA_SETTLED ^ 2 then
-        state.portalCameraGlide = nil
-      else
-        focusX, focusY = glide.x, glide.y
-      end
-    end
-    local camera = {
-      x = focusX - visibleWidth / 2,
-      y = focusY - visibleHeight / 2,
-    }
-    local maxCameraX = state.sceneWidth - visibleWidth
-    local maxCameraY = state.sceneHeight - visibleHeight
-    camera.x = maxCameraX > 0 and math.min(math.max(camera.x, 0), maxCameraX) or maxCameraX / 2
-    camera.y = maxCameraY > 0 and math.min(math.max(camera.y, 0), maxCameraY) or maxCameraY / 2
-    state.camera = camera
-  end
-
-  -- Kept up to date regardless of which of the two paths above actually
-  -- drove state.camera/state.zoom this frame — other systems (VatsOverlay.lua,
-  -- etc.) read these directly and need them correct either way.
-  state.visibleWidth = love.graphics.getWidth() / state.zoom
-  state.visibleHeight = love.graphics.getHeight() / state.zoom
+  -- Zoom and camera position for this frame (see lua/systems/Camera.lua).
+  Camera.update(dt)
 end
 
 function love.draw()
@@ -2793,14 +861,9 @@ function love.draw()
   -- (position integration, orbits, collisions) deliberately still runs
   -- for everything regardless of visibility — culling THAT risks a
   -- visible "catch-up" pop the moment something re-enters view, which
-  -- culling only :draw() never risks.
-  if state.asteroids then
-    for _, a in ipairs(state.asteroids) do
-      if utils.isOnScreen(a.pos.x, a.pos.y, a.radius, 50) then
-        a:draw()
-      end
-    end
-  end
+  -- culling only :draw() never risks. (Each WorldObjects layer culls its
+  -- own items the same way — see lua/systems/WorldObjects.lua.)
+  WorldObjects.draw("backdrop")
 
   -- Influence-radius rings ('R' toggles — see InputHandlers.lua): only
   -- for planetoids GravitySystem itself treats as plain circular gravity
@@ -2843,15 +906,9 @@ function love.draw()
     end
   end
 
-  -- Before the planetoids, so the one each stands on covers its sunken
-  -- foot (see lua/world/Prism.lua).
-  if state.prisms then
-    for _, m in ipairs(state.prisms) do
-      if utils.isOnScreen(m.planet.pos.x, m.planet.pos.y, m:reach(), 50) then
-        m:draw()
-      end
-    end
-  end
+  -- Prisms: before the planetoids, so the one each stands on covers its
+  -- sunken foot (see lua/world/Prism.lua).
+  WorldObjects.draw("planetFeet")
 
   -- The fire bars' fireballs lighting up the planets near them (see
   -- lua/effects/FireBarGlow.lua) — added over each one right after it's drawn.
@@ -2902,17 +959,9 @@ function love.draw()
   -- Recall's yellow overlay on rewinding planetoids (and the aim ring).
   Recall.draw()
 
-  -- Spikey (lua/world/Spikey.lua) isn't in state.planetoids anymore (see
-  -- its own header comment on why — it's deliberately not a planet),
-  -- so it needs its own explicit draw pass instead of riding the loop
-  -- just above.
-  if state.spikeys then
-    for _, sp in ipairs(state.spikeys) do
-      if utils.isOnScreen(sp.pos.x, sp.pos.y, sp.radius, 50) then
-        sp:draw()
-      end
-    end
-  end
+  -- Spikeys (lua/world/Spikey.lua) — deliberately not planetoids, so
+  -- not drawn by the loop just above.
+  WorldObjects.draw("hazards")
 
   if state.tiledLevels then
     -- (Bob's and the Ooombas' shadows on the level's tiles — see
@@ -2970,66 +1019,10 @@ function love.draw()
     end
   end
 
-  -- Rocks swinging on ropes (see lua/world/RopeRock.lua).
-  if state.ropeRocks then
-    for _, rr in ipairs(state.ropeRocks) do
-      if utils.isOnScreen(rr.pos.x, rr.pos.y, rr.radius + rr.ropeLength, 50) then rr:draw() end
-    end
-  end
-
-  -- Gate/Lever (see lua/world/Gate.lua, lua/world/Lever.lua) — drawn
-  -- every frame regardless of state.showCollisionDebug above, since
-  -- that debug view only shows the gate's current COLLISION rectangle
-  -- (via level.walls, since a Gate is inserted directly into that same
-  -- array), not its actual bar/cross-bar art.
-  if state.gates then
-    for _, gate in ipairs(state.gates) do
-      if utils.isOnScreen(gate.pos.x, gate.pos.y, math.max(gate.halfWidth, gate.halfHeight), 20) then
-        gate:draw()
-      end
-    end
-  end
-
-  if state.levers then
-    for _, lever in ipairs(state.levers) do
-      if utils.isOnScreen(lever.pos.x, lever.pos.y, 80, 20) then
-        lever:draw()
-        lever:drawTooltip()
-      end
-    end
-  end
-
-  if state.plungers then
-    for _, plunger in ipairs(state.plungers) do
-      if utils.isOnScreen(plunger.pos.x, plunger.pos.y, plunger.radius, 20) then plunger:draw() end
-    end
-  end
-
-  if state.cranks then
-    for _, crank in ipairs(state.cranks) do
-      if utils.isOnScreen(crank.pos.x, crank.pos.y, 80, 20) then
-        crank:draw()
-        crank:drawTooltip()
-      end
-    end
-  end
-
-  if state.signs then
-    for _, sign in ipairs(state.signs) do
-      if utils.isOnScreen(sign.pos.x, sign.pos.y, 80, 20) then
-        sign:draw()
-        sign:drawTooltip()
-      end
-    end
-  end
-
-  if state.mirrors then
-    for _, mirror in ipairs(state.mirrors) do
-      if utils.isOnScreen(mirror.pos.x, mirror.pos.y, 80, 20) then
-        mirror:draw()
-      end
-    end
-  end
+  -- Rope rocks, gates, levers, plungers, cranks, signs, mirrors. (Gates
+  -- are drawn whatever state.showCollisionDebug says: that debug view
+  -- only shows a gate's collision rectangle, not its bars.)
+  WorldObjects.draw("props")
 
   -- Debug: transparent red over every cell that's BOTH in the player's
   -- current 3x3 active window AND geometrically inside the asteroid
@@ -3082,73 +1075,16 @@ function love.draw()
     love.graphics.setColor(1, 1, 1, 1)
   end
 
-  if state.ooombas then
-    for i, o in ipairs(state.ooombas) do
-      -- (Mid-portal it's split across both portals, either of which may
-      -- be the one on screen — see PortalGun.drawOoomba.)
-      if o.portalTransit or utils.isOnScreen(o.pos.x, o.pos.y, math.max(o.halfWidth, o.halfHeight), 20) then
-        PortalGun.drawOoomba(o)
-        -- ...with the shadows of any in front of it falling on it.
-        CharacterShadows.drawOntoOoomba(i)
-        -- ...and, frozen, the ice cube round it (see WaterSystem.lua's "Ice").
-        if o.iceBlock then WaterSystem.drawIceCube(o.iceBlock) end
-      end
-    end
-  end
+  WorldObjects.draw("enemies")
 
   -- The belt outposts' missiles, in flight (see lua/world/MissileOutpost.lua).
   MissileOutpost.drawMissiles()
 
-  if state.robotButler then
-    local r = state.robotButler
-    if utils.isOnScreen(r.pos.x, r.pos.y, math.max(r.halfWidth, r.halfHeight), 20) then
-      r:draw()
-      r:drawTooltip()
-    end
-  end
-
-  if state.fisherman then
-    local f = state.fisherman
-    -- f.drawBoundRadius (not just halfWidth/halfHeight) — his fishing
-    -- line reaches far below his own compact body, and this needs to
-    -- cover that full reach or the whole rig (hook included) vanishes
-    -- the instant the camera's near the water the line dangles into but
-    -- far from his own actual position. See Fisherman.lua's own comment.
-    if utils.isOnScreen(f.pos.x, f.pos.y, f.drawBoundRadius, 20) then
-      f:draw()
-      f:drawTooltip()
-    end
-  end
-
-  if state.coins then
-    for _, c in ipairs(state.coins) do
-      if utils.isOnScreen(c.pos.x, c.pos.y, c.radius, 20) then
-        c:draw()
-      end
-    end
-  end
-
-  if state.fireBars then
-    for _, bar in ipairs(state.fireBars) do
-      if utils.isOnScreen(bar.pos.x, bar.pos.y, bar.barLength + bar.fireballRadius, 50) then
-        bar:draw()
-      end
-    end
-  end
-
-  -- Drawn BEFORE the player (just below), so he renders IN FRONT of the
-  -- beam rather than behind it while standing at one (interacting, or
-  -- mid-teleport) — his own silhouette glow (Player:drawBeamGlow, called
-  -- from Player:draw itself) is what actually signals "near a beam" now,
-  -- so he no longer needs to duck behind it for that to read clearly.
-  if state.beams then
-    for _, beam in ipairs(state.beams) do
-      if utils.isOnScreen(beam.pos.x, beam.pos.y, Beam.LENGTH, 60) then
-        beam:draw()
-        beam:drawTooltip()
-      end
-    end
-  end
+  -- Robot butler, fisherman, coins, fire bars, beams. Beams are drawn
+  -- BEFORE the player (just below), so he renders in front of one he's
+  -- standing at — his own silhouette glow (Player:drawBeamGlow) is what
+  -- signals "near a beam".
+  WorldObjects.draw("actors")
 
   -- Portals and their shot streaks: over the surfaces they're on,
   -- behind the player.
@@ -3218,6 +1154,23 @@ function love.draw()
     love.graphics.setLineWidth(1)
   end
 
+  -- Debug: each Ooomba's contact circle (same 'C' toggle) — see
+  -- CollisionSystem:handlePlayerOoombaCollisions: he's hit when his own
+  -- collision circle overlaps this one, unless he's stomping it from above.
+  -- Fireballs use the same circle. Drawn in cyan, distinct from the other
+  -- debug colors (orange Spikey, magenta player, yellow dome).
+  if state.showCollisionDebug and state.ooombas then
+    love.graphics.setLineWidth(3)
+    love.graphics.setColor(0.2, 0.9, 1, 1)
+    for _, o in ipairs(state.ooombas) do
+      if utils.isOnScreen(o.pos.x, o.pos.y, o.hitRadius, 20) then
+        love.graphics.circle("line", o.pos.x, o.pos.y, o.hitRadius)
+      end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setLineWidth(1)
+  end
+
   -- Debug: SkyDomePlanetoid's own containment boundary (same 'C' toggle
   -- as every other debug view here) — see
   -- CollisionSystem:handlePlayerSkyDomeContainment's own comment for why
@@ -3256,29 +1209,11 @@ function love.draw()
     love.graphics.setLineWidth(1)
   end
 
-  -- Same "draw before the water's second pass so its translucent fill
-  -- reads as covering them" reasoning as the player himself — see the
-  -- water re-draw a bit further down.
-  if state.fish then
-    for _, fish in ipairs(state.fish) do
-      if utils.isOnScreen(fish.pos.x, fish.pos.y, 70, 50) then
-        fish:draw()
-      end
-    end
-  end
-
-  -- Drawn AFTER the player (not back with the other hazards/scenery
-  -- above) so lava visually covers him the moment he's in it, instead of
-  -- him rendering on top of a hazard he's supposedly submerged in —
-  -- z-order standing in for "he's under the surface" until lava actually
-  -- kills him.
-  if state.lavas then
-    for _, lava in ipairs(state.lavas) do
-      if utils.isOnScreen(lava.pos.x, lava.pos.y, lava.radius, 50) then
-        lava:draw()
-      end
-    end
-  end
+  -- Fish, then lava: after the player (not back with the other scenery
+  -- above) and before the water's top layer just below, so water and
+  -- lava cover whatever is in them — reading as submerged rather than
+  -- floating in front.
+  WorldObjects.draw("submerged")
 
   -- Every planetoid's water layer — the water planets' included (see
   -- WaterPlanet.lua) — and steam. Same reasoning as lava above: drawn
@@ -3308,36 +1243,9 @@ function love.draw()
 
   PullBeam.draw()
 
-  if state.fireballs then
-    for _, f in ipairs(state.fireballs) do
-      f:draw()
-    end
-  end
-  for _, b in ipairs(state.iceBolts or {}) do b:draw() end
-
-  if state.particles then
-    for _, p in ipairs(state.particles) do
-      p:draw()
-    end
-  end
-
-  for _, piece in ipairs(state.elementPieces) do
-    if utils.isOnScreen(piece.pos.x, piece.pos.y, piece.radius, 50) then
-      piece:draw()
-    end
-  end
-
-  if state.explosions then
-    for _, e in ipairs(state.explosions) do
-      e:draw()
-    end
-  end
-
-  if state.wallContactPulses then
-    for _, p in ipairs(state.wallContactPulses) do
-      p:draw()
-    end
-  end
+  -- Fireballs, ice bolts, particles, element pieces, explosions,
+  -- wall-jump rings.
+  WorldObjects.draw("effects")
 
   if state.skyDomePlanet then
     state.skyDomePlanet:drawForegroundGlass()
@@ -3354,20 +1262,6 @@ function love.draw()
 
   VatsCursor.drawReticle()
 
-  if state.robotButler then
-    state.robotButler:drawDialogue()
-  end
-
-  if state.fisherman then
-    state.fisherman:drawDialogue()
-  end
-
-  if state.signs then
-    for _, sign in ipairs(state.signs) do
-      sign:drawDialogue()
-    end
-  end
-
   -- Title screen: just the scene and its own prompt — no minimap, no
   -- HUD text.
   if state.titleScreen then
@@ -3379,8 +1273,16 @@ function love.draw()
     state.minimap:draw()
   end
 
-  -- Blaster selector, lower-left (see lua/ui/WeaponBar.lua).
-  WeaponBar.draw()
+  -- Blaster selector, lower-left (see lua/ui/WeaponBar.lua). Hidden
+  -- while a conversation textbox is up (state.dialogueActive), so the
+  -- box has the bottom of the screen to itself.
+  if not state.dialogueActive then
+    WeaponBar.draw()
+  end
+
+  -- Conversation textboxes — after the minimap, so the box covers it
+  -- rather than the other way round.
+  WorldObjects.drawDialogues()
 
   -- Recording a trailer clip (P - see lua/systems/ClipRecorder.lua):
   -- none of the top-left HUD/debug text goes into the video.

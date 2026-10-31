@@ -54,9 +54,7 @@ local function loadAssets(onComplete)
   -- SkyDomePlanetoid's ground tile — 32x32, tiled pixel-perfectly
   -- across its body instead of the default rocky planetTexture (see
   -- SkyDomePlanetoid.drawBodyTexture).
-  -- JumpPlatform's tileset — replaces the old ground.png (now unused
-  -- entirely, since JumpPlatform's pillar mechanism was removed in
-  -- favor of this tileset's own bottom-row tiles covering that role).
+  -- The Tiled levels' tileset (see TiledTerrain.lua).
   state.platformTexture = love.graphics.newImage("img/platform.png")
 
   -- Goomba enemy — 64x32, two 32x32 tiles (standing, walking).
@@ -70,6 +68,16 @@ local function loadAssets(onComplete)
   -- Planetoid's own canvas already overrides the default for.
   state.oombaTexture = love.graphics.newImage("img/Ooomba.png")
   state.oombaTexture:setFilter("linear", "linear")
+  -- Its normal map: the same sheet, same layout, each pixel's surface
+  -- direction (OpenGL convention: red = right, green = up, blue = toward
+  -- the viewer) — lit by the sun in Ooomba:draw.
+  state.oombaNormalTexture = love.graphics.newImage("img/Ooomba_normal.png")
+  state.oombaNormalTexture:setFilter("linear", "linear")
+  -- ...and its ambient occlusion: how shaded each pixel is whatever the
+  -- light (white = open, darker = tucked in: under the lip, round the
+  -- teeth, where the eyes meet the body).
+  state.oombaAOTexture = love.graphics.newImage("img/Ooomba_ao.png")
+  state.oombaAOTexture:setFilter("linear", "linear")
 
   -- SkyDomePlanetoid's grass cap — a single 32x16 tile, drawn as a
   -- thin strip right at the flat top line, on top of the metal base

@@ -16,6 +16,7 @@ import love from '../love/index.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from './Interactable.js';
 
 const BASE_RADIUS = 40;
 const HANDLE_LENGTH = 46;
@@ -134,12 +135,6 @@ class Lever {
     this.playerNearby = false;
   }
 
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
-  }
-
   // Actually flips the lever and whatever Gate it controls — shared by
   // tryInteract (the player pulling it directly) and
   // CollisionSystem.handleFireballLeverCollisions (a fireball hitting it).
@@ -246,5 +241,7 @@ class Lever {
     InteractPrompt.draw(this.pos.x, this.pos.y - BASE_RADIUS - TOOLTIP_GAP_ABOVE);
   }
 }
+
+Lever.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default Lever;

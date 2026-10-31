@@ -67,6 +67,7 @@ import state from '../state.js';
 import Vector2 from '../vector2.js';
 import constants from '../constants.js';
 import Planetoid from './Planetoid.js';
+import PlanetSurface from './PlanetSurface.js';
 import Particle from '../entities/Particle.js';
 import CameraShake from '../effects/CameraShake.js';
 
@@ -99,6 +100,16 @@ const GROUND_SNAP = 6;
 // for each unit he walks (1 = 45 degrees; a little over, so 45-degree
 // slope tiles are always walkable, and a sheer ledge never is).
 const SLOPE_CLIMB = 1.25;
+
+// Standing room. Standing up, he's taller than his round body (his
+// radius): a head circle sits on top of it, reaching about 78 units
+// above his feet. A ball-tunnel is one tile — 64 units — high, so he
+// only gets into one curled up as a ball (about 48 units), and can't
+// uncurl inside it (see Player.exitBallMode). Checked when he walks or
+// runs somewhere new (only if he has room where he is now, so he's never
+// stuck), and pushed out of ceilings in the air (see collidePlayer).
+const HEAD_OFFSET = 26;  // the head circle's center, above his own center
+const HEAD_RADIUS = 22;
 
 // Wall-running (see walkPlayer). The tile shapes he can run onto a wall
 // from, or over the top of one, at a run...
@@ -243,6 +254,95 @@ const SHAPED_TILES = {
     top: () => 1,
   },
 };
+
+// Ball tunnels: the tiles that go round the curves above, one tile
+// inside or outside them, so a tunnel one tile high (just enough for him
+// curled up as a ball — see Player's standing-room rule and
+// standingRoomAt) keeps its height all the way round a bend.
+//
+//   *Inner (4): a solid tile with one corner rounded off (half a tile's
+//   radius), for the INSIDE of the bend round a ramp or ceiling cap —
+//   the tile diagonally inside the curve:
+//     rampRightInner    up and to the left of a rampRight
+//     rampLeftInner     up and to the right of a rampLeft
+//     ceilingLeftInner  down and to the left of a ceilingLeft
+//     ceilingRightInner down and to the right of a ceilingRight
+//
+//   *Outer1/2/3 (12): the big curve (two tiles' radius) round the
+//   OUTSIDE of a crest or arch — three tiles each, going round from its
+//   flat side to its wall side:
+//     crestRightOuter1 above the crest, 2 above and to the right, 3 to its right
+//     crestLeftOuter1  above the crest, 2 above and to the left,  3 to its left
+//     archRightOuter1  below the arch,  2 below and to the left,  3 to its left
+//     archLeftOuter1   below the arch,  2 below and to the right, 3 to its right
+//
+// Each is built from one base piece (rampRightInner, crestRightOuter*),
+// mirrored left-right and/or top-bottom. (Port of the same block in
+// lua/world/CrackedPlanetoid.lua.)
+{
+  const arc = (cu, cv, r, from, to, out) => {
+    for (let s = 0; s <= CURVE_SEGMENTS; s++) {
+      const t = from + (to - from) * s / CURVE_SEGMENTS;
+      out.push([cu + Math.cos(t) * r, cv + Math.sin(t) * r]);
+    }
+    return out;
+  };
+  const mirrored = (points, flipU, flipV) =>
+    points.map((p) => [flipU ? 1 - p[0] : p[0], flipV ? 1 - p[1] : p[1]]);
+  const pointIn = (points, u, v) => {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const a = points[i], b = points[j];
+      if ((a[1] > v) !== (b[1] > v) && u < (b[0] - a[0]) * (v - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+    }
+    return inside;
+  };
+  // How high the solid reaches in column u (null: none in that column).
+  const topOf = (points) => (u) => {
+    u = Math.min(0.999, Math.max(0.001, u));
+    for (let k = 64; k >= 0; k--) {
+      if (pointIn(points, u, k / 64)) return k / 64;
+    }
+    return null;
+  };
+  const add = (name, points) => {
+    SHAPED_TILES[name] = { outline: points, top: topOf(points), tunnel: true };
+  };
+
+  const R3 = Math.sqrt(3) - 1; // where a two-tile circle crosses a tile edge
+  // Base pieces: the corner up-left of a rampRight, and the outside of a
+  // crestRight (a circle of radius 2 round the crest's own center).
+  const inner = arc(0.5, 0.5, 0.5, -HALF_PI, 0, [[0, 0]]);
+  inner.push([1, 1], [0, 1]);
+  const outer = [
+    arc(0, -1, 2, HALF_PI, Math.PI / 3, []),              // 1: above the crest
+    arc(-1, -1, 2, Math.PI / 3, Math.PI / 6, []),         // 2: above and beside
+    arc(-1, 0, 2, Math.PI / 6, 0, []),                    // 3: beside its wall
+  ];
+  outer[0].push([1, 1]);
+  outer[1].push([1, 0], [1, 1], [0, 1]);
+  outer[2].push([1, 1]);
+  console.assert(Math.abs(outer[0][outer[0].length - 2][1] - R3) < 1e-6);
+
+  add('rampRightInner', inner);
+  add('rampLeftInner', mirrored(inner, true, false));
+  add('ceilingLeftInner', mirrored(inner, false, true));
+  add('ceilingRightInner', mirrored(inner, true, true));
+  for (let k = 1; k <= 3; k++) {
+    add('crestRightOuter' + k, outer[k - 1]);
+    add('crestLeftOuter' + k, mirrored(outer[k - 1], true, false));
+    add('archRightOuter' + k, mirrored(outer[k - 1], true, true));
+    add('archLeftOuter' + k, mirrored(outer[k - 1], false, true));
+    // (Round on the tunnel's side, like a ramp: he runs them Sonic-style.)
+    CURVE_SHAPES['crestRightOuter' + k] = true;
+    CURVE_SHAPES['crestLeftOuter' + k] = true;
+    CURVE_SHAPES['archRightOuter' + k] = true;
+    CURVE_SHAPES['archLeftOuter' + k] = true;
+  }
+  for (const name of ['rampRightInner', 'rampLeftInner', 'ceilingLeftInner', 'ceilingRightInner']) {
+    CURVE_SHAPES[name] = true;
+  }
+}
 
 // Which clod of ring `ring` covers angle a (0-based).
 // A local point (world-aligned, from the planet's center) turned into
@@ -746,7 +846,11 @@ class CrackedPlanetoid {
     const j = clodIndexAt(ring, a);
     const clod = ring.clods[j];
     if (!clod) return null;
-    if (clod.shape) return ring.inner + this.shapeTopFraction(ring, j, clod.shape, a) * (ring.outer - ring.inner);
+    if (clod.shape) {
+      // (null: this column of a ball-tunnel piece is all open.)
+      const top = this.shapeTopFraction(ring, j, clod.shape, a);
+      return top == null ? null : ring.inner + top * (ring.outer - ring.inner);
+    }
     return ring.outer;
   }
 
@@ -927,8 +1031,11 @@ class CrackedPlanetoid {
     return [lx / r, ly / r];
   }
 
-  // The same, at a world point, as a Vector2.
-  upAtWorld(wx, wy) {
+  // The planet surface interface (see js/world/PlanetSurface.js). "Up"
+  // here is away from this planet's gravity, which can be switched (see
+  // cycleGravity) — not off whichever brick edge is nearest: its bricky
+  // ground is all steps, so things stay upright to the way it pulls.
+  upAt(wx, wy) {
     const [ux, uy] = this.upAtLocal(wx - this.pos.x, wy - this.pos.y);
     return new Vector2(ux, uy);
   }
@@ -969,6 +1076,25 @@ class CrackedPlanetoid {
     player.vel = new Vector2(vx, vy);
   }
 
+  // Whether a standing head over local point (lx, ly), "up" being
+  // (ux, uy), is clear of the dirt (see HEAD_OFFSET).
+  headFreeLocal(lx, ly, ux, uy) {
+    return this.clearanceLocal(lx + ux * HEAD_OFFSET, ly + uy * HEAD_OFFSET, HEAD_RADIUS + 8) >= HEAD_RADIUS - 0.5;
+  }
+
+  // Whether he has room to stand up where he is (curled up now — see
+  // Player.exitBallMode): his full-size body, feet where the ball's
+  // bottom is, and his head on top.
+  standingRoomAt(player) {
+    const lx = player.pos.x - this.pos.x, ly = player.pos.y - this.pos.y;
+    let [ux, uy] = this.upAtLocal(lx, ly);
+    if (player.climbNormal && player.climbPlanet === this) { ux = player.climbNormal.x; uy = player.climbNormal.y; }
+    const full = player.baseRadius ?? player.radius;
+    const rise = player.onSurface ? Math.max(0, full - player.radius) : 0;
+    const cx = lx + ux * rise, cy = ly + uy * rise;
+    return this.clearanceLocal(cx, cy, full + 8) >= full - 0.5 && this.headFreeLocal(cx, cy, ux, uy);
+  }
+
   // Airborne: pushes him out of any dirt he's run into — off walls, down
   // from ceilings (losing the speed he had into them) — and lands him on
   // anything floor-like he comes down on. Called from
@@ -1001,6 +1127,26 @@ class CrackedPlanetoid {
       } else if (into < 0) {
         player.vel.x -= nx * into;
         player.vel.y -= ny * into;
+      }
+    }
+
+    // Standing (not a ball), his head too: out from under a ceiling or a
+    // tunnel's mouth he doesn't fit into, losing the speed he had into it.
+    if (!player.isBall) {
+      const [ux, uy] = this.upAtLocal(lx, ly);
+      for (let iter = 0; iter < 2; iter++) {
+        const hx = lx + ux * HEAD_OFFSET, hy = ly + uy * HEAD_OFFSET;
+        const [qx, qy, d2, inside] = this.nearestSolidLocal(hx, hy, HEAD_RADIUS + 8);
+        if (inside) break;
+        const d = Math.sqrt(d2);
+        if (d >= HEAD_RADIUS || d < 1e-6) break;
+        const nx = (hx - qx) / d, ny = (hy - qy) / d;
+        lx += nx * (HEAD_RADIUS - d); ly += ny * (HEAD_RADIUS - d);
+        const into = player.vel.x * nx + player.vel.y * ny;
+        if (into < 0) {
+          player.vel.x -= nx * into;
+          player.vel.y -= ny * into;
+        }
       }
     }
 
@@ -1077,7 +1223,14 @@ class CrackedPlanetoid {
 
     const climb = Math.abs(ds) * SLOPE_CLIMB + 1;
     const reach = pr + GROUND_SNAP + climb + 8;
-    const free = (x, y) => this.clearanceLocal(x, y, reach) >= pr - 0.5;
+    // Standing, his head has to fit too (see headFreeLocal) — as long as
+    // it does where he is now (so he's never stuck somewhere low).
+    const checkHead = !player.isBall && this.headFreeLocal(lx, ly, ...this.upAtLocal(lx, ly));
+    const free = (x, y) => {
+      if (this.clearanceLocal(x, y, reach) < pr - 0.5) return false;
+      if (checkHead) return this.headFreeLocal(x, y, ...this.upAtLocal(x, y));
+      return true;
+    };
 
     // Round the planet at the same height first (or, when gravity's
     // straight down or up the screen, straight along it).
@@ -1182,6 +1335,11 @@ class CrackedPlanetoid {
       px += (px - q2x) / e * (pr - e); py += (py - q2y) / e * (pr - e);
     }
     if (this.clearanceLocal(px, py, pr + 8) < pr - 0.5) { blocked(player); return; }
+    // Standing, his head has to fit there too (see headFreeLocal), if it
+    // does where he is now.
+    if (!player.isBall && this.headFreeLocal(lx, ly, n.x, n.y) && !this.headFreeLocal(px, py, mx, my)) {
+      blocked(player); return;
+    }
     // (And it has to have got him somewhere: wedged, he stays put.)
     const progress = ((px - lx) * tx + (py - ly) * ty) * (ds > 0 ? 1 : -1);
     if (progress < 0.05 * Math.abs(ds)) { blocked(player); return; }
@@ -1860,5 +2018,11 @@ CrackedPlanetoid.GRAVITY_LABELS = { core: 'Core', down: 'Down', up: 'Up' };
 CrackedPlanetoid.prototype.GRAVITY_LABELS = CrackedPlanetoid.GRAVITY_LABELS;
 CrackedPlanetoid.SPIN_LABELS = { 0: 'Off', 1: 'Clockwise', '-1': 'Counter-clockwise' };
 CrackedPlanetoid.prototype.SPIN_LABELS = CrackedPlanetoid.SPIN_LABELS;
+
+CrackedPlanetoid.prototype.gravityDistance = PlanetSurface.gravityDistanceFromSurface;
+
+// (Shared with js/world/TiledTerrain.js: the sky dome's levels use the
+// same ball-tunnel tile shapes.)
+CrackedPlanetoid.SHAPED_TILES = SHAPED_TILES;
 
 export default CrackedPlanetoid;

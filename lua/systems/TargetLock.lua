@@ -13,7 +13,7 @@ local TargetLock = {}
 
 -- Candidate pool for lock-on: planetoids (including permanent
 -- structures like the sky dome) and asteroids, plus ooombas.
--- isPullExempt objects (TiledTerrain's walkable shapes, JumpPlatform)
+-- isPullExempt objects (TiledTerrain's walkable shapes, the sky dome)
 -- are excluded — they're terrain, not really "targets," the same
 -- reasoning that already excludes them from pull-beam selection (see
 -- Player:trySelectPullTarget). Whatever the player is CURRENTLY

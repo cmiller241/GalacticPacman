@@ -22,6 +22,7 @@ import state from '../state.js';
 import Vector2 from '../vector2.js';
 import DialogueBox from '../ui/DialogueBox.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from '../world/Interactable.js';
 
 const BODY_SCALE = 0.1;
 
@@ -105,12 +106,6 @@ class Fisherman {
     this.dialogueActive = false;
     this.dialogueTimer = 0;
     this.dialogueDurationTicks = 240; // ~4 seconds at 60fps-baseline
-  }
-
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
   }
 
   // Called from InputHandlers.js (Enter) and GamePadInput.js (Circle).
@@ -208,5 +203,7 @@ class Fisherman {
     DialogueBox.draw(this.dialogueText, false);
   }
 }
+
+Fisherman.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default Fisherman;

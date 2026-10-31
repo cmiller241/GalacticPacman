@@ -52,7 +52,7 @@ Prism.CORE_STRENGTH = 0.22        -- a soft glow down the middle of each prism's
 -- picture in the file, then the third) — and stays that way.
 Prism.DAMAGE_HITS = { 2, 4 }
 -- And how many before the whole cluster shatters (see Prism:hit, and
--- main.lua's own breakPrismCluster for what happens then).
+-- Breakage.breakPrismCluster in lua/systems/Breakage.lua for what happens then).
 Prism.DESTROY_HITS = 6
 
 -- Being shot (see Prism:hit). Every prism of the cluster lights up

@@ -4,12 +4,18 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "node tools/gen-asset-list.mjs && esbuild js/main.js --bundle --sourcemap --outfile=dist/bundle.js",
+    "watch": "node tools/gen-asset-list.mjs && esbuild js/main.js --bundle --sourcemap --outfile=dist/bundle.js --watch",
+    "serve": "node tools/serve.mjs",
+    "maps": "node tools/tiled-lua-to-js.mjs",
+    "assets": "node tools/gen-asset-list.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "esbuild": "^0.27.3"
-  }
+    "esbuild": "^0.27.3",
+    "pixi-filters": "^6.1.5"
+  },
+  "type": "module"
 }

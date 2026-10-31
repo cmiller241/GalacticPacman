@@ -12,6 +12,7 @@
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
+local PlanetSurface = require("lua.world.PlanetSurface")
 
 local SkyDomePlanetoid = {}
 SkyDomePlanetoid.__index = SkyDomePlanetoid
@@ -633,6 +634,13 @@ end
 function SkyDomePlanetoid:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
 end
+
+-- The planet surface interface (see lua/world/PlanetSurface.lua): a flat
+-- deck, so "up" is always straight up; its gravity holds anywhere inside
+-- the bubble.
+SkyDomePlanetoid.upAt = PlanetSurface.upStraight
+SkyDomePlanetoid.gravityDirAt = PlanetSurface.gravityTowardSurface
+SkyDomePlanetoid.gravityDistance = PlanetSurface.gravityDistanceInWindow
 
 function SkyDomePlanetoid:containsPoint(worldX, worldY)
   if self:isWithinGravityWindow(worldX, worldY) then
