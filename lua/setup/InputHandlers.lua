@@ -75,31 +75,8 @@ local PauseMenu = require("lua.ui.PauseMenu")
 local PortalGun = require("lua.systems.PortalGun")
 local WeaponModes = require("lua.systems.WeaponModes")
 local Recall = require("lua.systems.Recall")
+local WorldObjects = require("lua.systems.WorldObjects")
 local ClipRecorder = require("lua.systems.ClipRecorder")
-
--- Shared by the Enter key handler and the mousedown handler below —
--- same role and same logic as the original. levelSetup is required
--- LAZILY, inside the function body rather than at the top of the
--- file, specifically so this file can be loaded and tested on its own
--- before lua/setup/levelSetup.lua exists — a top-level require would
--- fail immediately just from loading this file, long before
--- tryRestartOrAdvance is ever actually called.
-local function tryRestartOrAdvance()
-  if state.gameOver then
-    state.score = 0
-    state.level = 1
-    local levelSetup = require("lua.setup.levelSetup")
-    levelSetup.initGame()
-    return true
-  elseif state.levelComplete then
-    state.level = state.level + 1
-    local levelSetup = require("lua.setup.levelSetup")
-    levelSetup.initGame()
-    state.levelComplete = false
-    return true
-  end
-  return false
-end
 
 local ZOOM_WHEEL_STEP = 0.08  -- per scroll "click", same as the original
 
@@ -127,7 +104,6 @@ local function attachInputHandlers()
     state.lastKeyboardMouseInputTime = love.timer.getTime()
     if state.titleScreen then return end -- no shooting/pulling on the title screen
     if PauseMenu.isOpen() then return end -- ...or while paused
-    if tryRestartOrAdvance() then return end  -- same early-return as the original
     -- ...or riding a cannon (see Player:isCannonRiding): no shooting,
     -- pulling, portals or recall at all.
     if state.player and state.player:isCannonRiding() then return end
@@ -289,38 +265,10 @@ local function attachInputHandlers()
       state.player:exitBallMode()
     end
 
+    -- Interact: NPCs, levers, cranks, signs, beams (see
+    -- lua/systems/WorldObjects.lua's WorldObjects.interact).
     if key == 'Enter' and not riding then
-      tryRestartOrAdvance()
-      -- No talking to NPCs or pulling levers while curled into a ball —
-      -- see this same guard in GamePadInput.lua's own Circle handler.
-      if state.player and not state.player.isBall then
-        if state.robotButler then
-          state.robotButler:tryInteract(state.player)
-        end
-        if state.fisherman then
-          state.fisherman:tryInteract(state.player)
-        end
-        if state.levers then
-          for _, lever in ipairs(state.levers) do
-            lever:tryInteract(state.player)
-          end
-        end
-        if state.cranks then
-          for _, crank in ipairs(state.cranks) do
-            crank:tryInteract(state.player)
-          end
-        end
-        if state.signs then
-          for _, sign in ipairs(state.signs) do
-            sign:tryInteract(state.player)
-          end
-        end
-        if state.beams then
-          for _, beam in ipairs(state.beams) do
-            beam:tryInteract(state.player)
-          end
-        end
-      end
+      WorldObjects.interact(state.player)
     end
 
     if key == 'c' and not isrepeat then
@@ -366,5 +314,4 @@ end
 
 return {
   attachInputHandlers = attachInputHandlers,
-  tryRestartOrAdvance = tryRestartOrAdvance,
 }

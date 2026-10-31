@@ -305,7 +305,9 @@ WaterSystem.init = function (level) {
   };
   const inside = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows;
 
-  for (const w of (level.walls ?? [])) {
+  // Wall tiles: every cell whose middle is inside one. (And the solid
+  // cells of its ball-tunnel pieces — see TiledTerrain.js.)
+  for (const w of [...(level.walls ?? []), ...(level.waterSolids ?? [])]) {
     if (!w.isWall) continue;
     const c0 = Math.ceil((w.pos.x - w.halfWidth - g.x0) / CELL - 0.5);
     const c1 = Math.floor((w.pos.x + w.halfWidth - g.x0) / CELL - 0.5);
@@ -1275,19 +1277,12 @@ function gravityOn(d) {
   const p = d.planet;
   if (!p) return [0, 0];
   const s = p.gravityStrength ?? constants.GRAVITY_STRENGTH;
-  if (p.isSkyDome || p.forceUprightJump) return [0, s];
-  if (p.isRoundedRect && !p.isCrackedPlanet) { // (a dirt planet pulls its own way: below)
-    const n = p.nearestSurfacePoint(d.x, d.y).normal;
-    return [-n.x * s, -n.y * s];
-  }
-  if (p.gravityDirAt) {
-    const dir = p.gravityDirAt(d.x, d.y);
-    return [dir.x * s, dir.y * s];
-  }
-  const dx = p.pos.x - d.x, dy = p.pos.y - d.y;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1e-6) return [0, 0];
-  return [dx / len * s, dy / len * s];
+  // Straight "down" for wherever it is: opposite the planet's own "up"
+  // (see js/world/PlanetSurface.js) — so on the dome's deck and Tiled
+  // ground it falls straight down the screen, and onto the nearest face
+  // of a rounded rectangle.
+  const up = p.upAt(d.x, d.y);
+  return [-up.x * s, -up.y * s];
 }
 
 function spray(player, dt) {
@@ -1909,7 +1904,7 @@ function startMelt(entry) {
 }
 
 // A fireball's hit a wall on the level (wall: its entry in level.walls —
-// see main.js's fireball passes): an obsidian block starts melting back
+// see js/systems/Projectiles.js): an obsidian block starts melting back
 // into lava; an ice block (or an Ooomba's ice cube) melts into water (see
 // "Ice"). Any other wall, it does nothing.
 WaterSystem.fireHitsWall = function (wall) {
@@ -2130,7 +2125,7 @@ Ice.addTop = function (wall) {
   const top = wall.pos.y - wall.halfHeight;
   const s = TiledTerrain.newMovingSurface(wall.pos.x - wall.halfWidth, top, wall.pos.x + wall.halfWidth, top);
   s.jumpStrength = state.skyDomePlanet ? state.skyDomePlanet.jumpStrength : undefined;
-  s.blockWall = wall; // (a fireball hitting its top melts the block — see main.js)
+  s.blockWall = wall; // (a fireball hitting its top melts the block — see js/systems/Projectiles.js)
   s.isIce = wall.ice != null;
   wall.surface = s;
   state.planetoids = state.planetoids ?? [];
@@ -2308,7 +2303,7 @@ Ice.melt = function (e) {
 };
 
 // A fireball (or anything hot) at f.pos: an Ooomba's ice cube it's
-// touching melts (the level's blocks are walls, so main.js's fireball-vs-
+// touching melts (the level's blocks are walls, so js/systems/Projectiles.js's fireball-vs-
 // wall pass finds those). Returns whether it melted one.
 WaterSystem.fireHitsIce = function (f) {
   for (let k = Ice.blocks.length - 1; k >= 0; k--) {
@@ -2497,7 +2492,7 @@ WaterSystem.iceBoltHit = function (b) {
   return false;
 };
 
-// Ooomba o frozen solid (an ice bolt's hit it — see main.js).
+// Ooomba o frozen solid (an ice bolt's hit it — see js/systems/Projectiles.js).
 WaterSystem.encaseOoomba = function (o) {
   Ice.encase(o);
 };

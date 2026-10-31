@@ -8,14 +8,12 @@
 
 import love from '../love/index.js';
 import state from '../state.js';
-import inputHandlers from './InputHandlers.js';
 import TitleScreen from '../ui/TitleScreen.js';
 import PauseMenu from '../ui/PauseMenu.js';
 import PortalGun from '../systems/PortalGun.js';
 import WeaponModes from '../systems/WeaponModes.js';
 import Recall from '../systems/Recall.js';
-
-const tryRestartOrAdvance = () => inputHandlers.tryRestartOrAdvance();
+import WorldObjects from '../systems/WorldObjects.js';
 
 const BUTTON_X_CROSS = 'a';
 const BUTTON_CIRCLE = 'b';
@@ -69,15 +67,6 @@ function maybeAutoEnterVats() {
   }
 }
 
-function interactAll(player) {
-  if (state.robotButler) state.robotButler.tryInteract(player);
-  if (state.fisherman) state.fisherman.tryInteract(player);
-  for (const lever of (state.levers ?? [])) lever.tryInteract(player);
-  for (const crank of (state.cranks ?? [])) crank.tryInteract(player);
-  for (const sign of (state.signs ?? [])) sign.tryInteract(player);
-  for (const beam of (state.beams ?? [])) beam.tryInteract(player);
-}
-
 function pollGamepad(dt) {
   const gp = love.joystick.getJoysticks().find((j) => j.isGamepad()) ?? null;
 
@@ -91,13 +80,6 @@ function pollGamepad(dt) {
     return;
   }
   const axis = (name) => gp.getGamepadAxis(name) ?? 0;
-
-  if (state.gameOver || state.levelComplete) {
-    const xPressed = gp.isGamepadDown(BUTTON_X_CROSS);
-    if (xPressed && !lastXPressed) tryRestartOrAdvance();
-    lastXPressed = xPressed;
-    return;
-  }
 
   // Pause menu.
   const startPressed = gp.isGamepadDown(BUTTON_START);
@@ -274,7 +256,8 @@ function pollGamepad(dt) {
   if (circlePressed && !lastCirclePressed && state.player && !riding) {
     state.player.clearLockTarget();
     state.vatsActive = false;
-    if (!state.player.isBall) interactAll(state.player);
+    // Interact: NPCs, levers, cranks, signs, beams (see WorldObjects.interact).
+    WorldObjects.interact(state.player);
   }
   lastCirclePressed = circlePressed;
 

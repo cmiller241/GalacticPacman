@@ -2,7 +2,8 @@
 --
 -- The in-game pause menu: Escape on the keyboard or Start (Options, on
 -- a PS5 pad) on the controller freezes the game under a gray
--- see-through overlay and offers CONTINUE or EXIT TO TITLE.
+-- see-through overlay and offers CONTINUE, EXIT TO TITLE or EXIT GAME
+-- (which closes the game entirely).
 --
 -- "Freezes" is main.lua's doing — love.update returns early for as long
 -- as PauseMenu.isOpen() — and so is what EXIT TO TITLE actually does
@@ -20,8 +21,8 @@ local state = require("lua.state")
 
 local PauseMenu = {}
 
-local OPTIONS = { "CONTINUE", "EXIT TO TITLE" }
-local CONTINUE, EXIT_TO_TITLE = 1, 2
+local OPTIONS = { "CONTINUE", "EXIT TO TITLE", "EXIT GAME" }
+local CONTINUE, EXIT_TO_TITLE, EXIT_GAME = 1, 2, 3
 
 local OVERLAY_COLOR = { 0.32, 0.34, 0.38, 0.62 } -- the gray, see-through wash over the frozen game
 local HEADING_FONT_SIZE = 56
@@ -75,6 +76,13 @@ function PauseMenu.confirm()
   if not state.paused then return end
   if selected == CONTINUE then
     PauseMenu.close()
+    return
+  end
+
+  if selected == EXIT_GAME then
+    -- Closes the window. love.quit (see main.lua) still runs, so anything
+    -- that saves on the way out (e.g. a clip mid-recording) still does.
+    love.event.quit()
     return
   end
 

@@ -23,6 +23,7 @@ import CameraDirector from '../systems/CameraDirector.js';
 import worldGen from '../setup/WorldGen.js';
 import DialogueBox from '../ui/DialogueBox.js';
 import InteractPrompt from '../ui/InteractPrompt.js';
+import Interactable from '../world/Interactable.js';
 
 const FRAME_COUNT = 4;
 
@@ -193,12 +194,6 @@ class RobotButler {
     this.dialoguePageIndex = 0;
   }
 
-  isPlayerNear(player) {
-    if (!player) return false;
-    const dx = player.pos.x - this.pos.x, dy = player.pos.y - this.pos.y;
-    return (dx * dx + dy * dy) <= this.interactRadius * this.interactRadius;
-  }
-
   startDialogue() {
     this.dialogueActive = true;
     this.dialoguePageIndex = 0;
@@ -360,5 +355,7 @@ class RobotButler {
     DialogueBox.draw(pageText, hasMore);
   }
 }
+
+RobotButler.prototype.isPlayerNear = Interactable.isPlayerNear; // (see js/world/Interactable.js)
 
 export default RobotButler;

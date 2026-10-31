@@ -308,8 +308,8 @@ local function drawPullIndicator()
   if target.isRoundedRect and not target.isCrackedPlanet then
     -- A true rotated rounded-rect outline, matching the target's own
     -- actual silhouette (halfWidth/halfHeight/cornerRadius/
-    -- rotationAngle — RoundedRectPlanetoid.lua's own fields; SkyDome/
-    -- JumpPlatform are also isRoundedRect but isPullExempt, so they
+    -- rotationAngle — RoundedRectPlanetoid.lua's own fields; the sky dome
+    -- and Tiled terrain are also isRoundedRect but isPullExempt, so they
     -- never actually reach here) — not the plain circle this used to
     -- fall back to. Each half-extent AND the corner radius all get the
     -- same OUTLINE_PADDING added, so the outline sits evenly outset

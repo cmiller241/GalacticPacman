@@ -45,8 +45,7 @@ class CollisionSystem {
   }
 
   distanceToPlanetSurface(pos, planet) {
-    if (planet.isRoundedRect) return planet.distanceToSurface(pos.x, pos.y);
-    return pos.subtract(planet.pos).length() - planet.radius;
+    return planet.distanceToSurface(pos.x, pos.y);
   }
 
   handleImmovableCollisions(immovables, movables) {

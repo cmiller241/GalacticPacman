@@ -15,7 +15,7 @@
 // A hazard: touching one kills the player, unless he lands on it from
 // above, which squashes it flat instead (see startSquash/updateSquash
 // and CollisionSystem.handlePlayerOoombaCollisions). A fireball kills it
-// outright (see main.js's own fireball pass).
+// outright (see js/systems/Projectiles.js).
 
 import love from '../love/index.js';
 import lua from '../love/lua.js';
@@ -71,11 +71,7 @@ const LANDING_SLACK = 2;
 function upAgainstGravity(o) {
   const planet = o.lastInfluencePlanet;
   if (!planet) return new Vector2(0, -1);
-  if (planet.isRoundedRect) {
-    if (planet.forceUprightJump || planet.isSkyDome) return new Vector2(0, -1);
-    return planet.nearestSurfacePoint(o.pos.x, o.pos.y).normal.clone();
-  }
-  return o.pos.subtract(planet.pos).normalize();
+  return planet.upAt(o.pos.x, o.pos.y);
 }
 
 class Ooomba {

@@ -2,15 +2,15 @@
 --
 -- Lets a scripted sequence (see Script.lua) temporarily take the camera
 -- away from its normal "always centered on the player" behavior
--- (main.lua's own love.update) — easing to a given world point + zoom,
+-- (lua/systems/Camera.lua) — easing to a given world point + zoom,
 -- optionally chaining through several such waypoints for a slow pan/
 -- tour, then handing control back with one more eased transition onto
 -- wherever the player actually is by the time that happens.
 --
--- Call CameraDirector.update(ts) once per frame, BEFORE main.lua's own
+-- Call CameraDirector.update(ts) once per frame, BEFORE lua/systems/Camera.lua's own
 -- player-centered camera math — it returns true (having already set
 -- state.camera/state.zoom itself for this frame) while an override is
--- active, false once there's nothing left to do, so main.lua's own
+-- active, false once there's nothing left to do, so Camera.lua's own
 -- fallback only ever runs when this isn't driving.
 
 local state = require("lua.state")

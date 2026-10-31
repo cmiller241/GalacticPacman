@@ -15,6 +15,7 @@
 -- Ooomba.lua's own sprite already uses.
 
 local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
 local Vector2 = require("lua.vector2")
 local DustPuff = require("lua.effects.DustPuff")
 local Script = require("lua.systems.Script")
@@ -224,11 +225,7 @@ function RobotButler.new(homeX, groundY, options)
   return self
 end
 
-function RobotButler:isPlayerNear(player)
-  if not player then return false end
-  local dx, dy = player.pos.x - self.pos.x, player.pos.y - self.pos.y
-  return (dx * dx + dy * dy) <= self.interactRadius * self.interactRadius
-end
+RobotButler.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
 
 function RobotButler:startDialogue()
   self.dialogueActive = true

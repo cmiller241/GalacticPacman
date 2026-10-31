@@ -22,7 +22,7 @@
 -- A hazard: touching one kills the player, unless he lands on it from
 -- above, which squashes it flat instead (see :startSquash/:updateSquash
 -- and CollisionSystem:handlePlayerOoombaCollisions). A fireball kills it
--- outright (see main.lua's own fireball pass).
+-- outright (see lua/systems/Projectiles.lua).
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
@@ -54,8 +54,7 @@ local SQUASH_SOLO_SPEED = 9     -- how fast it finishes collapsing by itself if 
 local SQUASH_DONE_HEIGHT = 6    -- squashed "to nothing" once it's this thin
 local SQUASH_MAX_BULGE = 0.4    -- extra width (fraction) it spreads out to as it flattens
 
--- Baked once, shared by every Ooomba instance — same "bake once, draw
--- many" precedent as JumpPlatform.lua's own getTileQuad.
+-- Baked once, shared by every Ooomba instance.
 local frameQuads = nil
 local sheetFrameW, sheetFrameH = nil, nil
 
@@ -378,11 +377,7 @@ local LANDING_SLACK = 2
 local function upAgainstGravity(o)
   local planet = o.lastInfluencePlanet
   if not planet then return Vector2.new(0, -1) end
-  if planet.isRoundedRect then
-    if planet.forceUprightJump or planet.isSkyDome then return Vector2.new(0, -1) end
-    return planet:nearestSurfacePoint(o.pos.x, o.pos.y).normal:clone()
-  end
-  return o.pos:subtract(planet.pos):normalize()
+  return planet:upAt(o.pos.x, o.pos.y)
 end
 
 function Ooomba:updateAirborne(ts)
@@ -474,6 +469,98 @@ function Ooomba:landOn(p, x, y)
   self.up = shape.forceUprightJump and Vector2.new(0, -1) or surface.normal:clone()
 end
 
+-- Sun lighting from the normal map (img/Ooomba_normal.png, and its
+-- ambient occlusion, img/Ooomba_ao.png — the same
+-- sheet layout as the sprite, so the same quad reads both). Each pixel is
+-- lit by how much its surface faces the sun: a soft fill everywhere, more
+-- on the sun side, a glossy highlight where it faces the sun most, and a
+-- rim of reflected light round the shadowed edge (light bouncing back off
+-- its surroundings, the way a sphere's far edge picks some up).
+local LIGHTING = {
+  shadingStrength = 0.7, -- how much of all this shows: 0 = the plain art, 1 = full lighting
+  ambient = 0.42,        -- brightness with no sunlight on it at all
+  diffuse = 0.72,        -- added where the surface faces the sun full on
+  specular = 0.55,       -- the glossy highlight's strength...
+  shininess = 36,        -- ...and tightness (higher: smaller, sharper)
+  rimLight = 0.9,        -- the reflected light on the edge away from the sun (0: none)...
+  rimWidth = 1.8,        -- ...and how tightly it hugs the edge (higher: thinner)
+  sunElevation = 0.5,    -- how much the sun also lights it from the front (0: purely from the side)
+}
+
+local normalShader = nil
+local function getNormalShader()
+  if normalShader then return normalShader end
+  normalShader = love.graphics.newShader([[
+    extern Image normalMap;
+    extern Image aoMap;     // ambient occlusion: 1 = open, lower = tucked in (whatever the light)
+    extern vec3 lightDir;   // toward the sun, in the sprite's own frame (x right, y up, z toward the viewer)
+    extern float ambient;
+    extern float diffuse;
+    extern float specular;
+    extern float shininess;
+    extern float rimLight;
+    extern float rimWidth;
+    extern float shadingStrength;
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 texel = Texel(tex, uv) * color;
+      vec3 n = normalize(Texel(normalMap, uv).rgb * 2.0 - 1.0);
+      float ao = Texel(aoMap, uv).r;
+      float facing = max(dot(n, lightDir), 0.0);
+      vec3 halfway = normalize(lightDir + vec3(0.0, 0.0, 1.0));
+      float shine = pow(max(dot(n, halfway), 0.0), shininess) * specular * ao;
+
+      // Reflected light: strongest right at the silhouette (the surface
+      // turned edge-on, n.z near 0), and only on the side away from the
+      // sun, tinted by the body's own colour (light bounced back onto it).
+      float edge = pow(1.0 - clamp(n.z, 0.0, 1.0), rimWidth);
+      float away = 0.0;
+      if (length(n.xy) > 1e-4 && length(lightDir.xy) > 1e-4) {
+        away = max(dot(normalize(n.xy), -normalize(lightDir.xy)), 0.0);
+      }
+      float rim = edge * away * rimLight * ao;
+
+      vec3 lit = texel.rgb * (ambient + diffuse * facing) * ao
+        + mix(texel.rgb, vec3(1.0), 0.35) * rim
+        + vec3(1.0, 0.98, 0.92) * shine * texel.a;
+      vec3 rgb = mix(texel.rgb, lit, shadingStrength);
+      return vec4(min(rgb, vec3(1.0)), texel.a);
+    }
+  ]])
+  for _, name in ipairs({ "ambient", "diffuse", "specular", "shininess", "rimLight", "rimWidth", "shadingStrength" }) do
+    normalShader:send(name, LIGHTING[name])
+  end
+  return normalShader
+end
+
+-- Points the lighting shader at the sun (the middle of the scene) from
+-- this Ooomba, in the sprite's own frame: undoing its rotation round a
+-- planetoid, and its left-right flip. Returns the shader, or nil (no
+-- normal map, or right on top of the sun).
+function Ooomba:sunLightingShader(rotation, flipped)
+  local normalMap, aoMap = state.oombaNormalTexture, state.oombaAOTexture
+  if not (normalMap and aoMap) then return nil end
+  local toSunX = (state.sceneWidth or 0) / 2 - self.pos.x
+  local toSunY = (state.sceneHeight or 0) / 2 - self.pos.y
+  local dist = math.sqrt(toSunX * toSunX + toSunY * toSunY)
+  if dist < 1 then return nil end
+  toSunX, toSunY = toSunX / dist, toSunY / dist
+  -- Screen -> sprite: rotate back by its rotation...
+  local c, s = math.cos(-rotation), math.sin(-rotation)
+  local lx = c * toSunX - s * toSunY
+  local ly = s * toSunX + c * toSunY
+  -- ...unflip it, and turn the screen's y-down into the map's y-up.
+  if flipped then lx = -lx end
+  ly = -ly
+  local lz = LIGHTING.sunElevation
+  local len = math.sqrt(lx * lx + ly * ly + lz * lz)
+  local shader = getNormalShader()
+  shader:send("normalMap", normalMap)
+  shader:send("aoMap", aoMap)
+  shader:send("lightDir", { lx / len, ly / len, lz / len })
+  return shader
+end
+
 function Ooomba:draw()
   local img = state.oombaTexture
   if not img then return end
@@ -507,9 +594,17 @@ function Ooomba:draw()
   local feetDist = self.halfHeight + DRAW_Y_OFFSET
   local rotation = math.atan2(up.y, up.x) + math.pi / 2
 
+  -- Lit by the sun — unless whoever's drawing it has a shader of its own
+  -- on (CharacterShadows draws it again under its shadow shader, the
+  -- portal effects under theirs), which this mustn't replace.
+  local lighting = (love.graphics.getShader() == nil) and self:sunLightingShader(rotation, scaleX < 0) or nil
+  if lighting then love.graphics.setShader(lighting) end
+
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(img, quad, self.pos.x - up.x * feetDist, self.pos.y - up.y * feetDist, rotation,
     scaleX, scaleY, sheetFrameW / 2, sheetFrameH)
+
+  if lighting then love.graphics.setShader() end
 end
 
 return Ooomba

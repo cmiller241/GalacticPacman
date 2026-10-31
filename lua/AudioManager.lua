@@ -35,9 +35,31 @@ local state = require("lua.state")
 local AudioManager = {}
 AudioManager.__index = AudioManager
 
+-- Background music, by name. Each file is a seamless loop exported from
+-- the composer (composer/README.md), and "stream" means LÖVE reads it
+-- from disk as it plays instead of decoding the whole song up front.
+-- volume: the track's loudness at full fade-in.
+local MUSIC = {
+  skyDome = { path = 'sounds/music/let-all-exalt-navarre-hyperdrive-loop.ogg', volume = 0.45 },
+  belt    = { path = 'sounds/music/wake-awake-2-battle-march-loop.ogg', volume = 0.45 },
+}
+local MUSIC_FADE_SECONDS = 1.5   -- how long a fade in/out takes
+local MUSIC_SWITCH_DELAY = 0.75  -- a new choice has to hold this long before the music changes
+
 function AudioManager.new()
   local self = setmetatable({}, AudioManager)
   self.eatDotIndex = 0  -- moved from state, same as the original's own comment
+
+  self.music = {}
+  for name, info in pairs(MUSIC) do
+    local source = love.audio.newSource(info.path, 'stream')
+    source:setLooping(true)
+    source:setVolume(0)
+    self.music[name] = { source = source, volume = info.volume, level = 0 }
+  end
+  self.musicWanted = nil       -- the track that should be playing (nil = none)
+  self.musicPending = nil      -- a different track asked for, not yet held long enough
+  self.musicPendingTime = 0
 
   self.eatDotAudio0 = love.audio.newSource('sounds/eat_dot_0.wav', 'static')
   self.eatDotAudio1 = love.audio.newSource('sounds/eat_dot_1.wav', 'static')
@@ -139,6 +161,49 @@ function AudioManager:playBang(size, position)
   local started = instance:play()
   if not started then
     print("Audio play failed for playBang")
+  end
+end
+
+-- Call every frame with the name of the music that should be playing
+-- (a key of MUSIC above, or nil for none). Tracks fade in and out
+-- rather than cutting, and a change only happens once it's been asked
+-- for steadily for MUSIC_SWITCH_DELAY, so brushing past something
+-- doesn't flick the music off and on.
+function AudioManager:updateMusic(name, dt)
+  if name == self.musicWanted then
+    self.musicPending, self.musicPendingTime = nil, 0
+  else
+    if name ~= self.musicPending then
+      self.musicPending, self.musicPendingTime = name, 0
+    end
+    self.musicPendingTime = self.musicPendingTime + dt
+    if self.musicPendingTime >= MUSIC_SWITCH_DELAY then
+      self.musicWanted = name
+      self.musicPending, self.musicPendingTime = nil, 0
+    end
+  end
+
+  local step = dt / MUSIC_FADE_SECONDS
+  for trackName, m in pairs(self.music) do
+    local target = (trackName == self.musicWanted) and 1 or 0
+    if m.level < target then
+      m.level = math.min(target, m.level + step)
+    elseif m.level > target then
+      m.level = math.max(target, m.level - step)
+    end
+    local playing = m.source:isPlaying()
+    if target == 1 and not playing then
+      m.source:play()
+    elseif target == 0 and not playing then
+      -- Already stopped (e.g. the pause menu's EXIT TO TITLE stops
+      -- every sound) — nothing left to fade.
+      m.level = 0
+    end
+    if m.level > 0 then
+      m.source:setVolume(m.volume * m.level)
+    elseif playing then
+      m.source:stop()  -- fully faded out: next time it starts from the top
+    end
   end
 end
 

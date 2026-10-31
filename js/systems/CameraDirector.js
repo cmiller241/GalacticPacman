@@ -6,7 +6,7 @@
 // several waypoints, then handing control back with one more eased
 // transition onto wherever the player is by then.
 //
-// Call CameraDirector.update(ts) once per frame, BEFORE main.js's own
+// Call CameraDirector.update(ts) once per frame, BEFORE js/systems/Camera.js's own
 // player-centered camera math — it returns true (having already set
 // state.camera/state.zoom) while an override is active.
 

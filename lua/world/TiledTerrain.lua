@@ -38,6 +38,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local PlanetSurface = require("lua.world.PlanetSurface")
 
 local TiledTerrain = {}
 
@@ -46,7 +47,7 @@ local TiledTerrain = {}
 ----------------------------------------------------------------------
 
 local TILE_SOURCE_SIZE = 32  -- px, matches tiled/Grass Tiles.tsx
-local TILE_SCALE = 2         -- same 2x convention JumpPlatform.lua already uses
+local TILE_SCALE = 2         -- each source pixel drawn 2x2
 local TILE_WORLD_SIZE = TILE_SOURCE_SIZE * TILE_SCALE  -- 64 world units/tile
 
 -- Fallback only — used if the embedded tileset def doesn't carry its own
@@ -257,6 +258,26 @@ end
 
 function TerrainShape:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
+end
+
+-- The planet surface interface (see lua/world/PlanetSurface.lua).
+-- forceUprightJump shapes (ordinary ground and slopes) keep him standing
+-- straight up, the way Mario doesn't tilt to a slope; ramp-climb shapes
+-- (forceUprightJump = false) turn him to their surface.
+function TerrainShape:upAt(worldX, worldY)
+  if self.forceUprightJump then return Vector2.new(0, -1) end
+  return PlanetSurface.upFromNormal(self, worldX, worldY)
+end
+
+TerrainShape.gravityDirAt = PlanetSurface.gravityTowardSurface
+
+-- Open-path shapes (all of them, so far) are landing surfaces only,
+-- never a gravity source of their own: a ledge would otherwise tug a
+-- falling player sideways toward it like a tiny planet, instead of the
+-- dome's straight-down gravity doing the rest.
+function TerrainShape:gravityDistance(worldX, worldY)
+  if self.isOpenPath then return nil end
+  return PlanetSurface.gravityDistanceFromSurface(self, worldX, worldY)
 end
 
 -- Landing check for open-path terrain: a segment only counts as a landing
@@ -2484,7 +2505,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   local sphereMoveSpawns = {}
   -- "Zoom-Window" objects: a rectangle (not a point, unlike everything
   -- else here) that eases the camera to its own "zoom" custom property
-  -- while the player is inside it — see main.lua's own zoom-window pass
+  -- while the player is inside it — see lua/systems/Camera.lua's zoom-window pass
   -- in love.update. Already converted to world space here.
   local zoomWindows = {}
   -- "DeathZone" objects: a rectangle with respawnX/respawnY custom

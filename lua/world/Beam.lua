@@ -16,7 +16,7 @@
 -- entrance into a separate scene, so none of that machinery is needed
 -- here), and WITHOUT that version's separate radial "portal" particle
 -- burst at the tip — the teleport moment itself now gets its own
--- feedback from Player:getTeleportPulse's scale/glow blip instead (see
+-- feedback from Player:getTransporterState's transporter shimmer instead (see
 -- that function's own header comment), so the beam itself only ever
 -- needs the one steady, ambient stream.
 --
@@ -28,6 +28,7 @@
 -- (see drawFadingLine below) instead.
 
 local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
 local Vector2 = require("lua.vector2")
 local InteractPrompt = require("lua.ui.InteractPrompt")
 
@@ -82,17 +83,13 @@ function Beam:getPortalPosition()
     self.pos.y + math.sin(self.angle) * Beam.LENGTH)
 end
 
-function Beam:isPlayerNear(player)
-  if not player then return false end
-  local dx, dy = player.pos.x - self.pos.x, player.pos.y - self.pos.y
-  return (dx * dx + dy * dy) <= self.interactRadius * self.interactRadius
-end
+Beam.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
 
 -- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
 -- both just call this unconditionally on their own press; it's the one
 -- place that actually decides whether the player's close enough AND
 -- this beam actually goes anywhere. The teleport's own visual cue is
--- entirely Player:getTeleportPulse's own scale/glow blip now (see this
+-- entirely Player:getTransporterState's transporter shimmer now (see this
 -- file's own header comment) — nothing extra to trigger here beyond the
 -- state change itself.
 function Beam:tryInteract(player)

@@ -2,8 +2,12 @@
 //
 // The in-game pause menu: Escape on the keyboard or Start (Options) on
 // the controller freezes the game under a gray see-through overlay and
-// offers CONTINUE or EXIT TO TITLE. main.js does the freezing (love.update
-// returns early while PauseMenu.isOpen()) and sets onExitToTitle.
+// offers CONTINUE, EXIT TO TITLE or EXIT GAME. main.js does the freezing
+// (love.update returns early while PauseMenu.isOpen()) and sets onExitToTitle.
+//
+// EXIT GAME closes the game in LÖVE. A browser tab usually isn't allowed to
+// close itself, so here it tries, and if the tab is still open a moment
+// later it falls back to EXIT TO TITLE.
 
 import love from '../love/index.js';
 import lua from '../love/lua.js';
@@ -11,8 +15,8 @@ import state from '../state.js';
 
 const PauseMenu = {};
 
-const OPTIONS = ['CONTINUE', 'EXIT TO TITLE'];
-const CONTINUE = 0, EXIT_TO_TITLE = 1;
+const OPTIONS = ['CONTINUE', 'EXIT TO TITLE', 'EXIT GAME'];
+const CONTINUE = 0, EXIT_TO_TITLE = 1, EXIT_GAME = 2;
 
 const OVERLAY_COLOR = [0.32, 0.34, 0.38, 0.62];
 const HEADING_FONT_SIZE = 56;
@@ -59,6 +63,17 @@ PauseMenu.confirm = function () {
   if (!state.paused) return;
   if (selected === CONTINUE) {
     PauseMenu.close();
+    return;
+  }
+  if (selected === EXIT_GAME) {
+    love.event.quit();
+    window.close(); // only works if the browser allows it (e.g. a tab the game itself opened)
+    // Still here? Exiting to the title is the closest thing a tab can do.
+    setTimeout(() => {
+      if (window.closed || !state.paused) return;
+      selected = EXIT_TO_TITLE;
+      PauseMenu.confirm();
+    }, 200);
     return;
   }
   state.paused = false;

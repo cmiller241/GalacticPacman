@@ -412,21 +412,9 @@ local function gravityAt(portal, offset, influence)
   local gs = state.gravitySystem
   local dominant = gs and gs:findDominantPlanet(Vector2.new(x, y), influence)
   if not dominant then return Vector2.new(0, 0) end
-  local dx, dy
-  if dominant.isRoundedRect and dominant.nearestSurfacePoint then
-    local surface = dominant:nearestSurfacePoint(x, y)
-    if surface.distance > 1e-6 then
-      dx, dy = surface.point.x - x, surface.point.y - y
-    else
-      dx, dy = -surface.normal.x, -surface.normal.y
-    end
-  else
-    dx, dy = dominant.pos.x - x, dominant.pos.y - y
-  end
-  local len = math.sqrt(dx * dx + dy * dy)
-  if len < 1e-6 then return Vector2.new(0, 0) end
+  local dir = dominant:gravityDirAt(x, y)
   local strength = dominant.gravityStrength or constants.GRAVITY_STRENGTH
-  return Vector2.new(dx / len * strength, dy / len * strength)
+  return Vector2.new(dir.x * strength, dir.y * strength)
 end
 
 ----------------------------------------------------------------------

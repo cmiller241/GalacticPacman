@@ -149,6 +149,30 @@ class Planetoid {
     this.eclipseMesh = null;
   }
 
+  // The planet surface interface (see js/world/PlanetSurface.js), for a
+  // round body: "up" is straight out from the center, gravity pulls
+  // straight in, and its reach is influenceRadius from the center.
+  upAt(x, y) {
+    return new Vector2(x - this.pos.x, y - this.pos.y).normalize();
+  }
+
+  gravityDirAt(x, y) {
+    return new Vector2(this.pos.x - x, this.pos.y - y).normalize();
+  }
+
+  // Negative inside the planet.
+  distanceToSurface(x, y) {
+    const dx = x - this.pos.x, dy = y - this.pos.y;
+    return Math.sqrt(dx * dx + dy * dy) - this.radius;
+  }
+
+  // (Ranked by distance from the center, not the surface.)
+  gravityDistance(x, y) {
+    const dx = x - this.pos.x, dy = y - this.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    return dist < (this.influenceRadius ?? (this.radius + (constants.INFLUENCE_PADDING ?? 200))) ? dist : null;
+  }
+
   static beginFrame() {
     bodyCanvasBakesThisFrame = 0;
   }

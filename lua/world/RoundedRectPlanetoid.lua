@@ -5,19 +5,11 @@
 -- edge and corner, not just the top), pull-target, and bounce off of
 -- like any ordinary circular Planetoid.
 --
--- The core surface math below (worldToLocal/nearestSurfacePoint/
--- buildSegments/arc-length walking) is the SAME formula
--- lua/world/JumpPlatform.lua already carries (see that file's own
--- header comment — it was ported from this exact JS source first,
--- for a one-sided jump pad) — kept as its own local copy here rather
--- than factored into a shared module, matching how this codebase
--- generally prefers a self-contained file per entity over an early
--- shared-geometry abstraction. What's different from JumpPlatform:
--- this one does NOT set isSkyDome (gravity/landing work from every
--- side, not just a window above the top), isPullExempt (it's a normal
--- pull target), or noSunShading (it gets the same live directional
--- shading every other planetoid gets, adapted to a rounded-rect
--- silhouette — see :drawSunShading).
+-- Unlike the sky dome, it does NOT set isSkyDome (gravity/landing work
+-- from every side, not just a window above the top), isPullExempt (it's
+-- a normal pull target), or noSunShading (it gets the same live
+-- directional shading every other planetoid gets, adapted to a
+-- rounded-rect silhouette — see :drawSunShading).
 --
 -- Drifts and spins like any other field planetoid by default (self.vel,
 -- self.rotationAngle/rotationSpeed) — whoever spawns a "this one stays
@@ -29,15 +21,14 @@
 -- No influence-ring drawing (JS's own ringCanvas) — main.lua's generic
 -- ring debug pass already excludes every isRoundedRect planet outright
 -- (a circular ring would misrepresent a rectangular influence shape),
--- and both existing isRoundedRect classes here (SkyDomePlanetoid,
--- JumpPlatform) already settled on simply not drawing one rather than
--- building a rounded-rect-shaped replacement — this follows that same
--- established call instead of reopening it.
+-- and SkyDomePlanetoid already settled on simply not drawing one rather
+-- than building a rounded-rect-shaped replacement.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local Planetoid = require("lua.world.Planetoid")
+local PlanetSurface = require("lua.world.PlanetSurface")
 
 local RoundedRectPlanetoid = {}
 RoundedRectPlanetoid.__index = RoundedRectPlanetoid
@@ -161,6 +152,12 @@ end
 function RoundedRectPlanetoid:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
 end
+
+-- The planet surface interface (see lua/world/PlanetSurface.lua): "up"
+-- is the nearest face's normal, so he walks all the way round it.
+RoundedRectPlanetoid.upAt = PlanetSurface.upFromNormal
+RoundedRectPlanetoid.gravityDirAt = PlanetSurface.gravityTowardSurface
+RoundedRectPlanetoid.gravityDistance = PlanetSurface.gravityDistanceFromSurface
 
 -- Used for right-click/R1 "pull star" target selection
 -- (Player:trySelectPullTarget) — same formula as nearestSurfacePoint's

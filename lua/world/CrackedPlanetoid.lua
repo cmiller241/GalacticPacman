@@ -65,6 +65,7 @@ local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local Planetoid = require("lua.world.Planetoid")
+local PlanetSurface = require("lua.world.PlanetSurface")
 local Particle = require("lua.entities.Particle")
 local CameraShake = require("lua.effects.CameraShake")
 
@@ -999,7 +1000,11 @@ function CrackedPlanetoid:upAtLocal(lx, ly)
 end
 
 -- The same, at a world point, as a Vector2.
-function CrackedPlanetoid:upAtWorld(wx, wy)
+-- The planet surface interface (see lua/world/PlanetSurface.lua). "Up"
+-- here is away from this planet's gravity, which can be switched (see
+-- :cycleGravity) — not off whichever brick edge is nearest: its bricky
+-- ground is all steps, so things stay upright to the way it pulls.
+function CrackedPlanetoid:upAt(wx, wy)
   local ux, uy = self:upAtLocal(wx - self.pos.x, wy - self.pos.y)
   return Vector2.new(ux, uy)
 end
@@ -1009,6 +1014,8 @@ function CrackedPlanetoid:gravityDirAt(wx, wy)
   local ux, uy = self:upAtLocal(wx - self.pos.x, wy - self.pos.y)
   return Vector2.new(-ux, -uy)
 end
+
+CrackedPlanetoid.gravityDistance = PlanetSurface.gravityDistanceFromSurface
 
 -- Core -> Down -> Up -> Core. If he's standing on this planet, he lets
 -- go of it, to fall the new way.

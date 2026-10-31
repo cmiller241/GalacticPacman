@@ -27,30 +27,11 @@ class GravitySystem {
     let currentDist = null;
 
     for (const planet of this.planetoids) {
-      let dist, withinRange;
+      // Each kind of planet decides its own reach (see
+      // js/world/PlanetSurface.js): null when pos is out of it.
+      const dist = planet.gravityDistance(pos.x, pos.y);
 
-      if (planet.isOpenPath) {
-        withinRange = false;
-      } else if (planet.isRoundedRect) {
-        if (planet.distanceToSurface) {
-          dist = planet.distanceToSurface(pos.x, pos.y);
-        } else if (planet.nearestSurfacePoint) {
-          dist = planet.nearestSurfacePoint(pos.x, pos.y).distance;
-        } else {
-          dist = pos.subtract(planet.pos).length();
-        }
-
-        if (planet.isSkyDome) {
-          withinRange = !!(planet.isWithinGravityWindow && planet.isWithinGravityWindow(pos.x, pos.y));
-        } else {
-          withinRange = dist < (constants.INFLUENCE_PADDING ?? 200);
-        }
-      } else {
-        dist = pos.subtract(planet.pos).length();
-        withinRange = dist < (planet.influenceRadius ?? (planet.radius + (constants.INFLUENCE_PADDING ?? 200)));
-      }
-
-      if (withinRange) {
+      if (dist != null) {
         if (dist < minDist) {
           minDist = dist;
           closest = planet;
@@ -74,23 +55,10 @@ class GravitySystem {
 
     entity.lastInfluencePlanet = dominant;
 
-    let dir;
-    // (A cracked planet is round: it pulls toward its center, so a
-    // crater's wall doesn't drag things sideways into it.)
-    if (dominant.isRoundedRect && dominant.nearestSurfacePoint && !dominant.isCrackedPlanet) {
-      const surface = dominant.nearestSurfacePoint(entity.pos.x, entity.pos.y);
-      if (surface.distance > 1e-6) {
-        dir = Vector2.new(surface.point.x - entity.pos.x, surface.point.y - entity.pos.y).normalize();
-      } else {
-        dir = surface.normal.clone().multiply(-1);
-      }
-    } else if (dominant.gravityDirAt) {
-      // (A cracked planet's gravity can be switched — see
-      // CrackedPlanetoid.cycleGravity.)
-      dir = dominant.gravityDirAt(entity.pos.x, entity.pos.y);
-    } else {
-      dir = dominant.pos.subtract(entity.pos).normalize();
-    }
+    // Toward a round planet's center, toward a flat surface's nearest
+    // point, or however a cracked planet's switchable gravity points (see
+    // js/world/PlanetSurface.js).
+    const dir = dominant.gravityDirAt(entity.pos.x, entity.pos.y);
 
     let grav = dominant.gravityStrength ?? entity.GRAVITY_STRENGTH ?? constants.GRAVITY_STRENGTH ?? 0.35;
     if (entity.isGroundPounding) {

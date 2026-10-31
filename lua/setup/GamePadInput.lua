@@ -58,13 +58,12 @@
 --   below depends on.
 
 local state = require("lua.state")
-local inputHandlers = require("lua.setup.InputHandlers")
-local tryRestartOrAdvance = inputHandlers.tryRestartOrAdvance
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
 local PortalGun = require("lua.systems.PortalGun")
 local WeaponModes = require("lua.systems.WeaponModes")
 local Recall = require("lua.systems.Recall")
+local WorldObjects = require("lua.systems.WorldObjects")
 
 -- Positional mapping — see this file's own header comment for why
 -- these specific names correspond to these specific PS buttons.
@@ -160,18 +159,6 @@ local function pollGamepad(dt)
     state.gamepadRunHeld = isShiftHeld()
     state.gamepadIsActiveDevice = false
     state.gamepadPullHeld = false
-    return
-  end
-
-  -- On the GAME OVER / level-complete screens, X is the ONLY thing
-  -- this function should do — same early-return, same reasoning as
-  -- the original.
-  if state.gameOver or state.levelComplete then
-    local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
-    if xPressed and not lastXPressed then
-      tryRestartOrAdvance()
-    end
-    lastXPressed = xPressed
     return
   end
 
@@ -430,36 +417,8 @@ local function pollGamepad(dt)
   if circlePressed and not lastCirclePressed and state.player and not riding then
     state.player:clearLockTarget()
     state.vatsActive = false
-    -- No talking to NPCs or pulling levers while curled into a ball —
-    -- see this same guard in InputHandlers.lua's own Enter handler.
-    if not state.player.isBall then
-      if state.robotButler then
-        state.robotButler:tryInteract(state.player)
-      end
-      if state.fisherman then
-        state.fisherman:tryInteract(state.player)
-      end
-      if state.levers then
-        for _, lever in ipairs(state.levers) do
-          lever:tryInteract(state.player)
-        end
-      end
-      if state.cranks then
-        for _, crank in ipairs(state.cranks) do
-          crank:tryInteract(state.player)
-        end
-      end
-      if state.signs then
-        for _, sign in ipairs(state.signs) do
-          sign:tryInteract(state.player)
-        end
-      end
-      if state.beams then
-        for _, beam in ipairs(state.beams) do
-          beam:tryInteract(state.player)
-        end
-      end
-    end
+    -- Interact: NPCs, levers, cranks, signs, beams (see WorldObjects.interact).
+    WorldObjects.interact(state.player)
   end
   lastCirclePressed = circlePressed
 

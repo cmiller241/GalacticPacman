@@ -57,40 +57,11 @@ function GravitySystem:findDominantPlanet(pos, currentDominant)
   local currentDist = nil
 
   for _, planet in ipairs(self.planetoids) do
-    local dist, withinRange
+    -- Each kind of planet decides its own reach (see
+    -- lua/world/PlanetSurface.lua): nil when pos is out of it.
+    local dist = planet:gravityDistance(pos.x, pos.y)
 
-    if planet.isOpenPath then
-      -- TiledTerrain ledges/hills are landing surfaces only, never their
-      -- own gravity source — otherwise a ledge would tug falling/jumping
-      -- players sideways toward it like a tiny planet (surface.point can
-      -- sit off to the side, not just below), instead of just standing
-      -- there while the dome's own straight-down gravity does the rest.
-      withinRange = false
-    elseif planet.isRoundedRect then
-      if planet.distanceToSurface then
-        dist = planet:distanceToSurface(pos.x, pos.y)
-      elseif planet.nearestSurfacePoint then
-        dist = planet:nearestSurfacePoint(pos.x, pos.y).distance
-      else
-        dist = pos:subtract(planet.pos):length()
-      end
-
-      if planet.isSkyDome then
-        -- Complete proximity test on its own — do NOT also require
-        -- dist < INFLUENCE_PADDING (that would re-impose a ~200-unit
-        -- cap and break high jumps inside a wide dome).
-        withinRange = planet.isWithinGravityWindow
-          and planet:isWithinGravityWindow(pos.x, pos.y)
-          or false
-      else
-        withinRange = dist < (constants.INFLUENCE_PADDING or 200)
-      end
-    else
-      dist = pos:subtract(planet.pos):length()
-      withinRange = dist < (planet.influenceRadius or (planet.radius + (constants.INFLUENCE_PADDING or 200)))
-    end
-
-    if withinRange then
+    if dist then
       if dist < minDist then
         minDist = dist
         closest = planet
@@ -122,29 +93,10 @@ function GravitySystem:applyTo(entity)
 
   entity.lastInfluencePlanet = dominant
 
-  local dir
-  -- (A cracked planet is round: it pulls toward its center, so a
-  -- crater's wall doesn't drag things sideways into it.)
-  if dominant.isRoundedRect and dominant.nearestSurfacePoint and not dominant.isCrackedPlanet then
-    local surface = dominant:nearestSurfacePoint(entity.pos.x, entity.pos.y)
-    -- Toward the deck point while airborne; once nearly on it, use
-    -- "down" along the surface normal (SkyDome normal is (0,-1), so
-    -- -normal is (0,1) — traditional platform gravity).
-    if surface.distance > 1e-6 then
-      dir = Vector2.new(
-        surface.point.x - entity.pos.x,
-        surface.point.y - entity.pos.y
-      ):normalize()
-    else
-      dir = surface.normal:clone():multiply(-1)
-    end
-  elseif dominant.gravityDirAt then
-    -- (A cracked planet's gravity can be switched — see
-    -- CrackedPlanetoid:cycleGravity.)
-    dir = dominant:gravityDirAt(entity.pos.x, entity.pos.y)
-  else
-    dir = dominant.pos:subtract(entity.pos):normalize()
-  end
+  -- Toward a round planet's center, toward a flat surface's nearest
+  -- point, or however a cracked planet's switchable gravity points (see
+  -- lua/world/PlanetSurface.lua).
+  local dir = dominant:gravityDirAt(entity.pos.x, entity.pos.y)
 
   -- Per-planet override (e.g. SkyDomePlanetoid's own stronger,
   -- less-floaty gravityStrength) takes priority over the per-entity /
