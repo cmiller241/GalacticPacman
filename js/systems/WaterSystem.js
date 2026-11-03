@@ -25,6 +25,7 @@ import lua from '../love/lua.js';
 import state from '../state.js';
 import constants from '../constants.js';
 import Vector2 from '../vector2.js';
+import utils from '../utils.js';
 import PortalGun from './PortalGun.js';
 import Splash from '../effects/Splash.js';
 import Lava from '../world/Lava.js';
@@ -189,6 +190,44 @@ let obsidians = [];      // obsidian blocks lava's turned into (see "Lava meetin
 const Ice = { blocks: [], frame: 0 };
 let age = 0;
 const meshes = new Map(), meshSizes = new Map(); // a mesh for each liquid (see drawLiquidMesh)
+
+// Scratch space reused every frame, so the water's busiest loops don't
+// make fresh arrays each time: the wet-cell list stepWater walks, and
+// the vertices the pools and oceans are drawn from — only the first
+// vertCount of `verts` are this draw's (the rest are kept for reuse).
+const Scratch = {
+  cells: [],
+  verts: [],
+  vertCount: 0,
+
+  // Every key of `water` (a liquid's cells), in Scratch.cells.
+  collectCells(water) {
+    const list = this.cells;
+    list.length = 0;
+    for (const i of water.keys()) list.push(i);
+    return list;
+  },
+
+  resetVerts() { this.vertCount = 0; },
+
+  // One vertex: position, texture coordinates (u, v), and alpha.
+  vert(x, y, u, v, alpha) {
+    const t = this.verts[this.vertCount];
+    if (t) {
+      t[0] = x; t[1] = y; t[2] = u; t[3] = v; t[7] = alpha;
+    } else {
+      this.verts[this.vertCount] = [x, y, u, v, 1, 1, 1, alpha];
+    }
+    this.vertCount++;
+  },
+
+  // Two triangles over the corners 1-2-3-4 (top edge 1->2, bottom edge
+  // 4->3): depthTop/depthBottom are their u, stream their v.
+  quad(x1, y1, x2, y2, x3, y3, x4, y4, depthTop, depthBottom, stream) {
+    this.vert(x1, y1, depthTop, stream, 1); this.vert(x2, y2, depthTop, stream, 1); this.vert(x3, y3, depthBottom, stream, 1);
+    this.vert(x1, y1, depthTop, stream, 1); this.vert(x3, y3, depthBottom, stream, 1); this.vert(x4, y4, depthBottom, stream, 1);
+  },
+};
 
 // How each liquid moves (see stepWater): which of a grid's maps it's kept
 // in, and its rules.
@@ -397,8 +436,12 @@ function inGrid(c, r) {
 }
 
 function gateCovers(c, r) {
+  // (Called for nearly every neighbor the water looks at: no `?? []`
+  // array made each time when there are no gates.)
+  const gates = state.gates;
+  if (!gates) return false;
   const x = grid.x0 + (c + 0.5) * CELL, y = grid.y0 + (r + 0.5) * CELL;
-  for (const gate of (state.gates ?? [])) {
+  for (const gate of gates) {
     if (gate.halfHeight > 1 && Math.abs(x - gate.pos.x) <= gate.halfWidth
         && Math.abs(y - gate.pos.y) <= gate.halfHeight) return true;
   }
@@ -463,7 +506,7 @@ function spreadSideways(i, w, c, r, liquid) {
 // rows first — then passes - 1 more passes of it just spreading sideways.
 function stepWater(dt, liquid = WATER) {
   const cols = grid.cols, water = grid[liquid.key];
-  const list = [...water.keys()].sort((a, b) => b - a);
+  const list = Scratch.collectCells(water).sort((a, b) => b - a);
   grid.flip = !grid.flip;
 
   for (const i of list) {
@@ -496,7 +539,7 @@ function stepWater(dt, liquid = WATER) {
   for (let pass = 2; pass <= liquid.passes; pass++) {
     grid.flip = !grid.flip;
     // (Any order: only falling needs the bottom rows first.)
-    for (const i of [...water.keys()]) {
+    for (const i of Scratch.collectCells(water)) {
       let w = water.get(i);
       if (w === undefined) continue;
       const r = Math.floor(i / cols);
@@ -830,7 +873,7 @@ function spreadPlanetSideways(g, i, w, c, r, liquid) {
 // passes - 1 more passes of it just spreading round.
 function stepPlanetWater(g, dt, liquid = WATER) {
   const cols = g.cols, water = g[liquid.key];
-  const list = [...water.keys()].sort((a, b) => b - a); // (lowest rows first)
+  const list = Scratch.collectCells(water).sort((a, b) => b - a); // (lowest rows first)
   g.flip = !g.flip;
 
   for (const i of list) {
@@ -865,7 +908,7 @@ function stepPlanetWater(g, dt, liquid = WATER) {
   for (let pass = 2; pass <= liquid.passes; pass++) {
     g.flip = !g.flip;
     // (Any order: only falling needs the bottom rows first.)
-    for (const i of [...water.keys()]) {
+    for (const i of Scratch.collectCells(water)) {
       let w = water.get(i);
       if (w === undefined) continue;
       const r = Math.floor(i / cols);
@@ -944,7 +987,7 @@ function drawPlanetWater(g, liquid) {
   const px = g.planet.pos.x, py = g.planet.pos.y;
   const cols = g.cols, water = g[liquid.key], rows = g.rows;
   const rippleScale = liquid === LAVA ? LAVA_TUNING.RIPPLE : 1;
-  const verts = [];
+  Scratch.resetVerts();
 
   const cellBottom = (r) => g.top - (r + 1) * CELL;
   // A strip from column position f0 to f1: hTop0/hTop1 the height of its
@@ -956,11 +999,8 @@ function drawPlanetWater(g, liquid) {
     const [x2, y2] = planetPoint(g, f1, hTop1);
     const [x3, y3] = planetPoint(g, f1, hBottom1);
     const [x4, y4] = planetPoint(g, f0, hBottom0);
-    const v1 = [px + x1, py + y1, depthTop, stream, 1, 1, 1, 1];
-    const v2 = [px + x2, py + y2, depthTop, stream, 1, 1, 1, 1];
-    const v3 = [px + x3, py + y3, depthBottom, stream, 1, 1, 1, 1];
-    const v4 = [px + x4, py + y4, depthBottom, stream, 1, 1, 1, 1];
-    verts.push(v1, v2, v3, v1, v3, v4);
+    Scratch.quad(px + x1, py + y1, px + x2, py + y2, px + x3, py + y3, px + x4, py + y4,
+      depthTop, depthBottom, stream);
   };
   // Where the ground under resting water in cell row r really is, at
   // column position f: on the flat layout, its square cells don't follow
@@ -1018,8 +1058,8 @@ function drawPlanetWater(g, liquid) {
     const r = Math.floor(i / cols);
     const c = i - r * cols;
     for (let d = 1; d <= 8 && !capDepth.has(i); d++) {
-      for (const k of [c - d, c + d]) {
-        const nc = planetCol(g, k);
+      for (let side = -1; side <= 1; side += 2) { // (c - d, then c + d)
+        const nc = planetCol(g, c + side * d);
         const n = nc !== null ? r * cols + nc : null;
         if (n !== null && stackFloor.has(n) && !capped.has(stackFloor.get(n)) && stackSurface.get(n) > stackSurface.get(i)) {
           capDepth.set(i, stackSurface.get(n) - stackSurface.get(i));
@@ -1034,7 +1074,8 @@ function drawPlanetWater(g, liquid) {
   const surfaceNear = (c, r) => {
     const cc = planetCol(g, c);
     if (cc === null) return null;
-    for (const rr of [r, r + 1, r - 1]) {
+    for (let step = 0; step < 3; step++) { // (r, then r + 1, then r - 1)
+      const rr = step === 0 ? r : step === 1 ? r + 1 : r - 1;
       if (rr >= 0 && rr < rows) {
         const s = stackSurface.get(rr * cols + cc);
         if (s !== undefined) return s;
@@ -1142,22 +1183,23 @@ function drawPlanetWater(g, liquid) {
       }
     }
   }
-  if (verts.length === 0) return;
-  drawLiquidMesh(`planet-${liquid.key}`, verts, liquid);
+  if (Scratch.vertCount === 0) return;
+  drawLiquidMesh(`planet-${liquid.key}`, liquid);
 }
 
-// `verts` drawn through `liquid`'s shader (the water's or the lava's), in
-// the mesh kept for `slot`.
-function drawLiquidMesh(slot, verts, liquid) {
+// The vertices built in Scratch (see Scratch.vert) drawn through
+// `liquid`'s shader (the water's or the lava's), in the mesh kept for `slot`.
+function drawLiquidMesh(slot, liquid) {
+  const count = Scratch.vertCount;
   let m = meshes.get(slot);
-  if (!m || meshSizes.get(slot) < verts.length) {
-    const size = Math.max(verts.length, (meshSizes.get(slot) ?? 0) * 2, 600);
+  if (!m || meshSizes.get(slot) < count) {
+    const size = Math.max(count, (meshSizes.get(slot) ?? 0) * 2, 600);
     m = love.graphics.newMesh(size, 'triangles', 'stream');
     meshes.set(slot, m);
     meshSizes.set(slot, size);
   }
-  m.setVertices(verts);
-  m.setDrawRange(0, verts.length);
+  m.setVertices(Scratch.verts, 0, count);
+  m.setDrawRange(0, count);
   if (liquid === LAVA) useLavaShader(); else useWaterShader();
   love.graphics.setColor(1, 1, 1, 1);
   love.graphics.draw(m);
@@ -2039,12 +2081,16 @@ function updateLavaEmbers() {
       radius: L.EMBER_RADIUS_MIN + Math.random() * (L.EMBER_RADIUS_MAX - L.EMBER_RADIUS_MIN),
     });
   });
+  // (Finished ones noted as they go and removed together at the end —
+  // see utils.removeMarked. Likewise the steam, droplets and splashes.)
+  let gone = null;
   for (let k = lavaEmbers.length - 1; k >= 0; k--) {
     const e = lavaEmbers[k];
     e.x += e.vx * ts; e.y += e.vy * ts;
     e.life -= e.decay * ts / 60;
-    if (e.life <= 0) lavaEmbers.splice(k, 1);
+    if (e.life <= 0) (gone ??= new Set()).add(e);
   }
+  if (gone) utils.removeMarked(lavaEmbers, gone);
 }
 
 // Where the lava glows (see TileGlow.js): fn(x, y) once for each tile's
@@ -2560,16 +2606,18 @@ function updateSteam(dt) {
     if (h.life <= 0 || sx == null) hotSpots.splice(i, 1);
   }
 
+  let gone = null;
   for (let i = steam.length - 1; i >= 0; i--) {
     const s = steam[i];
     s.life -= gameDt;
     if (s.life <= 0) {
-      steam.splice(i, 1);
+      (gone ??= new Set()).add(s);
     } else {
       s.vx += (rnd() - 0.5) * 0.06 * ts;
       s.x += s.vx * ts; s.y += s.vy * ts;
     }
   }
+  if (gone) utils.removeMarked(steam, gone);
 }
 
 function drawSteam() {
@@ -2628,14 +2676,17 @@ WaterSystem.update = function (dt) {
   for (const o of oceans.values()) totalWater += o.volume - (o.natural ?? 0);
   for (const d of droplets) if (!d.lava) totalWater += d.volume ?? DROPLET_VOLUME; // (lava's not water)
 
-  const sprayHeld = state.waterMode && (love.mouse.isDown(2) || state.gamepadSprayHeld);
+  const sprayHeld = state.waterMode && (love.mouse.isDown(1) || state.gamepadSprayHeld);
   isSpraying = !!(sprayHeld && canSpray(player));
   if (isSpraying) spray(player, dt * ts);
   else sprayBudget = 0;
 
+  let gone = null;
   for (let i = droplets.length - 1; i >= 0; i--) {
-    if (updateDroplet(droplets[i], ts, dt)) droplets.splice(i, 1);
+    const d = droplets[i];
+    if (updateDroplet(d, ts, dt)) (gone ??= new Set()).add(d);
   }
+  if (gone) utils.removeMarked(droplets, gone);
   updateSteam(dt);
 
   if (state.particles) {
@@ -2649,16 +2700,18 @@ WaterSystem.update = function (dt) {
     }
   }
 
+  gone = null;
   for (let i = splashes.length - 1; i >= 0; i--) {
     const s = splashes[i];
     s.life -= dt;
     if (s.life <= 0) {
-      splashes.splice(i, 1);
+      (gone ??= new Set()).add(s);
     } else {
       s.vx += s.gx * ts; s.vy += s.gy * ts;
       s.x += s.vx * ts; s.y += s.vy * ts;
     }
   }
+  if (gone) utils.removeMarked(splashes, gone);
 
   if (grid || planetGrids.size > 0) {
     stepClock += dt * ts;
@@ -2817,39 +2870,45 @@ function getWaterShader() {
     }
     #endif
   `);
+  // (The settings that never change: sent once here, not on every draw.
+  // The rest are set in useWaterShader, and changed for each water body
+  // in drawOceans.)
+  waterShader.send('colorShallow', COLOR_SHALLOW);
+  waterShader.send('colorDeep', COLOR_DEEP);
+  waterShader.send('deepAt', DEEP_AT);
+  waterShader.send('alphaShallow', ALPHA_SHALLOW);
+  waterShader.send('alphaDeep', ALPHA_DEEP);
+  waterShader.send('colorSurface', COLOR_SURFACE);
+  waterShader.send('surfaceLine', SURFACE_LINE);
+  waterShader.send('surfaceFeather', SURFACE_FEATHER);
+  waterShader.send('surfaceGlow', SURFACE_GLOW);
+  waterShader.send('colorCaustic', COLOR_CAUSTIC);
+  waterShader.send('sphereShallow', SPHERE_COLOR_SHALLOW);
+  waterShader.send('sphereDeep', SPHERE_COLOR_DEEP);
+  waterShader.send('sphereShade', SPHERE_COLOR_SHADE);
+  waterShader.send('sphereShadeStrength', SPHERE_SHADE_STRENGTH);
+  waterShader.send('sphereRim', SPHERE_COLOR_RIM);
+  waterShader.send('sphereRimStrength', SPHERE_RIM_STRENGTH);
+  waterShader.send('sphereReflected', SPHERE_COLOR_REFLECTED);
+  waterShader.send('sphereReflectedStrength', SPHERE_REFLECTED_STRENGTH);
+  waterShader.send('causticSpeed', CAUSTIC_SPEED);
+  waterShader.send('causticStrength', CAUSTIC_STRENGTH);
   return waterShader;
 }
 
-// Turns on the water shader with every setting from the tunables above.
+// Turns on the water shader. (The settings that never change are sent
+// once, in getWaterShader. These are the ones drawOceans changes for each
+// water body, put back for the pools.)
+const POOL_BULGE_CENTER = [0, 0], POOL_SUN_DIR = [1, 0];
 function useWaterShader() {
   const shader = getWaterShader();
   shader.send('time', age);
-  shader.send('colorShallow', COLOR_SHALLOW);
-  shader.send('colorDeep', COLOR_DEEP);
-  shader.send('deepAt', DEEP_AT);
-  shader.send('alphaShallow', ALPHA_SHALLOW);
-  shader.send('alphaDeep', ALPHA_DEEP);
-  shader.send('colorSurface', COLOR_SURFACE);
-  shader.send('surfaceLine', SURFACE_LINE);
-  shader.send('surfaceFeather', SURFACE_FEATHER);
-  shader.send('surfaceGlow', SURFACE_GLOW);
-  shader.send('colorCaustic', COLOR_CAUSTIC);
   shader.send('causticScale', CAUSTIC_SCALE);
-  shader.send('bulgeCenter', [0, 0]);
+  shader.send('bulgeCenter', POOL_BULGE_CENTER);
   shader.send('bulgeRadius', 1);
   shader.send('causticBulge', 0);
   shader.send('sphereShading', 0);
-  shader.send('sunDir', [1, 0]);
-  shader.send('sphereShallow', SPHERE_COLOR_SHALLOW);
-  shader.send('sphereDeep', SPHERE_COLOR_DEEP);
-  shader.send('sphereShade', SPHERE_COLOR_SHADE);
-  shader.send('sphereShadeStrength', SPHERE_SHADE_STRENGTH);
-  shader.send('sphereRim', SPHERE_COLOR_RIM);
-  shader.send('sphereRimStrength', SPHERE_RIM_STRENGTH);
-  shader.send('sphereReflected', SPHERE_COLOR_REFLECTED);
-  shader.send('sphereReflectedStrength', SPHERE_REFLECTED_STRENGTH);
-  shader.send('causticSpeed', CAUSTIC_SPEED);
-  shader.send('causticStrength', CAUSTIC_STRENGTH);
+  shader.send('sunDir', POOL_SUN_DIR);
   love.graphics.setShader(shader);
 }
 
@@ -2929,23 +2988,24 @@ function getLavaShader() {
     }
     #endif
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  const L = LAVA_TUNING;
+  lavaShader.send('colorDeep', L.COLOR_DEEP);
+  lavaShader.send('colorMid', L.COLOR_MID);
+  lavaShader.send('colorHot', L.COLOR_HOT);
+  lavaShader.send('glowBand', L.GLOW_BAND);
+  lavaShader.send('plasmaScale', L.PLASMA_SCALE);
+  lavaShader.send('detailScale', L.PLASMA_DETAIL);
+  lavaShader.send('evolveSpeed', L.EVOLVE_SPEED);
+  lavaShader.send('scrollSpeed', L.SCROLL_SPEED);
+  lavaShader.send('pourSpeed', L.POUR_SPEED);
+  lavaShader.send('surfaceFeather', SURFACE_FEATHER);
   return lavaShader;
 }
 
 function useLavaShader() {
   const shader = getLavaShader();
-  const L = LAVA_TUNING;
-  shader.send('time', age);
-  shader.send('colorDeep', L.COLOR_DEEP);
-  shader.send('colorMid', L.COLOR_MID);
-  shader.send('colorHot', L.COLOR_HOT);
-  shader.send('glowBand', L.GLOW_BAND);
-  shader.send('plasmaScale', L.PLASMA_SCALE);
-  shader.send('detailScale', L.PLASMA_DETAIL);
-  shader.send('evolveSpeed', L.EVOLVE_SPEED);
-  shader.send('scrollSpeed', L.SCROLL_SPEED);
-  shader.send('pourSpeed', L.POUR_SPEED);
-  shader.send('surfaceFeather', SURFACE_FEATHER);
+  shader.send('time', age); // (the rest never change: sent once, in getLavaShader)
   love.graphics.setShader(shader);
 }
 
@@ -2960,15 +3020,11 @@ function drawPools(liquid) {
   const cols = grid.cols, water = grid[liquid.key];
   const rippleScale = liquid === LAVA ? LAVA_TUNING.RIPPLE : 1;
   const has = (i) => water.has(i);
-  const verts = [];
+  Scratch.resetVerts();
   if (liquid === WATER) waterfallLandings = [];
 
   const quad = (x0, yTop0, x1, yTop1, yBottom0, yBottom1, depthTop, depthBottom, stream) => {
-    const v1 = [x0, yTop0, depthTop, stream, 1, 1, 1, 1];
-    const v2 = [x1, yTop1, depthTop, stream, 1, 1, 1, 1];
-    const v3 = [x1, yBottom1, depthBottom, stream, 1, 1, 1, 1];
-    const v4 = [x0, yBottom0, depthBottom, stream, 1, 1, 1, 1];
-    verts.push(v1, v2, v3, v1, v3, v4);
+    Scratch.quad(x0, yTop0, x1, yTop1, x1, yBottom1, x0, yBottom0, depthTop, depthBottom, stream);
   };
   const ripple = (x) => (Math.sin(age * 2.2 + x * 0.045) * 1.3 + Math.sin(age * 3.7 - x * 0.11) * 0.6) * rippleScale;
 
@@ -3013,7 +3069,8 @@ function drawPools(liquid) {
     const r = Math.floor(i / cols);
     const c = i - r * cols;
     for (let d = 1; d <= 8 && !capDepth.has(i); d++) {
-      for (const nc of [c - d, c + d]) {
+      for (let side = -1; side <= 1; side += 2) { // (c - d, then c + d)
+        const nc = c + side * d;
         const n = r * cols + nc;
         if (nc >= 0 && nc < cols && stackFloor.has(n) && !capped.has(stackFloor.get(n)) && stackSurface.get(n) < stackSurface.get(i)) {
           capDepth.set(i, stackSurface.get(i) - stackSurface.get(n));
@@ -3166,8 +3223,8 @@ function drawPools(liquid) {
     }
   }
 
-  if (verts.length === 0) return;
-  drawLiquidMesh(liquid.key, verts, liquid);
+  if (Scratch.vertCount === 0) return;
+  drawLiquidMesh(liquid.key, liquid);
 }
 
 function causticScaleFor(depth) {
@@ -3229,8 +3286,8 @@ function drawOceans() {
     const depth = depthOf(p, o.volume);
     const reach = p.radius + depth + SURFACE_FEATHER + 6;
     if (!(p.pos.x + reach > vx0 && p.pos.x - reach < vx1 && p.pos.y + reach > vy0 && p.pos.y - reach < vy1)) continue;
-    const verts = [];
-    const vert = (x, y, d, alpha) => verts.push([x, y, d, 0, 1, 1, 1, alpha ?? 1]);
+    Scratch.resetVerts();
+    const vert = (x, y, d, alpha) => Scratch.vert(x, y, d, 0, alpha ?? 1);
     const cx = p.pos.x, cy = p.pos.y;
     const outline = outlineOf(p, depth);
     const n = outline.length;
@@ -3258,12 +3315,13 @@ function drawOceans() {
       }
     }
 
-    if (!oceanMesh || oceanMeshSize < verts.length) {
-      oceanMeshSize = Math.max(verts.length, oceanMeshSize * 2, 600);
+    const count = Scratch.vertCount;
+    if (!oceanMesh || oceanMeshSize < count) {
+      oceanMeshSize = Math.max(count, oceanMeshSize * 2, 600);
       oceanMesh = love.graphics.newMesh(oceanMeshSize, 'triangles', 'stream');
     }
-    oceanMesh.setVertices(verts);
-    oceanMesh.setDrawRange(0, verts.length);
+    oceanMesh.setVertices(Scratch.verts, 0, count);
+    oceanMesh.setDrawRange(0, count);
     if (!shaderOn) {
       useWaterShader();
       love.graphics.setColor(1, 1, 1, 1);

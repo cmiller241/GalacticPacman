@@ -43,4 +43,44 @@ function utils.boundingRadius(obj)
   return 0
 end
 
+-- Removing many items from a list with table.remove in a loop moves
+-- every item after each one down a place — slow for a long list with a
+-- lot going at once (water droplets, particles, culled planetoids). These
+-- two do it in a single pass instead, keeping the rest in their order.
+
+-- Removes every item of `list` that's a key of `gone` (gone[item] = true).
+-- For loops that update a list's items and note the finished ones as
+-- they go, then remove them all at the end:
+--
+--   local gone
+--   for i = #list, 1, -1 do
+--     if finished(list[i]) then gone = gone or {}; gone[list[i]] = true end
+--   end
+--   if gone then utils.removeMarked(list, gone) end
+function utils.removeMarked(list, gone)
+  local n, kept = #list, 0
+  for i = 1, n do
+    local item = list[i]
+    if not gone[item] then
+      kept = kept + 1
+      list[kept] = item
+    end
+  end
+  for i = n, kept + 1, -1 do list[i] = nil end
+end
+
+-- Removes every item of `list` that `test(item)` is true for. (test is
+-- called on each item once, front to back, and mustn't add to the list.)
+function utils.removeWhere(list, test)
+  local n, kept = #list, 0
+  for i = 1, n do
+    local item = list[i]
+    if not test(item) then
+      kept = kept + 1
+      list[kept] = item
+    end
+  end
+  for i = n, kept + 1, -1 do list[i] = nil end
+end
+
 return utils

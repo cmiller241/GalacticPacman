@@ -23,6 +23,7 @@ local Crank = require("lua.world.Crank")
 local Plunger = require("lua.world.Plunger")
 local Sign = require("lua.world.Sign")
 local Gate = require("lua.world.Gate")
+local GrassBlades = require("lua.effects.GrassBlades")
 
 local DomeInterior = {}
 
@@ -82,6 +83,10 @@ function DomeInterior.build(dome)
   state.tiledLevels = { terrainLevel }
   -- The grid sprayed water flows and pools on (see WaterSystem.lua).
   WaterSystem.init(terrainLevel)
+
+  -- Tufts of grass blades along its grassy ground (decoration — see
+  -- lua/effects/GrassBlades.lua).
+  terrainLevel.grassBlades = GrassBlades.build(terrainLevel, "img/platform.png")
 
   -- Rocks hung on ropes: each Rope paired with the Rock its "holds"
   -- property names (see lua/world/RopeRock.lua). After the water grid

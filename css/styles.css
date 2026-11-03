@@ -3,10 +3,17 @@ html, body {
     height: 100%;
     overflow: hidden;
     background: #000;
+    /* Phones: no pull-to-refresh, bounce scrolling, text selection or
+       tap highlight under the game (see js/ui/TouchControls.js). */
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 /* The game fills the window (the LÖVE shim sizes the canvas to it). */
 canvas {
     display: block;
     position: fixed;
     inset: 0;
+    touch-action: none;
 }

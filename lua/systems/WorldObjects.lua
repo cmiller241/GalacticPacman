@@ -347,14 +347,19 @@ local function updateKind(key, dt)
   if spec.single then
     spec.update(list, dt)
   elseif spec.removeIf then
+    -- (Finished ones noted as they go and removed together at the end —
+    -- see utils.removeMarked.)
+    local gone
     for i = #list, 1, -1 do
       local item = list[i]
       spec.update(item, dt)
       if spec.removeIf(item) then
         if spec.onRemove then spec.onRemove(item) end
-        table.remove(list, i)
+        gone = gone or {}
+        gone[item] = true
       end
     end
+    if gone then utils.removeMarked(list, gone) end
   else
     for _, item in ipairs(list) do spec.update(item, dt) end
   end

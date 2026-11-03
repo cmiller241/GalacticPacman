@@ -5,12 +5,13 @@
 -- filled rather than just an outline) that wanders freely inside the
 -- water sphere and occasionally emits an air bubble, using the same
 -- radial (angle + distance-from-water-center) bubble motion
--- Player.lua's own swimming already uses — see that file's own
--- newBubble/updateBubbles/drawBubbles for the precedent this mirrors.
+-- Player.lua's own swimming already uses — both through
+-- lua/effects/Bubbles.lua.
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
 local Splash = require("lua.effects.Splash")
+local Bubbles = require("lua.effects.Bubbles")
 
 local Fish = {}
 Fish.__index = Fish
@@ -49,15 +50,7 @@ local RETARGET_MAX_SECONDS = 22
 -- a focal effect.
 local BUBBLE_SPAWN_CHANCE     = 0.03
 local BUBBLE_MAX_COUNT        = 3
-local BUBBLE_FADE_DISTANCE    = 20
-local BUBBLE_RISE_SPEED_MIN   = 0.4
-local BUBBLE_RISE_SPEED_MAX   = 0.9
-local BUBBLE_WOBBLE_FREQ_MIN  = 0.01
-local BUBBLE_WOBBLE_FREQ_MAX  = 0.03
-local BUBBLE_WOBBLE_AMPLITUDE = 0.1
-local BUBBLE_RADIUS_MIN       = 1.5
-local BUBBLE_RADIUS_MAX       = 3.5
-local BUBBLE_COLOR            = { 0.85, 0.97, 1.0 }
+local BUBBLES = { radiusMin = 1.2, radiusMax = 3.2, riseMin = 0.4, riseMax = 0.9 } -- see lua/effects/Bubbles.lua
 
 -- Occasional leaps out of the water and back in — a real ballistic arc
 -- (outward + sideways launch velocity, pulled back by a hand-rolled
@@ -229,20 +222,6 @@ local WIGGLE_AMPLITUDE = 0.45 -- radians the tail swings each way from center
 -- fast it's actually moving.
 local WIGGLE_SPEED_PER_UNIT_SPEED = 0.13
 
-local function newBubble(centerX, centerY, angle, startR, targetR)
-  return {
-    centerX = centerX,
-    centerY = centerY,
-    baseAngle = angle,
-    r = startR,
-    targetR = targetR,
-    wobblePhase = math.random() * math.pi * 2,
-    wobbleFreq = BUBBLE_WOBBLE_FREQ_MIN + math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
-    riseSpeed = BUBBLE_RISE_SPEED_MIN + math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
-    radius = BUBBLE_RADIUS_MIN + math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
-  }
-end
-
 -- Shortest-path angle interpolation — turns `current` toward `target` by
 -- at most `maxDelta` radians, going whichever way (clockwise or counter)
 -- is closer, rather than always increasing. Lua's `%` is floor-modulo
@@ -353,20 +332,10 @@ function Fish:updateBubbles(ts)
     local angle = dist > 1 and math.atan2(away.y, away.x) or (math.random() * math.pi * 2)
 
     local spawnR = dist + FISH_LENGTH * 0.5
-    local targetR = water.radius
-    if spawnR < targetR then
-      table.insert(self.bubbles, newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR))
-    end
+    Bubbles.spawn(self.bubbles, water.pos.x, water.pos.y, angle, spawnR, water.radius, BUBBLES)
   end
 
-  for i = #self.bubbles, 1, -1 do
-    local b = self.bubbles[i]
-    b.r = b.r + b.riseSpeed * ts
-    b.wobblePhase = b.wobblePhase + b.wobbleFreq * ts
-    if b.r >= b.targetR then
-      table.remove(self.bubbles, i)
-    end
-  end
+  Bubbles.update(self.bubbles, ts)
 end
 
 function Fish:update()
@@ -812,23 +781,7 @@ end
 -- top of the translucent water fill instead of getting muddied
 -- underneath it — same reasoning as Player:drawBubbles.
 function Fish:drawBubbles()
-  for _, b in ipairs(self.bubbles) do
-    local angle = b.baseAngle + math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE
-    local bx = b.centerX + math.cos(angle) * b.r
-    local by = b.centerY + math.sin(angle) * b.r
-
-    local fadeStart = b.targetR - BUBBLE_FADE_DISTANCE
-    local fade = 1
-    if b.r > fadeStart then
-      fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE
-    end
-
-    love.graphics.setColor(BUBBLE_COLOR[1], BUBBLE_COLOR[2], BUBBLE_COLOR[3], 0.5 * fade)
-    love.graphics.circle("fill", bx, by, b.radius)
-    love.graphics.setColor(1, 1, 1, 0.75 * fade)
-    love.graphics.circle("line", bx, by, b.radius)
-  end
-  love.graphics.setColor(1, 1, 1, 1)
+  Bubbles.draw(self.bubbles)
 end
 
 return Fish

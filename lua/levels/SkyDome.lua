@@ -9,6 +9,7 @@ local worldGen = require("lua.setup.WorldGen")
 local SkyDomePlanetoid = require("lua.world.SkyDomePlanetoid")
 local SpaceShelter = require("lua.world.SpaceShelter")
 local RobotButler = require("lua.entities.RobotButler")
+local GrassBlades = require("lua.effects.GrassBlades")
 
 local SkyDome = {}
 
@@ -46,6 +47,12 @@ function SkyDome.build()
   })
   dome.isPermanent = true
   table.insert(state.planetoids, dome)
+
+  -- Tufts of grass blades along the walkable deck (decoration — see
+  -- lua/effects/GrassBlades.lua), coloured from its grass texture.
+  local deckHalfW = dome.halfWidth - (dome.cornerRadius or 0)
+  dome.grassBlades = GrassBlades.buildStrip(dome.pos.x - deckHalfW, dome.pos.x + deckHalfW,
+    dome:trueSurfaceY(), "img/grass.png", dome.pos.x)
 
   -- Astronaut's home shelter — purely decorative background scenery on
   -- the dome's own deck, toward the left side of it. Drawn separately

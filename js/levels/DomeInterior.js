@@ -11,6 +11,7 @@ import constants from '../constants.js';
 import lua from '../love/lua.js';
 import TiledTerrain from '../world/TiledTerrain.js';
 import WaterSystem from '../systems/WaterSystem.js';
+import GrassBlades from '../effects/GrassBlades.js';
 import RopeRock from '../world/RopeRock.js';
 import Ooomba from '../entities/Ooomba.js';
 import Sphere from '../world/Sphere.js';
@@ -72,6 +73,9 @@ DomeInterior.build = function (dome) {
   }
   state.tiledLevels = [terrainLevel];
   WaterSystem.init(terrainLevel);
+  // Tufts of grass blades on its grassy ground (decoration — see
+  // js/effects/GrassBlades.js).
+  terrainLevel.grassBlades = GrassBlades.build(terrainLevel, 'img/platform.png');
 
   // Rocks hung on ropes.
   state.ropeRocks = [];

@@ -111,6 +111,14 @@ function getHaloShader() {
       return vec4(haloColor, fade * fade * strength) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  haloShader.send('haloColor', Prism.HIT_COLOR);
+  haloShader.send('reach', Prism.HIT_HALO_REACH);
+  haloShader.send('leftX', SHAPE_LEFT_X);
+  haloShader.send('rightX', SHAPE_RIGHT_X);
+  haloShader.send('apexX', SHAPE_APEX_X);
+  haloShader.send('apexY', SHAPE_APEX_Y);
+  haloShader.send('shoulderY', SHAPE_SHOULDER_Y);
   return haloShader;
 }
 
@@ -195,6 +203,18 @@ function getFaceShader() {
       return vec4(rgb, texel.a * opacity) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  faceShader.send('hitColor', Prism.HIT_COLOR);
+  faceShader.send('baseBrightness', Prism.BASE_BRIGHTNESS);
+  faceShader.send('faceOpacity', Prism.FACE_OPACITY);
+  faceShader.send('outlineBrightness', Prism.OUTLINE_BRIGHTNESS);
+  faceShader.send('glintColor', Prism.GLINT_COLOR);
+  faceShader.send('rimStrength', Prism.RIM_STRENGTH);
+  faceShader.send('rimWidth', Prism.RIM_WIDTH);
+  faceShader.send('sheenStrength', Prism.SHEEN_STRENGTH);
+  faceShader.send('sheenSpacing', Prism.SHEEN_SPACING);
+  faceShader.send('sheenSlant', Prism.SHEEN_SLANT);
+  faceShader.send('coreStrength', Prism.CORE_STRENGTH);
   return faceShader;
 }
 
@@ -425,15 +445,8 @@ class Prism {
     // The halo first, so the prism itself is drawn over the middle of it.
     if (glow > 0) {
       const halo = getHaloShader();
-      halo.send('haloColor', Prism.HIT_COLOR);
       halo.send('strength', glow * Prism.HIT_HALO_STRENGTH);
-      halo.send('reach', Prism.HIT_HALO_REACH);
       halo.send('aspect', img.getHeight() / img.getWidth());
-      halo.send('leftX', SHAPE_LEFT_X);
-      halo.send('rightX', SHAPE_RIGHT_X);
-      halo.send('apexX', SHAPE_APEX_X);
-      halo.send('apexY', SHAPE_APEX_Y);
-      halo.send('shoulderY', SHAPE_SHOULDER_Y);
       love.graphics.setColor(1, 1, 1, 1);
       love.graphics.setBlendMode('add', 'alphamultiply');
       love.graphics.setShader(halo);
@@ -448,22 +461,11 @@ class Prism {
     shader.send('leftColor', leftColor);
     shader.send('rightColor', rightColor);
     shader.send('leftLit', leftLit);
-    shader.send('hitColor', Prism.HIT_COLOR);
     shader.send('hitFlash', flash * Prism.HIT_FLASH_STRENGTH);
     shader.send('hitGlow', glow * Prism.HIT_GLOW_STRENGTH);
     shader.send('rightLit', rightLit);
     shader.send('surfaceV', this.lengthPx / img.getHeight());
-    shader.send('baseBrightness', Prism.BASE_BRIGHTNESS);
-    shader.send('faceOpacity', Prism.FACE_OPACITY);
-    shader.send('outlineBrightness', Prism.OUTLINE_BRIGHTNESS);
-    shader.send('glintColor', Prism.GLINT_COLOR);
-    shader.send('rimStrength', Prism.RIM_STRENGTH);
-    shader.send('rimWidth', Prism.RIM_WIDTH);
-    shader.send('sheenStrength', Prism.SHEEN_STRENGTH);
-    shader.send('sheenSpacing', Prism.SHEEN_SPACING);
-    shader.send('sheenSlant', Prism.SHEEN_SLANT);
     shader.send('sheenShift', this.sheenShift);
-    shader.send('coreStrength', Prism.CORE_STRENGTH);
     shader.send('aspect', img.getHeight() / img.getWidth());
 
     // Origin on the image's own center line, at the point where it meets

@@ -11,6 +11,10 @@ local Vector2 = require("lua.vector2")
 local CollisionSystem = {}
 CollisionSystem.__index = CollisionSystem
 
+-- Returned when a handler has nothing to report (most frames), instead of
+-- a fresh empty table each time. Callers only read it — never add to it.
+local NONE = setmetatable({}, { __newindex = function() error("CollisionSystem: NONE is read-only") end })
+
 function CollisionSystem.new()
   return setmetatable({}, CollisionSystem)
 end
@@ -22,7 +26,11 @@ end
 function CollisionSystem:handleImmovableCollisions(immovables, movables)
   for _, im in ipairs(immovables) do
     for _, mv in ipairs(movables) do
-      if not mv.isImmovable and not mv.recalling then -- (nothing stops a rewind — see Recall.lua)
+      -- (Nothing stops a rewind — see Recall.lua. And a terrain shape
+      -- nowhere near this body is skipped before its per-segment search —
+      -- see TerrainShape:isFartherThan.)
+      if not mv.isImmovable and not mv.recalling
+         and not (im.isFartherThan and im:isFartherThan(mv.pos.x, mv.pos.y, mv.radius)) then
         local normal, targetPos
         local domeContact = nil
 
@@ -45,11 +53,13 @@ function CollisionSystem:handleImmovableCollisions(immovables, movables)
             if usingDome then domeContact = surface.point end
           end
         else
-          local offset = mv.pos:subtract(im.pos)
-          local dist = offset:length()
+          -- (Plain numbers for the check, which nearly every pair fails;
+          -- vectors only once they're actually touching.)
+          local ox, oy = mv.pos.x - im.pos.x, mv.pos.y - im.pos.y
+          local dist = math.sqrt(ox * ox + oy * oy)
           local minDist = im.radius + mv.radius
           if dist < minDist and dist > 0 then
-            normal = offset:normalize()
+            normal = Vector2.new(ox / dist, oy / dist)
             targetPos = im.pos:clone():add(normal:multiply(minDist))
           end
         end
@@ -217,30 +227,44 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
   massProp2 = massProp2 or "mass"
   local sameArray = (entities1 == entities2)
 
+  -- Immovable and rewinding bodies never take part in a pair below, so
+  -- they're left out of the grid entirely — and out of the cell size.
+  -- (The sky dome, radius ~4000, used to set the cells 8000 across:
+  -- wider than the whole streamed 3x3 of world cells, so every body
+  -- landed in the same few buckets and every pair got checked.)
+  local function takesPart(e)
+    return not (e.isImmovable or e.recalling)
+  end
+
   local maxRadius = 0
   for _, e in ipairs(entities1) do
     local r = e[radiusProp1]
-    if r and r > maxRadius then maxRadius = r end
+    if r and r > maxRadius and takesPart(e) then maxRadius = r end
   end
   if not sameArray then
     for _, e in ipairs(entities2) do
       local r = e[radiusProp2]
-      if r and r > maxRadius then maxRadius = r end
+      if r and r > maxRadius and takesPart(e) then maxRadius = r end
     end
   end
   local gridSize = math.max(maxRadius * 2, 50)
 
+  -- Numeric bucket keys (no strings built each frame). Rows stay far
+  -- under GRID_KEY_ROWS / 2 in either direction, so keys never collide.
+  local GRID_KEY_ROWS = 1048576
   local grid = {}
   for j, e in ipairs(entities2) do
-    local col = math.floor(e.pos.x / gridSize)
-    local row = math.floor(e.pos.y / gridSize)
-    local key = col .. "," .. row
-    local bucket = grid[key]
-    if not bucket then
-      bucket = {}
-      grid[key] = bucket
+    if takesPart(e) then
+      local col = math.floor(e.pos.x / gridSize)
+      local row = math.floor(e.pos.y / gridSize)
+      local key = col * GRID_KEY_ROWS + row
+      local bucket = grid[key]
+      if not bucket then
+        bucket = {}
+        grid[key] = bucket
+      end
+      bucket[#bucket + 1] = j
     end
-    table.insert(bucket, j)
   end
 
   for i, p1 in ipairs(entities1) do
@@ -249,34 +273,38 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
 
     for dRow = -1, 1 do
       for dCol = -1, 1 do
-        local bucket = grid[(col + dCol) .. "," .. (row + dRow)]
+        local bucket = grid[(col + dCol) * GRID_KEY_ROWS + (row + dRow)]
         if bucket then
           for _, j in ipairs(bucket) do
             if not (sameArray and j <= i) then
               local p2 = entities2[j]
               if not (p1.isImmovable or p2.isImmovable or p1.recalling or p2.recalling) then -- (a rewinding one shoves others itself — see Recall.lua)
-                local offset = p1.pos:subtract(p2.pos)
-                local distSq = offset:lengthSq()
+                -- (All in plain numbers — the same arithmetic the vector
+                -- version did, without its dozen throwaway vectors.)
+                local ox, oy = p1.pos.x - p2.pos.x, p1.pos.y - p2.pos.y
+                local distSq = ox * ox + oy * oy
                 local sumR = p1[radiusProp1] + p2[radiusProp2]
                 local sumRSq = sumR * sumR
                 if distSq < sumRSq and distSq > 0 then
                   local dist = math.sqrt(distSq)
                   local overlap = sumR - dist
-                  local normal = offset:normalize()
-                  local tangent = Vector2.new(-normal.y, normal.x)
+                  local nx, ny = ox / dist, oy / dist -- the normal...
+                  local tx, ty = -ny, nx               -- ...and the tangent
                   local m1, m2 = p1[massProp1], p2[massProp2]
                   local totalMass = m1 + m2
                   local sep1 = overlap * (m2 / totalMass)
                   local sep2 = overlap * (m1 / totalMass)
-                  p1.pos:add(normal:multiply(sep1))
-                  p2.pos:add(normal:multiply(-sep2))
-                  local v1, v2 = p1.vel:clone(), p2.vel:clone()
-                  local v1n, v2n = normal:dot(v1), normal:dot(v2)
-                  local v1t, v2t = tangent:dot(v1), tangent:dot(v2)
+                  p1.pos.x, p1.pos.y = p1.pos.x + nx * sep1, p1.pos.y + ny * sep1
+                  p2.pos.x, p2.pos.y = p2.pos.x + nx * -sep2, p2.pos.y + ny * -sep2
+                  local v1x, v1y, v2x, v2y = p1.vel.x, p1.vel.y, p2.vel.x, p2.vel.y
+                  local v1n, v2n = nx * v1x + ny * v1y, nx * v2x + ny * v2y
+                  local v1t, v2t = tx * v1x + ty * v1y, tx * v2x + ty * v2y
                   local new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass
                   local new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass
-                  p1.vel = normal:multiply(new_v1n):add(tangent:multiply(v1t))
-                  p2.vel = normal:multiply(new_v2n):add(tangent:multiply(v2t))
+                  -- (Fresh velocity vectors, as before, in case anything
+                  -- holds on to the old ones.)
+                  p1.vel = Vector2.new(nx * new_v1n + tx * v1t, ny * new_v1n + ty * v1t)
+                  p2.vel = Vector2.new(nx * new_v2n + tx * v2t, ny * new_v2n + ty * v2t)
                 end
               end
             end
@@ -537,6 +565,12 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
   -- Planets with their own player collision (CrackedPlanetoid.lua: caves,
   -- ceilings and walls, not just a surface to land on).
   if planet.collidePlayer then return planet:collidePlayer(player) end
+  -- A terrain shape nowhere near him: nothing to land on (it only lands
+  -- him within player.radius + SURFACE_TOLERANCE of one of its segments).
+  if planet.isFartherThan
+     and planet:isFartherThan(player.pos.x, player.pos.y, player.radius + constants.SURFACE_TOLERANCE) then
+    return false
+  end
   if planet.isRoundedRect then
     -- SkyDome: only land inside gravity window, while falling / neutral
     if planet.isSkyDome then
@@ -630,11 +664,13 @@ function CollisionSystem:tryLandOnPlanet(player, planet)
   -- planet once onSurface is true, which this deliberately never sets.
   if planet.isWaterPlanet then return false end
 
-  local offset = player.pos:subtract(planet.pos)
-  local dist = offset:length()
+  -- (Plain numbers for the check, made for every planetoid every frame
+  -- he's in the air; a vector only once he's landing.)
+  local ox, oy = player.pos.x - planet.pos.x, player.pos.y - planet.pos.y
+  local dist = math.sqrt(ox * ox + oy * oy)
   local surfaceDist = planet.radius + player.radius
   if dist <= surfaceDist + constants.SURFACE_TOLERANCE then
-    local normal = offset:normalize()
+    local normal = Vector2.new(ox, oy):normalize()
     player.pos = planet.pos:clone():add(normal:multiply(surfaceDist))
     player.onSurface = true
     player.currentPlanet = planet
@@ -701,8 +737,10 @@ end
 -- Returns the list of Ooombas that finished going flat THIS frame — the
 -- caller removes them and plays the effects.
 function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
-  local flattened = {}
-  if not ooombas then return flattened end
+  -- (Only made when one's actually flattened; most frames none are, and
+  -- the shared, never-written NONE is returned instead.)
+  local flattened = nil
+  if not ooombas then return NONE end
 
   for _, o in ipairs(ooombas) do
     -- (Not while it's partway through a portal — see PortalGun.tryEnterOoomba —
@@ -719,11 +757,12 @@ function CollisionSystem:handlePlayerOoombaCollisions(player, ooombas)
       end
     end
     if o.isSquashing and o:updateSquash(player) then
-      table.insert(flattened, o)
+      flattened = flattened or {}
+      flattened[#flattened + 1] = o
     end
   end
 
-  return flattened
+  return flattened or NONE
 end
 
 -- Fireball vs Ooomba: same shape as handleFireballGoombaCollisions just
@@ -803,8 +842,8 @@ end
 function CollisionSystem:handleCoinCollisions(player, coins)
   for i = #coins, 1, -1 do
     local c = coins[i]
-    local dist = player.pos:subtract(c.pos):length()
-    if dist <= player.radius + constants.COIN_RADIUS then
+    local dx, dy = player.pos.x - c.pos.x, player.pos.y - c.pos.y
+    if math.sqrt(dx * dx + dy * dy) <= player.radius + constants.COIN_RADIUS then
       if state.audioManager then state.audioManager:playEatDot() end
       table.remove(coins, i)
       state.score = state.score + 1
@@ -817,8 +856,9 @@ end
 -- (see Breakage.breakAsteroid in lua/systems/Breakage.lua, which uses the planetoid to throw
 -- the pieces back off its surface).
 function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
-  local toBreak = {}
-  if not asteroids then return toBreak end
+  -- (Only made once an asteroid actually hits; see NONE.)
+  local toBreak = nil
+  if not asteroids then return NONE end
 
   for _, p in ipairs(planetoids) do
     for _, a in ipairs(asteroids) do
@@ -831,9 +871,13 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
       -- just for being at the right height. The dome/base-specific
       -- checks below already correctly cover both halves of its real
       -- shape, so it doesn't need this generic fallback at all.
-      if not p.isSkyDome then
+      -- (And a terrain shape nowhere near it can't be touching it — see
+      -- TerrainShape:isFartherThan.)
+      if not p.isSkyDome
+         and not (p.isFartherThan and p:isFartherThan(a.pos.x, a.pos.y, a.radius)) then
         local dist = self:distanceToPlanetSurface(a.pos, p)
         if dist < a.radius then
+          toBreak = toBreak or {}
           toBreak[a] = p
         end
       end
@@ -843,6 +887,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
         if a.pos.y < topY then
           local domeSurface = p:nearestDomeSurfacePoint(a.pos.x, a.pos.y)
           if domeSurface.distance < a.radius then
+            toBreak = toBreak or {}
             toBreak[a] = p
             if type(p.triggerShieldImpact) == "function" then
               local intensity = math.min(1, a.radius / 45)
@@ -857,6 +902,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
         if a.pos.y > topY then
           local baseSurface = p:nearestBaseSurfacePoint(a.pos.x, a.pos.y)
           if baseSurface.distance < a.radius then
+            toBreak = toBreak or {}
             toBreak[a] = p
           end
         end
@@ -864,7 +910,7 @@ function CollisionSystem:handlePlanetAsteroidCollisions(planetoids, asteroids)
     end
   end
 
-  return toBreak
+  return toBreak or NONE
 end
 
 -- Fireball vs WALL tiles (TerrainLevel.walls entries flagged isWall —
@@ -999,8 +1045,8 @@ function CollisionSystem:handleFireballCollisions(fireballs, planetoids, asteroi
     local hit = false
 
     for _, a in ipairs(asteroids) do
-      local dist = f.pos:subtract(a.pos):length()
-      if dist < f.radius + a.radius then
+      local dx, dy = f.pos.x - a.pos.x, f.pos.y - a.pos.y
+      if math.sqrt(dx * dx + dy * dy) < f.radius + a.radius then
         hitFireballs[f] = true
         toBreakAsteroids[a] = true
         hit = true
@@ -1030,8 +1076,22 @@ function CollisionSystem:handleFireballCollisions(fireballs, planetoids, asteroi
             end
           end
         end
-        if not skipRest then
-          local dist = self:distanceToPlanetSurface(f.pos, p)
+        -- (A terrain shape nowhere near it can't be hit — see
+        -- TerrainShape:isFartherThan.)
+        if not skipRest and not (p.isFartherThan and p:isFartherThan(f.pos.x, f.pos.y, f.radius)) then
+          local dist
+          if p.isOpenPath then
+            -- A one-way ledge (one he can jump up through from below) is
+            -- only there for a shot heading into its walkable side: one
+            -- going up through it from underneath carries on, the same
+            -- as the portal gun's shots (see PortalGun.lua). From above,
+            -- it's a floor.
+            local surface = p:nearestSurfacePoint(f.pos.x, f.pos.y)
+            dist = surface.distance
+            if f.vel.x * surface.normal.x + f.vel.y * surface.normal.y >= 0 then dist = math.huge end
+          else
+            dist = self:distanceToPlanetSurface(f.pos, p)
+          end
           if dist < f.radius then
             hitFireballs[f] = true
             table.insert(planetHits, { fireball = f, planet = p })

@@ -110,7 +110,7 @@ function GravitySystem:applyTo(entity)
       or 3)
   end
 
-  entity.vel:add(dir:multiply(grav * (state.timeScale or 1)))
+  entity.vel:addScaled(dir, grav * (state.timeScale or 1)) -- (no throwaway vector, unlike dir:multiply)
 end
 
 return GravitySystem

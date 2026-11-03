@@ -110,6 +110,18 @@ function getShader() {
       return vec4(rgb, alpha) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  shader.send('boxScale', BOX_SCALE);
+  shader.send('litColor', CrystalPlanet.LIT_COLOR);
+  shader.send('shadowColor', CrystalPlanet.SHADOW_COLOR);
+  shader.send('glintColor', CrystalPlanet.GLINT_COLOR);
+  shader.send('outlineBrightness', Prism.OUTLINE_BRIGHTNESS);
+  shader.send('rimStrength', Prism.RIM_STRENGTH);
+  shader.send('sheenStrength', Prism.SHEEN_STRENGTH);
+  shader.send('sheenSpacing', CrystalPlanet.SHEEN_SPACING);
+  shader.send('sheenSlant', Prism.SHEEN_SLANT);
+  shader.send('farGlowStrength', CrystalPlanet.FAR_GLOW_STRENGTH);
+  shader.send('sparkleStrength', CrystalPlanet.SPARKLE_STRENGTH);
   return shader;
 }
 
@@ -138,20 +150,9 @@ function drawCrystal() {
 
   const r = this.radius;
   const sh = getShader();
-  sh.send('boxScale', BOX_SCALE);
   sh.send('edgeSoftness', 1 / (r * (state.zoom ?? 1))); // about a screen pixel either side
   sh.send('outlineWidth', CrystalPlanet.OUTLINE_WIDTH / r);
   sh.send('sunDir', [sunX, sunY]);
-  sh.send('litColor', CrystalPlanet.LIT_COLOR);
-  sh.send('shadowColor', CrystalPlanet.SHADOW_COLOR);
-  sh.send('glintColor', CrystalPlanet.GLINT_COLOR);
-  sh.send('outlineBrightness', Prism.OUTLINE_BRIGHTNESS);
-  sh.send('rimStrength', Prism.RIM_STRENGTH);
-  sh.send('sheenStrength', Prism.SHEEN_STRENGTH);
-  sh.send('sheenSpacing', CrystalPlanet.SHEEN_SPACING);
-  sh.send('sheenSlant', Prism.SHEEN_SLANT);
-  sh.send('farGlowStrength', CrystalPlanet.FAR_GLOW_STRENGTH);
-  sh.send('sparkleStrength', CrystalPlanet.SPARKLE_STRENGTH);
   sh.send('rotation', this.rotationAngle);
 
   const half = r * BOX_SCALE;

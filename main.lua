@@ -22,6 +22,7 @@ local WorldObjects = require("lua.systems.WorldObjects")
 local Projectiles = require("lua.systems.Projectiles")
 local Breakage = require("lua.systems.Breakage")
 local Camera = require("lua.systems.Camera")
+local GrassBlades = require("lua.effects.GrassBlades")
 local MiniMap = require("lua.ui.MiniMap")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
@@ -43,6 +44,16 @@ local WeaponModes = require("lua.systems.WeaponModes")
 local WeaponBar = require("lua.ui.WeaponBar")
 
 local collisionSystem
+
+-- Reused every frame rather than built fresh each time: the planetoids
+-- the collision passes check (see collidablePlanetoids in love.update),
+-- which of them are immovable, and the camera nudged by screen shake.
+local collidablePlanetoids, immovablePlanetoids = {}, {}
+local shakenCamera = { x = 0, y = 0 }
+-- An empty list for `ipairs(state.cannons or NONE)` and the like, when a
+-- world list doesn't exist — instead of a new empty table every frame.
+-- Read-only: nothing may add to it.
+local NONE = setmetatable({}, { __newindex = function() error("main.lua: NONE is read-only") end })
 
 -- =====================================================================
 -- START POSITION (for testing)
@@ -66,7 +77,7 @@ local collisionSystem
 --
 -- If the planet you pick is switched off, he starts at the shelter and
 -- the console says why.
-local START_AT = "shelter"
+local START_AT = "fisherman"
 local TILED_START_COLUMN = 146 -- counting from 0, like Tiled (146: over the middle of Level2's cracked, poundable column)
 
 -- Each option sets state.respawnPoint (see Player:respawn). Called near
@@ -161,6 +172,71 @@ local function applyStartPosition(expresswayEntry)
   -- He isn't waiting behind the shelter door, so skip its intro.
   state.spaceShelter.playerInFront = true
   state.spaceShelter.introDone = true
+end
+
+-- =====================================================================
+-- DEBUG TELEPORT (T)
+-- =====================================================================
+-- T pauses the game with a list of every start position above; picking
+-- one puts him there straight away, the same as starting there would
+-- (see PauseMenu.openList). It also becomes his respawn point, so dying
+-- brings him back to it.
+local TELEPORT_PLACES = {
+  { key = "shelter", label = "SPACE SHELTER" },
+  { key = "mining", label = "MINING PLANET" },
+  { key = "fisherman", label = "FISHERMAN'S PLANET" },
+  { key = "cracked", label = "CRACKED PLANET" },
+  { key = "tiled", label = "TILED PLANET" },
+  { key = "tunnel", label = "SKY DOME BALL TUNNEL" },
+  { key = "pinball", label = "PINBALL TABLE" },
+  { key = "expressway", label = "EXPRESSWAY" },
+}
+
+-- Remembered by love.load for the teleport list: the shelter's own
+-- respawn point (before START_AT changes it) and the expressway's entry.
+local shelterRespawnPoint, expresswayEntry
+local lastTeleport = 1 -- the list opens on whichever was picked last
+
+-- Where `key` (a TELEPORT_PLACES key) would put him right now, or nil
+-- if that planet is switched off.
+local function teleportPoint(key)
+  if key == "shelter" then return shelterRespawnPoint end
+  return START_POSITIONS[key](expresswayEntry) or nil
+end
+
+local function teleportTo(key)
+  local player, point = state.player, teleportPoint(key)
+  if not (player and point) then return end
+  state.respawnPoint = point
+  -- (Out of the shelter's intro, if it was still playing.)
+  if state.spaceShelter then
+    state.spaceShelter.playerInFront = true
+    state.spaceShelter.introDone = true
+  end
+  -- Nothing from where he was comes with him.
+  player:clearPullTarget()
+  player:clearLockTarget()
+  state.vatsActive = false
+  player.deathZoneRespawn = nil -- (Player:respawn would go there instead)
+  player:respawn()
+  -- The camera jumps with him, and the world round him is streamed in
+  -- now rather than up to half a second later.
+  state.portalCameraGlide = nil
+  state.cannonZoomFlying, state.cannonZoomReturn = nil, nil
+  Camera.pointAtPlayer()
+  worldGen.updateActiveCells()
+  state.cellCheckTimer = 0
+end
+
+local function openTeleportList()
+  local options = {}
+  for i, place in ipairs(TELEPORT_PLACES) do
+    options[i] = { label = place.label, enabled = teleportPoint(place.key) ~= nil }
+  end
+  PauseMenu.openList("TELEPORT", options, function(index)
+    lastTeleport = index
+    teleportTo(TELEPORT_PLACES[index].key)
+  end, lastTeleport)
 end
 
 -- Upward speed (world units per baseline frame) the player hops off a
@@ -285,7 +361,7 @@ function love.load()
   state.score = 0
   state.elements = { rubinium = 0, asteroidium = 0 } -- how much of each he's mined (see lua/entities/ElementPiece.lua)
   state.level = 1
-  state.cellCheckCounter = 0
+  state.cellCheckTimer, state.beltSpawnTimer = 0, 0
   state.minimap = MiniMap.new()
 
   if firstLoad then
@@ -293,6 +369,8 @@ function love.load()
     inputHandlers.attachInputHandlers()
     -- EXIT TO TITLE: run this whole function again (see its own header).
     PauseMenu.onExitToTitle = function() love.load() end
+    -- T: the debug teleport list (see openTeleportList).
+    PauseMenu.onTeleportKey = openTeleportList
   end
 
   collisionSystem = CollisionSystem.new()
@@ -301,6 +379,9 @@ function love.load()
   -- Every hand-placed landmark, the dome's Tiled interior and the
   -- player (see lua/levels/World.lua).
   local world = World.build()
+  -- (For the T teleport list.)
+  shelterRespawnPoint = state.respawnPoint
+  expresswayEntry = world.expresswayEntry
 
   -- Testing start spot (START_AT, top of this file), now that every
   -- planet it could pick exists.
@@ -577,13 +658,13 @@ function love.update(dt)
 
     -- Cannons: swallowing him, holding him while they aim, firing him —
     -- and his flight once fired (see lua/world/Cannon.lua).
-    for _, cannon in ipairs(state.cannons or {}) do
+    for _, cannon in ipairs(state.cannons or NONE) do
       cannon:update(state.player, state.timeScale)
     end
     Cannon.updateFlight(state.player, state.timeScale)
     -- (And the coins down their routes — after the flight's moved him
     -- for the frame.)
-    for _, cannon in ipairs(state.cannons or {}) do
+    for _, cannon in ipairs(state.cannons or NONE) do
       cannon:updateCoins(state.player, state.timeScale / 60)
     end
 
@@ -627,7 +708,7 @@ function love.update(dt)
     end
     -- Plungers: solid to him, loaded by pushing into them, fire him
     -- when he lets go (see lua/world/Plunger.lua).
-    for _, plunger in ipairs(state.plungers or {}) do plunger:update(state.player, state.timeScale) end
+    for _, plunger in ipairs(state.plungers or NONE) do plunger:update(state.player, state.timeScale) end
 
     collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
 
@@ -687,12 +768,14 @@ function love.update(dt)
   -- never filtered out here: they're comparatively few, and (for the
   -- immovable ones) always meant to react precisely regardless of
   -- visibility.
-  local collidablePlanetoids = {}
+  local count = 0
   for _, p in ipairs(state.planetoids) do
     if not p.isBeltPlanetoid or utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
-      table.insert(collidablePlanetoids, p)
+      count = count + 1
+      collidablePlanetoids[count] = p
     end
   end
+  for i = #collidablePlanetoids, count + 1, -1 do collidablePlanetoids[i] = nil end -- (last frame's extras)
 
   collisionSystem:handleElasticCollisions(collidablePlanetoids)
 
@@ -710,10 +793,14 @@ function love.update(dt)
   -- handlePlanetAsteroidCollisions below instead; bouncing them here
   -- too would be redundant with that.
   do
-    local immovablePlanetoids = {}
+    local immovableCount = 0
     for _, p in ipairs(collidablePlanetoids) do
-      if p.isImmovable then table.insert(immovablePlanetoids, p) end
+      if p.isImmovable then
+        immovableCount = immovableCount + 1
+        immovablePlanetoids[immovableCount] = p
+      end
     end
+    for i = #immovablePlanetoids, immovableCount + 1, -1 do immovablePlanetoids[i] = nil end
     if #immovablePlanetoids > 0 then
       collisionSystem:handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids)
     end
@@ -765,6 +852,11 @@ function love.update(dt)
   PortalGun.update(dt)
   -- Spraying, droplets, and water flowing/pooling/evaporating.
   WaterSystem.update(dt)
+  -- The water blaster's hiss while he sprays (see lua/AudioManager.lua).
+  if state.audioManager then
+    state.audioManager:updateSpray(WaterSystem.isSpraying(),
+      WaterSystem.totalWater() >= WaterSystem.waterCap(), dt)
+  end
 
   -- Fireballs and ice bolts: moving, through portals, and everything they
   -- can hit (see lua/systems/Projectiles.lua).
@@ -780,15 +872,17 @@ function love.update(dt)
     state.sun:update()
   end
 
-  state.cellCheckCounter = (state.cellCheckCounter or 0) + 1
-  if state.cellCheckCounter >= worldGen.CELL_CHECK_INTERVAL then
-    state.cellCheckCounter = 0
+  -- World streaming and the belt's drip, every so many seconds (real
+  -- time, not frames — so neither runs more often at a higher frame rate).
+  state.cellCheckTimer = (state.cellCheckTimer or 0) + dt
+  if state.cellCheckTimer >= worldGen.CELL_CHECK_SECONDS then
+    state.cellCheckTimer = 0
     worldGen.updateActiveCells()
   end
 
-  state.beltSpawnCounter = (state.beltSpawnCounter or 0) + 1
-  if state.beltSpawnCounter >= worldGen.BELT_SPAWN_INTERVAL then
-    state.beltSpawnCounter = 0
+  state.beltSpawnTimer = (state.beltSpawnTimer or 0) + dt
+  if state.beltSpawnTimer >= worldGen.BELT_SPAWN_SECONDS then
+    state.beltSpawnTimer = 0
     worldGen.updateBeltSpawning()
   end
 
@@ -818,6 +912,8 @@ function love.draw()
 
   if state.skyDomePlanet then
     state.skyDomePlanet:draw()
+    -- Tufts of grass blades along its deck (see lua/effects/GrassBlades.lua).
+    GrassBlades.draw(state.skyDomePlanet.grassBlades)
   end
 
   -- In front of the background hex canvas (baked scrolling grid, drawn
@@ -948,7 +1044,7 @@ function love.draw()
 
   -- Cannons, on their planets, and the rails along their routes, out in
   -- space wherever they are (see lua/world/Cannon.lua).
-  for _, cannon in ipairs(state.cannons or {}) do
+  for _, cannon in ipairs(state.cannons or NONE) do
     cannon:drawRails()
     if not cannon.isTrack then -- (a track's just rails: no cannon of its own)
       local px, py = cannon:pivot()
@@ -975,6 +1071,8 @@ function love.draw()
         level:draw()
         CharacterShadows.drawOnto(level)
         TileGlow.drawOnto(level)
+        -- Tufts of grass blades poking out of its grass (see lua/effects/GrassBlades.lua).
+        GrassBlades.draw(level.grassBlades)
         if state.showCollisionDebug then
           love.graphics.setLineWidth(4)
           -- Ordinary ground/ramp shapes (red) first, then the solid wall
@@ -992,7 +1090,7 @@ function love.draw()
             end
           end
           love.graphics.setColor(0.2, 0.6, 1, 1)
-          for _, wall in ipairs(level.walls or {}) do
+          for _, wall in ipairs(level.walls or NONE) do
             love.graphics.rectangle("line",
               wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
               wall.halfWidth * 2, wall.halfHeight * 2)
@@ -1093,6 +1191,13 @@ function love.draw()
   -- (Split across the two portals while he's going through one.)
   Cannon.drawFlightTrail(state.player)
   PortalGun.drawPlayer(state.player)
+
+  -- The grass tufts that stand in front of Bob and the Ooombas (the rest
+  -- were drawn behind, with their ground — see lua/effects/GrassBlades.lua).
+  if state.skyDomePlanet then GrassBlades.draw(state.skyDomePlanet.grassBlades, true) end
+  for _, level in ipairs(state.tiledLevels or NONE) do
+    GrassBlades.draw(level.grassBlades, true)
+  end
 
   -- Water and spray, over him, so he looks like he's in it when swimming.
   WaterSystem.draw()
@@ -1344,7 +1449,8 @@ do
     local sx, sy = CameraShake.offset()
     if camera and (sx ~= 0 or sy ~= 0) then
       local zoom = state.zoom or 1
-      state.camera = { x = camera.x + sx / zoom, y = camera.y + sy / zoom }
+      shakenCamera.x, shakenCamera.y = camera.x + sx / zoom, camera.y + sy / zoom
+      state.camera = shakenCamera
     end
     drawFrame()
     state.camera = camera

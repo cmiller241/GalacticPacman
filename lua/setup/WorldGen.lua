@@ -20,7 +20,10 @@ worldGen.CELL_SIZE = 3000
 -- all round the outside of what was there.
 worldGen.GRID_SIZE = 40
 worldGen.CENTER_CELL = { col = worldGen.GRID_SIZE / 2, row = worldGen.GRID_SIZE / 2 }
-worldGen.CELL_CHECK_INTERVAL = 30
+-- Seconds between checks of which cells are near enough to be streamed
+-- in (see worldGen.updateActiveCells, from main.lua). In seconds, not
+-- frames, so it's the same at any frame rate.
+worldGen.CELL_CHECK_SECONDS = 0.5
 
 worldGen.BELT_INNER_CELLS = 2
 worldGen.BELT_OUTER_CELLS = 3
@@ -37,7 +40,7 @@ worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5   -- 2.7
 -- planetoid upstream (counter-clockwise) of the player, pushed back
 -- along the belt ring until it's confirmed off-screen, so it drifts
 -- into view over the following seconds instead of popping in.
-worldGen.BELT_SPAWN_INTERVAL = 6        -- frames between drip checks (~0.1s @60fps)
+worldGen.BELT_SPAWN_SECONDS = 0.1       -- between drip checks (seconds, not frames: the same at any frame rate)
 worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500
 -- Whether the burst of planetoids a belt cell gets when it's first
 -- generated (generateCell) counts against BELT_MAX_TOTAL_PLANETOIDS
@@ -320,7 +323,7 @@ local function applyBeltOrbit(planet)
 end
 
 ----------------------------------------------------------------------
--- Ongoing belt drip -- see worldGen.BELT_SPAWN_INTERVAL comment above
+-- Ongoing belt drip -- see worldGen.BELT_SPAWN_SECONDS comment above
 ----------------------------------------------------------------------
 
 -- Starting at angle `theta` (radians, standard atan2 convention) and
@@ -438,7 +441,7 @@ end
 
 local lastFocusBeltTheta = nil
 
--- Called on its own cadence (worldGen.BELT_SPAWN_INTERVAL, from
+-- Called on its own cadence (worldGen.BELT_SPAWN_SECONDS, from
 -- main.lua) rather than piggybacking on updateActiveCells -- the drip
 -- needs to run much more often than the cell-generation pass to read
 -- as a steady trickle instead of periodic bursts.
@@ -835,27 +838,24 @@ end
 local function cullDistantObjects(activeCellKeys, focusX, focusY)
   local beltCullRadius = worldGen.BELT_CULL_RADIUS_CELLS * worldGen.CELL_SIZE
 
-  for i = #state.planetoids, 1, -1 do
-    local p = state.planetoids[i]
-    if not p.isPermanent then
-      if p.isBeltPlanetoid then
-        -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
-        -- comment above for why cell membership doesn't work here.
-        if focusX then
-          local dx, dy = p.pos.x - focusX, p.pos.y - focusY
-          if dx * dx + dy * dy > beltCullRadius * beltCullRadius then
-            table.remove(state.planetoids, i)
-          end
-        end
-      else
-        local cell = worldGen.cellCoordFor(p.pos.x, p.pos.y)
-        local key = worldGen.cellKey(cell.col, cell.row)
-        if not activeCellKeys[key] then
-          table.remove(state.planetoids, i)
-        end
-      end
-    end
+  -- Is (x, y) in a cell that's no longer active?
+  local function inInactiveCell(x, y)
+    local cell = worldGen.cellCoordFor(x, y)
+    return not activeCellKeys[worldGen.cellKey(cell.col, cell.row)]
   end
+
+  -- (Each list culled in one pass — see utils.removeWhere.)
+  utils.removeWhere(state.planetoids, function(p)
+    if p.isPermanent then return false end
+    if p.isBeltPlanetoid then
+      -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
+      -- comment above for why cell membership doesn't work here.
+      if not focusX then return false end
+      local dx, dy = p.pos.x - focusX, p.pos.y - focusY
+      return dx * dx + dy * dy > beltCullRadius * beltCullRadius
+    end
+    return inInactiveCell(p.pos.x, p.pos.y)
+  end)
 
   local survivingPlanetoids = {}
   for _, p in ipairs(state.planetoids) do
@@ -863,50 +863,33 @@ local function cullDistantObjects(activeCellKeys, focusX, focusY)
   end
 
   if state.asteroids then
-    for i = #state.asteroids, 1, -1 do
-      local a = state.asteroids[i]
-      local cell = worldGen.cellCoordFor(a.pos.x, a.pos.y)
-      local key = worldGen.cellKey(cell.col, cell.row)
-      -- (Not a cannon gauntlet's: they're laid well ahead of him, out in
-      -- cells not yet active, and cleared away by the cannon itself once
-      -- the ride's over — see lua/world/Cannon.lua.)
-      if not activeCellKeys[key] and not a.isGauntlet then
-        table.remove(state.asteroids, i)
-      end
-    end
+    -- (Not a cannon gauntlet's: they're laid well ahead of him, out in
+    -- cells not yet active, and cleared away by the cannon itself once
+    -- the ride's over — see lua/world/Cannon.lua.)
+    utils.removeWhere(state.asteroids, function(a)
+      return not a.isGauntlet and inInactiveCell(a.pos.x, a.pos.y)
+    end)
   end
 
   if state.coins then
-    for i = #state.coins, 1, -1 do
-      local c = state.coins[i]
-      if not c.planet or not survivingPlanetoids[c.planet] then
-        table.remove(state.coins, i)
-      elseif not c.planet.isBeltPlanetoid then
-        -- Belt-planetoid coins are covered by survivingPlanetoids
-        -- above -- their planet already went through the distance
-        -- based cull, not this cell-based one.
-        local cell = worldGen.cellCoordFor(c.planet.pos.x, c.planet.pos.y)
-        local key = worldGen.cellKey(cell.col, cell.row)
-        if not activeCellKeys[key] then
-          table.remove(state.coins, i)
-        end
-      end
-    end
+    utils.removeWhere(state.coins, function(c)
+      if not c.planet or not survivingPlanetoids[c.planet] then return true end
+      -- Belt-planetoid coins are covered by survivingPlanetoids
+      -- above -- their planet already went through the distance
+      -- based cull, not this cell-based one.
+      return not c.planet.isBeltPlanetoid and inInactiveCell(c.planet.pos.x, c.planet.pos.y)
+    end)
   end
 
   if state.fireBars then
     state.activeFireBarIds = state.activeFireBarIds or {}
-    for i = #state.fireBars, 1, -1 do
-      local bar = state.fireBars[i]
-      local cell = worldGen.cellCoordFor(bar.pos.x, bar.pos.y)
-      local key = worldGen.cellKey(cell.col, cell.row)
-      if not activeCellKeys[key] then
-        if bar.fireBarId then
-          state.activeFireBarIds[bar.fireBarId] = nil
-        end
-        table.remove(state.fireBars, i)
+    utils.removeWhere(state.fireBars, function(bar)
+      if not inInactiveCell(bar.pos.x, bar.pos.y) then return false end
+      if bar.fireBarId then
+        state.activeFireBarIds[bar.fireBarId] = nil
       end
-    end
+      return true
+    end)
   end
 end
 

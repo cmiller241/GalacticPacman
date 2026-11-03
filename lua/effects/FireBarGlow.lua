@@ -78,6 +78,11 @@ local function getShader()
       return vec4(tint * light, edge);
     }
   ]])
+  -- (The settings that never change: sent once here, not on every draw.)
+  shader:send("reach", REACH)
+  shader:send("ambient", AMBIENT)
+  shader:send("maxBrightness", MAX_BRIGHTNESS)
+  shader:send("tint", COLOR)
   return shader
 end
 
@@ -125,10 +130,6 @@ function FireBarGlow.drawOnto(planet)
   s:send("lights", unpack(near))
   s:send("count", #near)
   s:send("radius", radius)
-  s:send("reach", REACH)
-  s:send("ambient", AMBIENT)
-  s:send("maxBrightness", MAX_BRIGHTNESS)
-  s:send("tint", COLOR)
   love.graphics.push("all")
   love.graphics.setShader(s)
   love.graphics.setBlendMode("add")

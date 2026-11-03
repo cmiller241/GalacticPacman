@@ -324,14 +324,18 @@ function updateKind(key, dt) {
   if (spec.single) {
     spec.update(list, dt);
   } else if (spec.removeIf) {
+    // (Finished ones noted as they go and removed together at the end —
+    // see utils.removeMarked.)
+    let gone = null;
     for (let i = list.length - 1; i >= 0; i--) {
       const item = list[i];
       spec.update(item, dt);
       if (spec.removeIf(item)) {
         if (spec.onRemove) spec.onRemove(item);
-        list.splice(i, 1);
+        (gone ??= new Set()).add(item);
       }
     }
+    if (gone) utils.removeMarked(list, gone);
   } else {
     for (const item of list) spec.update(item, dt);
   }

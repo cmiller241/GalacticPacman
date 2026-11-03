@@ -65,7 +65,7 @@ class GravitySystem {
       grav *= (entity.GROUND_POUND_GRAV_MULTIPLIER ?? constants.GROUND_POUND_GRAV_MULTIPLIER ?? 3);
     }
 
-    entity.vel.add(dir.multiply(grav * (state.timeScale ?? 1)));
+    entity.vel.addScaled(dir, grav * (state.timeScale ?? 1)); // (no throwaway vector, unlike dir.multiply)
   }
 }
 

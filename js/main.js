@@ -44,10 +44,22 @@ import FireBarGlow from './effects/FireBarGlow.js';
 import Cannon from './world/Cannon.js';
 import MissileOutpost from './world/MissileOutpost.js';
 import CameraShake from './effects/CameraShake.js';
+import GrassBlades from './effects/GrassBlades.js';
 import WeaponModes from './systems/WeaponModes.js';
+import WeaponBar from './ui/WeaponBar.js';
+import TouchControls from './ui/TouchControls.js';
 
 
 let collisionSystem;
+
+// Reused every frame rather than built fresh each time: the planetoids
+// the collision passes check (see collidablePlanetoids in love.update),
+// which of them are immovable, and the camera nudged by screen shake.
+const collidablePlanetoids = [], immovablePlanetoids = [];
+const shakenCamera = { x: 0, y: 0 };
+// An empty list for `state.cannons ?? NONE` and the like, when a world
+// list doesn't exist — instead of a new empty array every frame.
+const NONE = Object.freeze([]);
 
 const OOOMBA_STOMP_BOUNCE = 7;
 const INFLUENCE_RING_ALPHA_PULLING = 0.9;
@@ -175,6 +187,72 @@ function applyStartPosition(expresswayEntry) {
   state.spaceShelter.introDone = true;
 }
 
+// =====================================================================
+// DEBUG TELEPORT (T)
+// =====================================================================
+// T pauses the game with a list of every start position above; picking
+// one puts him there straight away, the same as starting there would
+// (see PauseMenu.openList). It also becomes his respawn point, so dying
+// brings him back to it.
+const TELEPORT_PLACES = [
+  { key: 'shelter', label: 'SPACE SHELTER' },
+  { key: 'mining', label: 'MINING PLANET' },
+  { key: 'fisherman', label: "FISHERMAN'S PLANET" },
+  { key: 'cracked', label: 'CRACKED PLANET' },
+  { key: 'tiled', label: 'TILED PLANET' },
+  { key: 'tunnel', label: 'SKY DOME BALL TUNNEL' },
+  { key: 'pinball', label: 'PINBALL TABLE' },
+  { key: 'expressway', label: 'EXPRESSWAY' },
+];
+
+// Remembered by love.load for the teleport list: the shelter's own
+// respawn point (before START_AT changes it) and the expressway's entry.
+let shelterRespawnPoint = null, expresswayEntry = null;
+let lastTeleport = 0; // the list opens on whichever was picked last
+
+// Where `key` (a TELEPORT_PLACES key) would put him right now, or null
+// if that planet is switched off.
+function teleportPoint(key) {
+  if (key === 'shelter') return shelterRespawnPoint;
+  return START_POSITIONS[key](expresswayEntry) || null;
+}
+
+function teleportTo(key) {
+  const player = state.player, point = teleportPoint(key);
+  if (!player || !point) return;
+  state.respawnPoint = point;
+  // (Out of the shelter's intro, if it was still playing.)
+  if (state.spaceShelter) {
+    state.spaceShelter.playerInFront = true;
+    state.spaceShelter.introDone = true;
+  }
+  // Nothing from where he was comes with him.
+  player.clearPullTarget();
+  player.clearLockTarget();
+  state.vatsActive = false;
+  player.deathZoneRespawn = null; // (Player.respawn would go there instead)
+  player.respawn();
+  // The camera jumps with him, and the world round him is streamed in
+  // now rather than up to half a second later.
+  state.portalCameraGlide = null;
+  state.cannonZoomFlying = null;
+  state.cannonZoomReturn = null;
+  Camera.pointAtPlayer();
+  worldGen.updateActiveCells();
+  state.cellCheckTimer = 0;
+}
+
+function openTeleportList() {
+  const options = TELEPORT_PLACES.map((place) => ({
+    label: place.label,
+    enabled: teleportPoint(place.key) != null,
+  }));
+  PauseMenu.openList('TELEPORT', options, (index) => {
+    lastTeleport = index;
+    teleportTo(TELEPORT_PLACES[index].key);
+  }, lastTeleport);
+}
+
 // love.load runs once at startup, and again in full every time the pause
 // menu's EXIT TO TITLE is chosen (a fresh world each time).
 let hasLoadedOnce = false;
@@ -195,7 +273,7 @@ function resetWorldState() {
   state.expressway = null; state.expresswayExits = null;
   state.outposts = null; state.missiles = null;
   state.portals = null; state.portalTracers = null;
-  WeaponModes.set('blaster');
+  WeaponModes.set('fireball');
   WaterSystem.reset();
   Recall.reset();
 
@@ -237,7 +315,8 @@ love.load = function () {
   state.score = 0;
   state.elements = { rubinium: 0, asteroidium: 0 };
   state.level = 1;
-  state.cellCheckCounter = 0;
+  state.cellCheckTimer = 0;
+  state.beltSpawnTimer = 0;
   state.minimap = MiniMap.new();
 
   if (firstLoad) {
@@ -245,6 +324,8 @@ love.load = function () {
     inputHandlers.attachInputHandlers();
     // EXIT TO TITLE: run this whole function again.
     PauseMenu.onExitToTitle = () => love.load();
+    // T: the debug teleport list (see openTeleportList).
+    PauseMenu.onTeleportKey = openTeleportList;
   }
 
   collisionSystem = CollisionSystem.new();
@@ -253,6 +334,9 @@ love.load = function () {
   // Every hand-placed landmark, the dome's Tiled interior and the
   // player (see js/levels/World.js).
   const world = World.build();
+  // (For the T teleport list.)
+  shelterRespawnPoint = state.respawnPoint;
+  expresswayEntry = world.expresswayEntry;
 
   // Testing start spot (START_AT, top of this file), now that every
   // planet it could pick exists.
@@ -336,7 +420,7 @@ love.update = function (dt) {
   // The moment V.A.T.S. ends: unlock, and drop a pull nobody's holding.
   if (state.vatsWasActive && !state.vatsActive && state.player) {
     state.player.clearLockTarget();
-    if (state.player.pullTarget && !(state.gamepadPullHeld || love.mouse.isDown(2))) {
+    if (state.player.pullTarget && !(state.gamepadPullHeld || love.mouse.isDown(1))) {
       state.player.clearPullTarget();
     }
   }
@@ -393,6 +477,10 @@ love.update = function (dt) {
   state.dialogueActive = WorldObjects.anyDialogueActive();
 
   const player = state.player;
+  // A left click since last frame (see InputHandlers.js), fired below
+  // once he's moved; dropped if he can't fire this frame.
+  const mouseFire = state.mouseFirePending;
+  state.mouseFirePending = false;
   if (player.portalTransit) {
     PortalGun.updateTransit(player, state.timeScale);
   } else {
@@ -426,16 +514,16 @@ love.update = function (dt) {
 
     player.update();
 
-    for (const cannon of (state.cannons ?? [])) cannon.update(player, state.timeScale);
+    for (const cannon of (state.cannons ?? NONE)) cannon.update(player, state.timeScale);
     Cannon.updateFlight(player, state.timeScale);
-    for (const cannon of (state.cannons ?? [])) cannon.updateCoins(player, state.timeScale / 60);
+    for (const cannon of (state.cannons ?? NONE)) cannon.updateCoins(player, state.timeScale / 60);
 
     PortalGun.tryEnter(player);
 
     if (!player.inPinball && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
 
-    // Gamepad R2 held: fire (shootFireball throttles itself).
-    if (state.gamepadFireHeld && player) {
+    // Gamepad R2 held, or a left click: fire (shootFireball throttles itself).
+    if ((state.gamepadFireHeld || mouseFire) && player) {
       if (state.iceMode) player.shootIceBolt(); else player.shootFireball();
     }
 
@@ -451,7 +539,7 @@ love.update = function (dt) {
     }
     // Plungers: solid to him, loaded by pushing into them, fire him when
     // he lets go (see js/world/Plunger.js).
-    for (const plunger of state.plungers ?? []) plunger.update(player, state.timeScale);
+    for (const plunger of state.plungers ?? NONE) plunger.update(player, state.timeScale);
 
     collisionSystem.handlePlayerSpikeyCollisions(player, state.spikeys);
 
@@ -483,13 +571,16 @@ love.update = function (dt) {
   }
 
   // Off-screen belt planetoids are left out of planetoid collisions.
-  const collidablePlanetoids = state.planetoids.filter(
-    (p) => !p.isBeltPlanetoid || utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50));
+  collidablePlanetoids.length = 0;
+  for (const p of state.planetoids) {
+    if (!p.isBeltPlanetoid || utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50)) collidablePlanetoids.push(p);
+  }
 
   collisionSystem.handleElasticCollisions(collidablePlanetoids);
 
   {
-    const immovablePlanetoids = collidablePlanetoids.filter((p) => p.isImmovable);
+    immovablePlanetoids.length = 0;
+    for (const p of collidablePlanetoids) if (p.isImmovable) immovablePlanetoids.push(p);
     if (immovablePlanetoids.length > 0) collisionSystem.handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids);
   }
 
@@ -511,6 +602,11 @@ love.update = function (dt) {
 
   PortalGun.update(dt);
   WaterSystem.update(dt);
+  // The water blaster's hiss while he sprays (see js/AudioManager.js).
+  if (state.audioManager) {
+    state.audioManager.updateSpray(WaterSystem.isSpraying(),
+      WaterSystem.totalWater() >= WaterSystem.waterCap(), dt);
+  }
 
   // Fireballs and ice bolts: moving, through portals, and everything they
   // can hit (see js/systems/Projectiles.js).
@@ -524,15 +620,17 @@ love.update = function (dt) {
 
   if (state.sun) state.sun.update();
 
-  state.cellCheckCounter = (state.cellCheckCounter ?? 0) + 1;
-  if (state.cellCheckCounter >= worldGen.CELL_CHECK_INTERVAL) {
-    state.cellCheckCounter = 0;
+  // World streaming and the belt's drip, every so many seconds (real
+  // time, not frames — so neither runs more often at a higher frame rate).
+  state.cellCheckTimer = (state.cellCheckTimer ?? 0) + dt;
+  if (state.cellCheckTimer >= worldGen.CELL_CHECK_SECONDS) {
+    state.cellCheckTimer = 0;
     worldGen.updateActiveCells();
   }
 
-  state.beltSpawnCounter = (state.beltSpawnCounter ?? 0) + 1;
-  if (state.beltSpawnCounter >= worldGen.BELT_SPAWN_INTERVAL) {
-    state.beltSpawnCounter = 0;
+  state.beltSpawnTimer = (state.beltSpawnTimer ?? 0) + dt;
+  if (state.beltSpawnTimer >= worldGen.BELT_SPAWN_SECONDS) {
+    state.beltSpawnTimer = 0;
     worldGen.updateBeltSpawning();
   }
 
@@ -557,7 +655,10 @@ function drawFrame() {
   // takes them, as well as the level's tiles further down.
   CharacterShadows.prepare();
 
-  if (state.skyDomePlanet) state.skyDomePlanet.draw();
+  if (state.skyDomePlanet) {
+    state.skyDomePlanet.draw();
+    GrassBlades.draw(state.skyDomePlanet.grassBlades);
+  }
 
   // Between the dome's background and foreground hex layers; the door
   // goes over the player once he's stepped out in front of it.
@@ -618,7 +719,7 @@ function drawFrame() {
 
   MissileOutpost.drawCannons(state.outposts);
 
-  for (const cannon of (state.cannons ?? [])) {
+  for (const cannon of (state.cannons ?? NONE)) {
     cannon.drawRails();
     if (!cannon.isTrack) {
       const [px, py] = cannon.pivot();
@@ -638,6 +739,7 @@ function drawFrame() {
       level.draw();
       CharacterShadows.drawOnto(level);
       TileGlow.drawOnto(level);
+      GrassBlades.draw(level.grassBlades);
       if (state.showCollisionDebug) {
         g.setLineWidth(4);
         g.setColor(1, 0, 0, 1);
@@ -646,7 +748,7 @@ function drawFrame() {
           for (const seg of shape.segments) g.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y);
         }
         g.setColor(0.2, 0.6, 1, 1);
-        for (const wall of (level.walls ?? [])) {
+        for (const wall of (level.walls ?? NONE)) {
           g.rectangle('line', wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
             wall.halfWidth * 2, wall.halfHeight * 2);
         }
@@ -705,6 +807,11 @@ function drawFrame() {
 
   Cannon.drawFlightTrail(state.player);
   PortalGun.drawPlayer(state.player);
+
+  // The grass tufts that stand in front of Bob and the Ooombas (the rest
+  // were drawn behind, with their ground — see js/effects/GrassBlades.js).
+  if (state.skyDomePlanet) GrassBlades.draw(state.skyDomePlanet.grassBlades, true);
+  for (const level of state.tiledLevels ?? NONE) GrassBlades.draw(level.grassBlades, true);
 
   WaterSystem.draw();
 
@@ -813,6 +920,11 @@ function drawFrame() {
 
   if (state.minimap) state.minimap.draw();
 
+  // Blaster selector, lower-left (see js/ui/WeaponBar.js). Hidden while a
+  // conversation textbox is up, so the box has the bottom of the screen
+  // to itself.
+  if (!state.dialogueActive) WeaponBar.draw();
+
   // Conversation textboxes — after the minimap, so the box covers it.
   WorldObjects.drawDialogues();
 
@@ -821,32 +933,43 @@ function drawFrame() {
   g.setColor(1, 1, 1, 1);
   g.print(`Level ${state.level} - Score: ${state.score}`, 20, 20);
   g.print(`FPS: ${(state.fps ?? 0).toFixed(1)}`, 20, 40);
-  g.print(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 60);
-  g.print(`Cell: (${cell.col}, ${cell.row})`, 20, 80);
-  g.print(`Planetoids: ${state.planetoids.length}  Coins: ${state.coins ? state.coins.length : 0}  Asteroids: ${state.asteroids ? state.asteroids.length : 0}  FireBars: ${state.fireBars ? state.fireBars.length : 0}`, 20, 100);
-  g.print(`Rubinium: ${state.elements.rubinium}  Asteroidium: ${state.elements.asteroidium}`, 20, 120);
-  g.print(`Mode: ${WeaponModes.label()} (P / D-pad left-right to switch)`, 20, 140);
-  if (state.portalMode) {
-    g.print('Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump', 20, 160);
-  } else if (state.waterMode) {
-    g.print(`Right-click / R2: spray water (${Math.floor(WaterSystem.totalWater() + 0.5)} / ${WaterSystem.waterCap()}), Space to jump (or swim)`, 20, 160);
-  } else if (state.recallMode) {
-    g.print('Right-click / R2 on a planetoid: rewind it (again to stop), Space to jump', 20, 160);
-  } else if (state.iceMode) {
-    g.print('Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump', 20, 160);
-  } else {
-    g.print('Right-click a planet to pull toward it, Space to jump, C to toggle collision debug', 20, 160);
-  }
-  // On or near a dirt planet: which way its gravity pulls (see
-  // CrackedPlanetoid.cycleGravity).
-  {
-    const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
-    if (p && p.cycleGravity) {
-      g.print(`Gravity: ${p.GRAVITY_LABELS[p.gravityMode] ?? p.gravityMode} (G to change)   Spin: ${p.SPIN_LABELS[p.spinDir] ?? 'Off'} (N clockwise, M counter-clockwise)`, 20, 180);
+  // (The rest is keyboard/mouse help and debug readouts — not shown
+  // with the touch controls, which are their own guide.)
+  if (!state.touchControlsVisible) {
+    g.print(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 60);
+    g.print(`Cell: (${cell.col}, ${cell.row})`, 20, 80);
+    g.print(`Planetoids: ${state.planetoids.length}  Coins: ${state.coins ? state.coins.length : 0}  Asteroids: ${state.asteroids ? state.asteroids.length : 0}  FireBars: ${state.fireBars ? state.fireBars.length : 0}`, 20, 100);
+    g.print(`Rubinium: ${state.elements.rubinium}  Asteroidium: ${state.elements.asteroidium}`, 20, 120);
+    g.print(`Mode: ${WeaponModes.label()} (Tab / D-pad left-right to switch)`, 20, 140);
+    if (state.portalMode) {
+      g.print('Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump', 20, 160);
+    } else if (state.waterMode) {
+      g.print(`Left-click / R2: spray water (${Math.floor(WaterSystem.totalWater() + 0.5)} / ${WaterSystem.waterCap()}), Space to jump (or swim)`, 20, 160);
+    } else if (state.recallMode) {
+      g.print('Left-click / R2 on a planetoid: rewind it (again to stop), Space to jump', 20, 160);
+    } else if (state.iceMode) {
+      g.print('Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump', 20, 160);
+    } else if (state.pullBeamMode) {
+      g.print('Left-click / R2 on a planet to pull toward it, Space to jump, C to toggle collision debug', 20, 160);
+    } else {
+      g.print('Left-click / R2: fireball (L2: pull beam), Space to jump, C to toggle collision debug', 20, 160);
+    }
+    // On or near a dirt planet: which way its gravity pulls (see
+    // CrackedPlanetoid.cycleGravity).
+    {
+      const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
+      if (p && p.cycleGravity) {
+        g.print(`Gravity: ${p.GRAVITY_LABELS[p.gravityMode] ?? p.gravityMode} (G to change)   Spin: ${p.SPIN_LABELS[p.spinDir] ?? 'Off'} (N clockwise, M counter-clockwise)`, 20, 180);
+      }
     }
   }
 
   PauseMenu.draw();
+
+  // The on-screen touch controls, on phones and tablets (see
+  // js/ui/TouchControls.js) — over the pause menu, so its pause button
+  // can resume.
+  TouchControls.draw();
 
   // The black fade-in out of the title screen, over everything.
   TitleScreen.draw();
@@ -859,7 +982,9 @@ love.draw = function () {
   const [sx, sy] = CameraShake.offset();
   if (camera && (sx !== 0 || sy !== 0)) {
     const zoom = state.zoom ?? 1;
-    state.camera = { x: camera.x + sx / zoom, y: camera.y + sy / zoom };
+    shakenCamera.x = camera.x + sx / zoom;
+    shakenCamera.y = camera.y + sy / zoom;
+    state.camera = shakenCamera;
   }
   try {
     drawFrame();

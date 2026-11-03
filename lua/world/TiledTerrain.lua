@@ -246,14 +246,47 @@ local function projectOntoSegment(seg, worldX, worldY)
 end
 
 function TerrainShape:nearestSurfacePoint(worldX, worldY)
-  local best = nil
+  -- (The best so far kept in locals: one result table at the end, not
+  -- one for every closer segment found on the way.)
+  local bestDist, bestX, bestY, bestNormal = nil, 0, 0, nil
   for _, seg in ipairs(self.segments) do
     local _, px, py, dist = projectOntoSegment(seg, worldX, worldY)
-    if not best or dist < best.distance then
-      best = { point = Vector2.new(px, py), normal = seg.normal, distance = dist }
+    if not bestDist or dist < bestDist then
+      bestDist, bestX, bestY, bestNormal = dist, px, py, seg.normal
     end
   end
-  return best
+  if not bestDist then return nil end
+  return { point = Vector2.new(bestX, bestY), normal = bestNormal, distance = bestDist }
+end
+
+-- True when (x, y) is certainly more than `reach` from every point of
+-- this shape's segments — a cheap test to skip the per-segment work.
+-- Uses boundX/boundY/boundRadius (see refreshBounds), which always
+-- enclose every segment, unlike pos/radius, which a merged wall-climb
+-- shape keeps from before its merge.
+function TerrainShape:isFartherThan(x, y, reach)
+  local dx, dy = x - self.boundX, y - self.boundY
+  local r = self.boundRadius + reach
+  return dx * dx + dy * dy > r * r
+end
+
+-- A circle round every segment end (and so every point of every
+-- segment). Called whenever the segments change.
+function TerrainShape:refreshBounds()
+  local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+  for _, seg in ipairs(self.segments) do
+    minX = math.min(minX, seg.a.x, seg.b.x); maxX = math.max(maxX, seg.a.x, seg.b.x)
+    minY = math.min(minY, seg.a.y, seg.b.y); maxY = math.max(maxY, seg.a.y, seg.b.y)
+  end
+  local cx, cy = (minX + maxX) / 2, (minY + maxY) / 2
+  local rSq = 0
+  for _, seg in ipairs(self.segments) do
+    for _, p in ipairs({ seg.a, seg.b }) do
+      local dx, dy = p.x - cx, p.y - cy
+      rSq = math.max(rSq, dx * dx + dy * dy)
+    end
+  end
+  self.boundX, self.boundY, self.boundRadius = cx, cy, math.sqrt(rSq)
 end
 
 function TerrainShape:distanceToSurface(worldX, worldY)
@@ -293,6 +326,34 @@ end
 -- them, so nothing lands. Used only by CollisionSystem:tryLandOnPlanet;
 -- every other caller (orientation, gravity direction while airborne, etc.)
 -- still wants the always-clamped nearestSurfacePoint.
+-- Upright shapes (forceUprightJump — ordinary ground and slopes) keep
+-- him standing straight up, directly above the point he's on (see
+-- worldPointAtArcPosition). So the point that goes with a position near
+-- one is the one straight below (or above) it — not the nearest point,
+-- which on a slope is off to the uphill side: landing there, or working
+-- out his place along the shape from there, moved him up the slope
+-- every time he jumped and came back down.
+--
+-- Returns that point's y, its segment and how far along the segment it
+-- is (0..1): of the segments spanning x, the one whose height there is
+-- nearest y. nil if none spans x (past either end of the shape).
+local function pointStraightBelow(self, x, y)
+  local bestDist, bestY, bestSeg, bestT
+  for _, seg in ipairs(self.segments) do
+    local ax, bx = seg.a.x, seg.b.x
+    local dx = bx - ax
+    if not seg.isWallFace and math.abs(dx) > 1e-9 and x >= math.min(ax, bx) and x <= math.max(ax, bx) then
+      local t = (x - ax) / dx
+      local py = seg.a.y + (seg.b.y - seg.a.y) * t
+      local d = math.abs(y - py)
+      if not bestDist or d < bestDist then
+        bestDist, bestY, bestSeg, bestT = d, py, seg, t
+      end
+    end
+  end
+  return bestY, bestSeg, bestT
+end
+
 function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
   local best = nil
   for _, seg in ipairs(self.segments) do
@@ -330,6 +391,16 @@ function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
           end
         end
       end
+    end
+  end
+  -- On an upright shape, the landing point is the one straight below
+  -- (see pointStraightBelow). Whether and when it's a landing at all is
+  -- left exactly as found above.
+  if best and self.forceUprightJump then
+    local py, seg = pointStraightBelow(self, curX, curY)
+    if py then
+      best.point.x, best.point.y = curX, py
+      best.normal = seg.normal
     end
   end
   return best
@@ -412,6 +483,19 @@ end
 -- WallShape) — that one fires legitimately while genuinely walking the
 -- wall face itself, and needs to keep resolving to it.
 function TerrainShape:arcPositionForWorldPoint(worldX, worldY, excludeWallFace)
+  -- An upright shape: the place straight below the point (see
+  -- pointStraightBelow), when there's one.
+  if self.forceUprightJump then
+    local _, seg, t = pointStraightBelow(self, worldX, worldY)
+    if seg then
+      local traveled = 0
+      for _, s in ipairs(self.segments) do
+        if s == seg then return traveled + t * seg.length end
+        traveled = traveled + s.length
+      end
+    end
+  end
+
   local traveled = 0
   local bestArc, bestDistSq = 0, math.huge
   for _, seg in ipairs(self.segments) do
@@ -742,6 +826,7 @@ local function newShape(segments)
     end
   end
   self.radius = math.max(1, radius)
+  self:refreshBounds()
 
   return self
 end
@@ -776,6 +861,7 @@ function TerrainShape:moveTo(ax, ay, bx, by)
   self.pos.x, self.pos.y = (ax + bx) / 2, (ay + by) / 2
   self.halfHeight = math.max(1, math.abs(dy) / 2)
   self.radius = math.max(1, len / 2)
+  self.boundX, self.boundY, self.boundRadius = self.pos.x, self.pos.y, len / 2
 end
 
 ----------------------------------------------------------------------
@@ -1730,6 +1816,7 @@ local function mergeWallClimbShapes(shapeA, shapeB)
   for _, seg in ipairs(shapeA.segments) do
     shapeA.totalLength = shapeA.totalLength + seg.length
   end
+  shapeA:refreshBounds()
 end
 
 -- Runs after every individual ramp-climb shape already exists (a shape's
@@ -2817,6 +2904,9 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     waterSolids = waterSolids,
     collisionData = layer.data,
     tileProps = tileProps,
+    -- (The visible art, layer by layer — see lua/effects/GrassBlades.lua.)
+    tileLayers = tileLayers,
+    tilesets = tilesets,
     mapWidth = width,
     mapHeight = height,
     canvas = canvas,

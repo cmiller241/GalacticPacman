@@ -152,6 +152,13 @@ function getRopeShader() {
       return vec4(c, a) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  ropeShader.send('width', ROPE_DRAW_WIDTH);
+  ropeShader.send('pitch', ROPE_PITCH);
+  ropeShader.send('charHalf', CHAR_HALF);
+  ropeShader.send('ropeColor', COLOR_ROPE);
+  ropeShader.send('darkColor', COLOR_ROPE_DARK);
+  ropeShader.send('charColor', COLOR_ROPE_CHAR);
   return ropeShader;
 }
 
@@ -242,6 +249,12 @@ function getRockShader() {
       return vec4(c, alpha) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  rockShader.send('pad', ROCK_PAD);
+  rockShader.send('bevel', ROCK_BEVEL);
+  rockShader.send('darkColor', COLOR_ROCK_SPOT);
+  rockShader.send('lightColor', COLOR_ROCK_TOP);
+  rockShader.send('rimColor', COLOR_ROCK_EDGE);
   return rockShader;
 }
 
@@ -508,14 +521,8 @@ class RopeRock {
 
     const s = getRopeShader();
     s.send('len', len);
-    s.send('width', ROPE_DRAW_WIDTH);
-    s.send('pitch', ROPE_PITCH);
     s.send('burnAt', this.burn ? this.burn.at * len : -1);
-    s.send('charHalf', CHAR_HALF);
     s.send('time', love.timer.getTime());
-    s.send('ropeColor', COLOR_ROPE);
-    s.send('darkColor', COLOR_ROPE_DARK);
-    s.send('charColor', COLOR_ROPE_CHAR);
     love.graphics.setShader(s);
     love.graphics.setColor(1, 1, 1, 1);
     love.graphics.draw(getPixel(), this.top.x - perpX * ROPE_DRAW_WIDTH / 2, this.top.y - perpY * ROPE_DRAW_WIDTH / 2,
@@ -534,12 +541,7 @@ class RopeRock {
     const s = getRockShader();
     s.send('halfSize', [this.halfWidth, this.halfHeight]);
     s.send('corner', Math.min(ROCK_CORNER, this.halfWidth, this.halfHeight));
-    s.send('pad', ROCK_PAD);
-    s.send('bevel', ROCK_BEVEL);
     s.send('seed', this.seed);
-    s.send('darkColor', COLOR_ROCK_SPOT);
-    s.send('lightColor', COLOR_ROCK_TOP);
-    s.send('rimColor', COLOR_ROCK_EDGE);
     love.graphics.setShader(s);
     love.graphics.setColor(1, 1, 1, 1);
     const w = (this.halfWidth + ROCK_PAD) * 2, h = (this.halfHeight + ROCK_PAD) * 2;

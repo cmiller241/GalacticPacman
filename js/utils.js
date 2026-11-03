@@ -38,4 +38,39 @@ utils.boundingRadius = function (obj) {
   return 0;
 };
 
+// Removing many items from an array with splice in a loop moves every
+// item after each one down a place — slow for a long list with a lot
+// going at once (water droplets, particles, culled planetoids). These two
+// do it in a single pass instead, keeping the rest in their order.
+
+// Removes every item of `list` that's in the Set `gone`. For loops that
+// update a list's items and note the finished ones as they go, then
+// remove them all at the end:
+//
+//   let gone = null;
+//   for (let i = list.length - 1; i >= 0; i--) {
+//     if (finished(list[i])) (gone ??= new Set()).add(list[i]);
+//   }
+//   if (gone) utils.removeMarked(list, gone);
+utils.removeMarked = function (list, gone) {
+  let kept = 0;
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if (!gone.has(item)) list[kept++] = item;
+  }
+  list.length = kept;
+};
+
+// Removes every item of `list` that `test(item)` is true for. (test is
+// called on each item once, front to back, and mustn't add to the list.)
+utils.removeWhere = function (list, test) {
+  const n = list.length;
+  let kept = 0;
+  for (let i = 0; i < n; i++) {
+    const item = list[i];
+    if (!test(item)) list[kept++] = item;
+  }
+  list.length = kept;
+};
+
 export default utils;

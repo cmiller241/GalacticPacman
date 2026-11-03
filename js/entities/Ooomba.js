@@ -328,7 +328,10 @@ class Ooomba {
 
     // Walking onto a floor portal drops it in.
     if (timeScale > 0) {
-      this.vel = new Vector2((this.pos.x - prevX) / timeScale, (this.pos.y - prevY) / timeScale);
+      // (Written into its own velocity vector, not a new one every frame —
+      // nothing else ever shares it.)
+      this.vel.x = (this.pos.x - prevX) / timeScale;
+      this.vel.y = (this.pos.y - prevY) / timeScale;
     }
     PortalGun.tryEnterOoomba(this, true);
   }
@@ -466,10 +469,110 @@ class Ooomba {
     const feetDist = this.halfHeight + DRAW_Y_OFFSET;
     const rotation = Math.atan2(up.y, up.x) + Math.PI / 2;
 
+    // Lit by the sun — unless whoever's drawing it has a shader of its own
+    // on (CharacterShadows draws it again under its shadow shader, the
+    // portal effects under theirs), which this mustn't replace.
+    const lighting = love.graphics.getShader() === null ? this.sunLightingShader(rotation, scaleX < 0) : null;
+    if (lighting) love.graphics.setShader(lighting);
+
     love.graphics.setColor(1, 1, 1, 1);
     love.graphics.draw(img, quad, this.pos.x - up.x * feetDist, this.pos.y - up.y * feetDist, rotation,
       scaleX, scaleY, sheetFrameW / 2, sheetFrameH);
+
+    if (lighting) love.graphics.setShader();
   }
+
+  // Points the lighting shader at the sun (the middle of the scene) from
+  // this Ooomba, in the sprite's own frame: undoing its rotation round a
+  // planetoid, and its left-right flip. Returns the shader, or null (no
+  // normal map, or right on top of the sun).
+  sunLightingShader(rotation, flipped) {
+    const normalMap = state.oombaNormalTexture, aoMap = state.oombaAOTexture;
+    if (!normalMap || !aoMap) return null;
+    let toSunX = (state.sceneWidth ?? 0) / 2 - this.pos.x;
+    let toSunY = (state.sceneHeight ?? 0) / 2 - this.pos.y;
+    const dist = Math.sqrt(toSunX * toSunX + toSunY * toSunY);
+    if (dist < 1) return null;
+    toSunX /= dist; toSunY /= dist;
+    // Screen -> sprite: rotate back by its rotation...
+    const c = Math.cos(-rotation), s = Math.sin(-rotation);
+    let lx = c * toSunX - s * toSunY;
+    let ly = s * toSunX + c * toSunY;
+    // ...unflip it, and turn the screen's y-down into the map's y-up.
+    if (flipped) lx = -lx;
+    ly = -ly;
+    const lz = LIGHTING.sunElevation;
+    const len = Math.sqrt(lx * lx + ly * ly + lz * lz);
+    const shader = getNormalShader();
+    shader.send('normalMap', normalMap);
+    shader.send('aoMap', aoMap);
+    shader.send('lightDir', [lx / len, ly / len, lz / len]);
+    return shader;
+  }
+}
+
+// Sun lighting from the normal map (img/Ooomba_normal.png, and its
+// ambient occlusion, img/Ooomba_ao.png — the same sheet layout as the
+// sprite, so the same quad reads both). Each pixel is lit by how much its
+// surface faces the sun: a soft fill everywhere, more on the sun side, a
+// glossy highlight where it faces the sun most, and a rim of reflected
+// light round the shadowed edge (light bouncing back off its
+// surroundings, the way a sphere's far edge picks some up).
+const LIGHTING = {
+  shadingStrength: 0.7, // how much of all this shows: 0 = the plain art, 1 = full lighting
+  ambient: 0.42,        // brightness with no sunlight on it at all
+  diffuse: 0.72,        // added where the surface faces the sun full on
+  specular: 0.55,       // the glossy highlight's strength...
+  shininess: 36,        // ...and tightness (higher: smaller, sharper)
+  rimLight: 0.9,        // the reflected light on the edge away from the sun (0: none)...
+  rimWidth: 1.8,        // ...and how tightly it hugs the edge (higher: thinner)
+  sunElevation: 0.5,    // how much the sun also lights it from the front (0: purely from the side)
+};
+
+let normalShader = null;
+function getNormalShader() {
+  if (normalShader) return normalShader;
+  normalShader = love.graphics.newShader(`
+    extern Image normalMap;
+    extern Image aoMap;     // ambient occlusion: 1 = open, lower = tucked in (whatever the light)
+    extern vec3 lightDir;   // toward the sun, in the sprite's own frame (x right, y up, z toward the viewer)
+    extern float ambient;
+    extern float diffuse;
+    extern float specular;
+    extern float shininess;
+    extern float rimLight;
+    extern float rimWidth;
+    extern float shadingStrength;
+
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 texel = Texel(tex, uv) * color;
+      vec3 n = normalize(Texel(normalMap, uv).rgb * 2.0 - 1.0);
+      float ao = Texel(aoMap, uv).r;
+      float facing = max(dot(n, lightDir), 0.0);
+      vec3 halfway = normalize(lightDir + vec3(0.0, 0.0, 1.0));
+      float shine = pow(max(dot(n, halfway), 0.0), shininess) * specular * ao;
+
+      // Reflected light: strongest right at the silhouette (the surface
+      // turned edge-on, n.z near 0), and only on the side away from the
+      // sun, tinted by the body's own colour (light bounced back onto it).
+      float edge = pow(1.0 - clamp(n.z, 0.0, 1.0), rimWidth);
+      float away = 0.0;
+      if (length(n.xy) > 1e-4 && length(lightDir.xy) > 1e-4) {
+        away = max(dot(normalize(n.xy), -normalize(lightDir.xy)), 0.0);
+      }
+      float rim = edge * away * rimLight * ao;
+
+      vec3 lit = texel.rgb * (ambient + diffuse * facing) * ao
+        + mix(texel.rgb, vec3(1.0), 0.35) * rim
+        + vec3(1.0, 0.98, 0.92) * shine * texel.a;
+      vec3 rgb = mix(texel.rgb, lit, shadingStrength);
+      return vec4(min(rgb, vec3(1.0)), texel.a);
+    }
+  `);
+  for (const name of ['ambient', 'diffuse', 'specular', 'shininess', 'rimLight', 'rimWidth', 'shadingStrength']) {
+    normalShader.send(name, LIGHTING[name]);
+  }
+  return normalShader;
 }
 
 export default Ooomba;

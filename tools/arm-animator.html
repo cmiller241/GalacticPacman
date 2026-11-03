@@ -1,0 +1,947 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arm Animator</title>
+<style>
+  :root { --bg:#16181d; --panel:#20232a; --line:#333843; --text:#e6e8ec; --dim:#9aa1ad; --accent:#f6d370; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; display:flex; height:100vh; }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative; }
+  #stage.light { background:#f2f2f2; }
+  #stage.dark { background:#0b0c10; }
+  #stage.checker { background: repeating-conic-gradient(#cfcfcf 0 25%, #f4f4f4 0 50%) 0 0/24px 24px; }
+  #holder { position:relative; }
+  #holder svg { display:block; }
+  #lit { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+  #stage.lighting { cursor:crosshair; }
+  #eyes { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; display:none; }
+  #holder[data-lit="1"] #eyes { display:block; }
+  #msg { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; padding:24px; color:var(--dim); }
+  #msg.hidden { display:none; }
+  #frameLabel { position:absolute; top:12px; left:16px; font-size:13px; padding:4px 10px; border-radius:6px; background:rgba(0,0,0,.55); color:#fff; }
+  aside { width:290px; background:var(--panel); border-left:1px solid var(--line); padding:16px; overflow:auto; display:flex; flex-direction:column; gap:16px; }
+  h1 { font-size:16px; margin:0; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 6px; }
+  button, select { background:#2b2f38; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#555c6a; }
+  button.on { background:var(--accent); color:#222; border-color:var(--accent); }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .frames button { min-width:38px; }
+  label { display:flex; align-items:center; gap:8px; cursor:pointer; }
+  input[type=range] { flex:1; }
+  .hint { color:var(--dim); font-size:12px; }
+  kbd { background:#2b2f38; border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="stage" class="checker">
+  <div id="holder"></div>
+  <div id="frameLabel" hidden></div>
+  <div id="msg">
+    <div>Loading <code>img/astronaut2.svg</code>…</div>
+  </div>
+</div>
+
+<aside>
+  <h1>Arm Animator</h1>
+
+  <div>
+    <h2>Animation</h2>
+    <select id="setSel" style="width:100%"></select>
+  </div>
+
+  <div>
+    <h2>Playback</h2>
+    <div class="row">
+      <button id="prevBtn" title="Previous frame (←)">◀</button>
+      <button id="playBtn" class="on" title="Play / pause (Space)">Pause</button>
+      <button id="nextBtn" title="Next frame (→)">▶</button>
+    </div>
+  </div>
+
+  <div>
+    <h2>Frames</h2>
+    <div class="row frames" id="frameBtns"></div>
+  </div>
+
+  <div>
+    <h2>Speed: <span id="fpsVal">8</span> fps</h2>
+    <div class="row"><input type="range" id="fps" min="1" max="30" value="8"></div>
+  </div>
+
+  <div>
+    <h2>Options</h2>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <label><input type="checkbox" id="pingpong" checked autocomplete="off"> Ping-pong (1→6→1)</label>
+      <label><input type="checkbox" id="otherArm" checked> Show other arm (matching frame #)</label>
+      <label><input type="checkbox" id="onion"> Onion skin (show previous frame)</label>
+      <label><input type="checkbox" id="showBody" checked> Show body</label>
+      <label><input type="checkbox" id="showLabel" checked> Show frame label</label>
+    </div>
+  </div>
+
+  <div>
+    <h2>Buckle shift by last frame: <span id="buckleVal">30</span> px</h2>
+    <div class="row"><input type="range" id="buckle" min="-150" max="150" value="30"></div>
+    <p class="hint">Slides every Body shape with "Buckle" in its name, from 0 on frame 1 to this amount on the last frame.</p>
+  </div>
+
+  <div>
+    <h2>Leg swing: ±<span id="legAngleVal">20</span>°</h2>
+    <div class="row"><input type="range" id="legAngle" min="0" max="60" value="20"></div>
+    <h2 style="margin-top:10px">Hip pivot above boot top: <span id="legPivotVal">40</span>% of boot height</h2>
+    <div class="row"><input type="range" id="legPivot" min="0" max="200" value="40"></div>
+    <label style="margin-top:6px"><input type="checkbox" id="showPivots"> Show hip pivot points</label>
+    <h2 style="margin-top:10px">Body bob: <span id="bobVal">100</span>%</h2>
+    <div class="row"><input type="range" id="bob" min="-200" max="200" value="100"></div>
+    <h2 style="margin-top:10px">Boot slide with buckle: <span id="bootFollowVal">100</span>%</h2>
+    <div class="row"><input type="range" id="bootFollow" min="0" max="200" value="100"></div>
+    <p class="hint">Right boot moves with the buckle, left boot moves the opposite way. 100% = same distance as the buckle.</p>
+    <p class="hint">Bob shifts as his legs angle. 100% drops him exactly enough to keep his boots on the ground; 0 turns it off; negative values lift him instead.</p>
+    <p class="hint">Boots swing in opposite directions around their hip, from one extreme on frame 1 to the other on the last frame.</p>
+  </div>
+
+  <div>
+    <h2>Eyes follow mouse: <span id="eyeFollowVal">50</span>%</h2>
+    <div class="row"><input type="range" id="eyeFollow" min="0" max="100" value="50"></div>
+    <p class="hint">How far the irises can move toward the mouse (100% = to the edge of the eye).</p>
+  </div>
+
+  <div>
+    <h2>Cast shadows: <span id="shadowStrVal">55</span>%</h2>
+    <div class="row"><input type="range" id="shadowStr" min="0" max="100" value="55"></div>
+    <h2 style="margin-top:8px">Shadow size: <span id="shadowSizeVal">100</span>%</h2>
+    <div class="row"><input type="range" id="shadowSize" min="0" max="300" value="100"></div>
+    <p class="hint">Soft shadow from the head onto the body, and from the body onto Bob's left boot.</p>
+  </div>
+
+  <div>
+    <h2>Lighting</h2>
+    <div class="row" id="viewBtns">
+      <button data-view="lit" class="on">Lit</button>
+      <button data-view="normals">Normal map</button>
+      <button data-view="off">Off</button>
+    </div>
+    <p class="hint">Move the mouse over the stage to move the light. Normals are generated from each filled shape: every body part gets a rounded surface, and smaller parts (visor, belt, buckle…) are raised on top of it.</p>
+    <div id="lightSliders"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="dlFrame" title="Normal map + color image of the current frame">Download this frame</button>
+      <button id="dlSheet" title="Every frame side by side: a normal map sheet and a matching color sheet">Download sheets</button>
+    </div>
+    <p class="hint">Exported normal maps use the same convention as img/Ooomba_normal.png (green = up).</p>
+  </div>
+
+  <div>
+    <h2>Zoom: <span id="zoomVal">100</span>%</h2>
+    <div class="row"><input type="range" id="zoom" min="25" max="400" value="100"></div>
+  </div>
+
+  <div>
+    <h2>Background</h2>
+    <div class="row" id="bgBtns">
+      <button data-bg="checker" class="on">Checker</button>
+      <button data-bg="light">Light</button>
+      <button data-bg="dark">Dark</button>
+    </div>
+  </div>
+
+  <div>
+    <h2>Source</h2>
+    <div class="row">
+      <button id="reloadBtn" title="Re-read the SVG after saving in Inkscape (R)">Reload SVG</button>
+      <button id="openBtn">Open file…</button>
+      <input type="file" id="fileIn" accept=".svg" hidden>
+    </div>
+    <p class="hint">Save in Inkscape, then press <kbd>R</kbd> to see changes. You can also drop an SVG onto the page.</p>
+  </div>
+
+  <p class="hint"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> step · <kbd>1</kbd>–<kbd>9</kbd> jump to frame</p>
+</aside>
+
+<script>
+const SVG_URL = '../img/astronaut2.svg';
+// Layers like "Right Arm - Walking Frame 3" -> set "Right Arm - Walking", frame 3
+const FRAME_RE = /^(.*?)\s*-\s*(.*?)\s*Frame\s*(\d+)\s*$/i;
+
+const $ = id => document.getElementById(id);
+const holder = $('holder'), msg = $('msg'), frameLabel = $('frameLabel');
+
+let svg = null, wrap = null, baseSize = null;
+let sets = {};           // name -> [{num, el, label}]
+let armLayers = [];      // every arm layer (hidden unless it's the current frame)
+let bodyLayers = [];     // layers that were visible in the file and aren't arms
+let buckleParts = [];    // belt buckle shapes that slide across the walk cycle
+const PX_TO_UNITS = 25.4 / 96;  // the drawing is in mm; Inkscape px are 96 per inch
+const SVGNS = 'http://www.w3.org/2000/svg';
+let legs = [];           // {w: wrapper <g>, dot, left, cx, top, h} for each boot
+let topGroups = [];      // named body-part groups (Head, Body, boots, arm frames…)
+let eyes = [];           // {iris, orig, rest, tx, ty} — irises that look toward the mouse
+let eyeOverlay = [];     // live copies of irises + visor glare drawn over the lit canvas
+let mousePt = null;      // last mouse position (client px)
+let current = null, idx = 0, dir = 1;
+let playing = true, timer = null;
+let srcText = null, srcName = 'astronaut2.svg';
+
+function labelOf(el) { return el.getAttribute('inkscape:label') || el.getAttributeNS('http://www.inkscape.org/namespaces/inkscape', 'label') || ''; }
+
+function loadText(text, name) {
+  srcText = text; srcName = name || srcName;
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (root.nodeName === 'parsererror' || root.querySelector('parsererror')) { showMsg('Could not parse that SVG.'); return; }
+
+  svg = document.importNode(root, true);
+  svg.removeAttribute('width'); svg.removeAttribute('height');
+  holder.replaceChildren(svg);
+
+  // Collect named groups from the top-level layer(s)
+  const layerRoots = [...svg.children].filter(c => c.tagName === 'g');
+  const groups = layerRoots.flatMap(l => l.getAttribute('inkscape:groupmode') === 'layer' ? [...l.children].filter(c => c.tagName === 'g') : [l]);
+
+  sets = {}; armLayers = []; bodyLayers = [];
+  for (const g of groups) {
+    const lab = labelOf(g);
+    g.dataset.origDisplay = g.style.display || '';
+    g.dataset.origOpacity = g.style.opacity || '';
+    const m = lab.match(FRAME_RE);
+    if (m) {
+      const key = `${m[1]} - ${m[2]}`.trim();
+      (sets[key] ||= []).push({ num: +m[3], el: g, label: lab });
+    }
+    if (/\barm\b/i.test(lab)) { armLayers.push(g); continue; }
+    if (g.style.display !== 'none') bodyLayers.push(g);
+  }
+  for (const k in sets) sets[k].sort((a, b) => a.num - b.num);
+
+  // Belt buckle parts inside the Body layer ("Belt Buckle", "Buckle Line 1..3")
+  const body = groups.find(g => labelOf(g) === 'Body');
+  buckleParts = body ? [...body.querySelectorAll('*')].filter(el => /buckle/i.test(labelOf(el))) : [];
+  buckleParts.forEach(el => el.dataset.origTransform = el.getAttribute('transform') || '');
+
+  // Boots: wrap each in its own group so we can rotate it around a hip point in the parent's space
+  legs = [];
+  for (const g of groups) {
+    const lab = labelOf(g);
+    if (!/^stationary (left|right) boot$/i.test(lab)) continue;
+    const w = document.createElementNS(SVGNS, 'g');
+    g.parentNode.insertBefore(w, g); w.appendChild(g);
+    const b = w.getBBox();
+    const dot = document.createElementNS(SVGNS, 'circle');
+    dot.setAttribute('r', Math.max(b.width, b.height) * 0.04);
+    dot.setAttribute('fill', '#e5484d'); dot.setAttribute('stroke', '#fff'); dot.setAttribute('stroke-width', b.width * 0.01);
+    dot.style.display = 'none';
+    dot.classList.add('pivot-dot');
+    w.parentNode.appendChild(dot);  // last child, so the dot draws on top
+    legs.push({ w, dot, left: /left/i.test(lab), cx: b.x + b.width / 2, top: b.y, h: b.height });
+  }
+
+  const names = Object.keys(sets);
+  if (!names.length) { showMsg('No layers named "… Frame N" found.'); return; }
+
+  const sel = $('setSel'); const prev = current;
+  sel.innerHTML = names.map(n => `<option>${n}</option>`).join('');
+  // Default to the Right Arm walk (Left Arm is still a work in progress)
+  current = names.includes(prev) ? prev : (names.find(n => /^right arm/i.test(n)) || names[0]);
+  sel.value = current;
+
+  // Wrap drawing content so we can crop the view to the character
+  wrap = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  for (const c of [...svg.childNodes]) if (c.nodeType === 1 && c.tagName === 'g') wrap.appendChild(c);
+  svg.appendChild(wrap);
+  topGroups = groups;
+  fitView();
+  Lighting.reset();
+  setupShadows();
+  setupEyes();
+
+  msg.classList.add('hidden');
+  buildFrameButtons();
+  idx = Math.min(idx, sets[current].length - 1);
+  render();
+  restartTimer();
+}
+
+// Crop the viewBox to the union of body + every frame of every set
+function fitView() {
+  armLayers.forEach(g => g.style.display = 'none');
+  bodyLayers.forEach(g => g.style.display = 'inline');
+  let box = null;
+  const add = b => { if (!b.width && !b.height) return;
+    if (!box) { box = { x1: b.x, y1: b.y, x2: b.x + b.width, y2: b.y + b.height }; return; }
+    box.x1 = Math.min(box.x1, b.x); box.y1 = Math.min(box.y1, b.y);
+    box.x2 = Math.max(box.x2, b.x + b.width); box.y2 = Math.max(box.y2, b.y + b.height); };
+  add(wrap.getBBox());
+  for (const k in sets) for (const f of sets[k]) {
+    f.el.style.display = 'inline'; add(wrap.getBBox()); f.el.style.display = 'none';
+  }
+  if (!box) return;
+  const pad = Math.max(box.x2 - box.x1, box.y2 - box.y1) * 0.1;  // extra room for leg swing and body bob
+  const vb = [box.x1 - pad, box.y1 - pad, box.x2 - box.x1 + pad * 2, box.y2 - box.y1 + pad * 2];
+  svg.setAttribute('viewBox', vb.join(' '));
+  baseSize = { w: vb[2], h: vb[3] };
+  applyZoom();
+}
+
+function applyZoom() {
+  if (!svg || !baseSize) return;
+  const z = $('zoom').value / 100;
+  const stage = $('stage').getBoundingClientRect();
+  const fit = Math.min((stage.width - 40) / baseSize.w, (stage.height - 40) / baseSize.h);
+  svg.style.width = baseSize.w * fit * z + 'px';
+  svg.style.height = baseSize.h * fit * z + 'px';
+}
+
+function buildFrameButtons() {
+  $('frameBtns').innerHTML = sets[current].map((f, i) => `<button data-i="${i}" title="${f.label}">${f.num}</button>`).join('');
+}
+
+function render() {
+  if (!svg) return;
+  const frames = sets[current];
+  armLayers.forEach(g => { g.style.display = 'none'; g.style.opacity = g.dataset.origOpacity; });
+  bodyLayers.forEach(g => g.style.display = $('showBody').checked ? 'inline' : 'none');
+
+  // The other arm's set ("Right Arm - Walking" <-> "Left Arm - Walking"), matched by frame number.
+  // If it has no frame with that number (e.g. Left Arm only has 1-3), that arm is simply not shown.
+  const otherKey = current.replace(/^(left|right)/i, s => /left/i.test(s) ? 'Right' : 'Left');
+  const other = $('otherArm').checked && otherKey !== current ? sets[otherKey] : null;
+  const otherFrame = i => other && other.find(o => o.num === frames[i].num);
+
+  if ($('onion').checked && frames.length > 1) {
+    const pi = (idx - 1 + frames.length) % frames.length;
+    for (const p of [frames[pi], otherFrame(pi)]) if (p) { p.el.style.display = 'inline'; p.el.style.opacity = '0.25'; }
+  }
+  // Slide the buckle: 0 on the first frame, full shift on the last, evenly in between
+  const first = frames[0].num, last = frames[frames.length - 1].num;
+  const t = last > first ? (frames[idx].num - first) / (last - first) : 0;
+  const dx = t * $('buckle').value * PX_TO_UNITS;
+  buckleParts.forEach(el => el.setAttribute('transform', `translate(${dx.toFixed(3)} 0) ${el.dataset.origTransform}`.trim()));
+
+  // Swing the boots around their hips: eased from one extreme on the first frame to the other on the last.
+  // Phase is set so each leg moves forward with the opposite arm (right arm forward = left leg forward).
+  const swing = Math.cos(Math.PI * t) * $('legAngle').value;
+  const showDots = $('showPivots').checked;
+  let footLift = 0;  // how far a tilted boot's sole rises above where it sits when straight
+  for (const l of legs) {
+    const py = l.top - l.h * $('legPivot').value / 100;
+    const legLen = l.top + l.h - py;  // hip to sole
+    footLift = Math.max(footLift, legLen * (1 - Math.cos(swing * Math.PI / 180)));
+    // Right boot follows the buckle; left boot slides the opposite way
+    const bx = (l.left ? -dx : dx) * $('bootFollow').value / 100;
+    l.w.setAttribute('transform', `translate(${bx.toFixed(3)} 0) rotate(${(l.left ? swing : -swing).toFixed(2)} ${l.cx} ${py})`);
+    l.dot.setAttribute('cx', l.cx + bx); l.dot.setAttribute('cy', py);
+    l.dot.style.display = showDots ? 'inline' : 'none';
+  }
+  // Shift the whole character: none when legs are straight, more as they angle
+  wrap.setAttribute('transform', `translate(0 ${(footLift * $('bob').value / 100).toFixed(3)})`);
+
+  const f = frames[idx], o = otherFrame(idx);
+  for (const g of [f, o]) if (g) { g.el.style.display = 'inline'; g.el.style.opacity = g.el.dataset.origOpacity || '1'; }
+
+  frameLabel.hidden = !$('showLabel').checked;
+  frameLabel.textContent = `${f.label}${other ? (o ? ' + ' + o.label : ' (no ' + otherKey.split(' - ')[0] + ')') : ''}  (${idx + 1}/${frames.length})`;
+  // With pivots shown, also list how far the buckle and each hip have moved (in Inkscape px)
+  if (showDots) {
+    const px = v => (v >= 0 ? '+' : '') + (v / PX_TO_UNITS).toFixed(1);
+    const parts = [`buckle ${px(dx)}`].concat(legs.map(l => {
+      const bx = (l.left ? -dx : dx) * $('bootFollow').value / 100;
+      return `${l.left ? 'L' : 'R'} hip (x=${(l.cx / PX_TO_UNITS).toFixed(0)}) ${px(bx)}`;
+    }));
+    frameLabel.textContent += '  ·  ' + parts.join('  ·  ');
+  }
+  [...$('frameBtns').children].forEach((b, i) => b.classList.toggle('on', i === idx));
+  updateShadows();
+  updateEyes();
+  Lighting.update();
+}
+
+// ---------- Cast shadows: a blurred, darkened copy of the caster, nudged down and clipped to the receiver ----------
+let shadows = [];   // {receiver, caster, inner, outer, blur, offset, blurSize}
+
+function setupShadows() {
+  shadows = [];
+  const defs = svg.querySelector('defs') || svg.insertBefore(document.createElementNS(SVGNS, 'defs'), svg.firstChild);
+  const shapesIn = g => [...g.querySelectorAll('path, ellipse, circle, rect')];
+  const area = el => { const b = el.getBBox(); return b.width * b.height; };
+  const largest = list => list.reduce((a, b) => (area(b) > area(a) ? b : a), list[0]);
+  const byLabel = (g, l) => shapesIn(g).find(el => labelOf(el).toLowerCase() === l);
+  const group = l => topGroups.find(g => labelOf(g).toLowerCase() === l);
+
+  const head = group('head'), body = group('body'), leftBoot = legs.find(l => l.left)?.w.firstElementChild;
+  const add = (receiver, caster, offsetFrac, blurFrac) => {
+    if (!receiver || !caster) return;
+    const n = shadows.length;
+    // Clip to the receiver's filled shapes (<use> copies keep each shape's own transform)
+    const clip = document.createElementNS(SVGNS, 'clipPath'); clip.id = `cast-shadow-clip-${n}`;
+    for (const el of shapesIn(receiver)) {
+      if (getComputedStyle(el).fill === 'none' || el.closest('.cast-shadow')) continue;
+      el.id ||= `cast-shadow-src-${n}-${clip.childElementCount}`;
+      const u = document.createElementNS(SVGNS, 'use'); u.setAttribute('href', '#' + el.id); clip.appendChild(u);
+    }
+    const filter = document.createElementNS(SVGNS, 'filter'); filter.id = `cast-shadow-blur-${n}`;
+    for (const [k, v] of [['x', '-50%'], ['y', '-50%'], ['width', '200%'], ['height', '200%']]) filter.setAttribute(k, v);
+    const blur = document.createElementNS(SVGNS, 'feGaussianBlur'); filter.appendChild(blur);
+    defs.append(clip, filter);
+
+    const shape = caster.cloneNode(false);
+    shape.removeAttribute('id'); shape.removeAttribute('inkscape:label');
+    const sw = parseFloat(getComputedStyle(caster).strokeWidth) || 0;
+    shape.setAttribute('style', `fill:#000;stroke:#000;stroke-width:${sw}`);
+    const inner = document.createElementNS(SVGNS, 'g'); inner.setAttribute('filter', `url(#${filter.id})`); inner.appendChild(shape);
+    const outer = document.createElementNS(SVGNS, 'g'); outer.classList.add('cast-shadow');
+    outer.setAttribute('clip-path', `url(#${clip.id})`); outer.appendChild(inner);
+    receiver.appendChild(outer);   // last child: paints over the receiver
+    const b = caster.getBBox();
+    shadows.push({ caster, receiver, inner, outer, blur, offset: b.height * offsetFrac, blurSize: b.height * blurFrac });
+  };
+  // Head (the white helmet) onto the body; the body onto Bob's left boot
+  if (head) add(body, byLabel(head, 'white helmet') || largest(shapesIn(head)), 0.05, 0.035);
+  if (body) add(leftBoot, byLabel(body, 'body outline') || largest(shapesIn(body)), 0.04, 0.035);
+}
+
+function updateShadows() {
+  const str = $('shadowStr').value / 100, size = $('shadowSize').value / 100;
+  for (const s of shadows) {
+    // Caster's parent space -> receiver's space, then nudge down
+    const rm = s.receiver.getScreenCTM(), cm = s.caster.parentNode.getScreenCTM();
+    if (!rm || !cm) continue;   // receiver or caster hidden
+    const m = rm.inverse().multiply(cm);
+    s.inner.setAttribute('transform', `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f}) translate(0 ${(s.offset * size).toFixed(3)})`);
+    s.blur.setAttribute('stdDeviation', (s.blurSize * Math.max(size, 0.2)).toFixed(3));
+    s.outer.style.opacity = str;
+    s.outer.style.display = str > 0 ? '' : 'none';
+  }
+}
+
+// ---------- Eyes: irises drift toward the mouse ----------
+function setupEyes() {
+  const all = [...wrap.querySelectorAll('*')];
+  const byLabel = l => all.find(el => labelOf(el).toLowerCase() === l.toLowerCase());
+  eyes = [];
+  for (const iris of all) {
+    const m = labelOf(iris).match(/^(.*eye)\s+iris$/i);
+    const eye = m && byLabel(m[1]);
+    if (!eye || !iris.rx) continue;
+    const orig = iris.getAttribute('transform') || '';
+    const t = iris.transform.baseVal.consolidate(), M = t ? t.matrix : new DOMMatrix();
+    const rest = new DOMPoint(iris.cx.baseVal.value, iris.cy.baseVal.value).matrixTransform(M);  // in the head's space
+    eyes.push({ iris, orig, rest,
+      tx: Math.max(0, eye.rx.baseVal.value - iris.rx.baseVal.value),
+      ty: Math.max(0, eye.ry.baseVal.value - iris.ry.baseVal.value) });
+  }
+
+  // In Lit mode the canvas shows a cached picture of each pose, so the irises (and the glare that sits
+  // over them) are drawn live in their own SVG on top, using <use> copies that track the real shapes.
+  const old = $('eyes'); if (old) old.remove();
+  eyeOverlay = [];
+  const ov = document.createElementNS(SVGNS, 'svg'); ov.id = 'eyes';
+  ov.setAttribute('viewBox', svg.getAttribute('viewBox'));
+  const groupSet = new Set(topGroups);
+  all.filter(el => eyes.some(e => e.iris === el) || /glare/i.test(labelOf(el))).forEach((el, i) => {
+    el.id ||= 'eye-overlay-' + i;
+    const g = document.createElementNS(SVGNS, 'g'), use = document.createElementNS(SVGNS, 'use');
+    use.setAttribute('href', '#' + el.id); g.appendChild(use); ov.appendChild(g);
+    let top = el.parentNode; while (top && !groupSet.has(top)) top = top.parentNode;
+    eyeOverlay.push({ el, g, top });
+  });
+  holder.appendChild(ov);
+}
+
+function updateEyes() {
+  if (!svg || !eyes.length) return;
+  const amt = $('eyeFollow').value / 100;
+  for (const e of eyes) {
+    let ox = 0, oy = 0;
+    const pm = e.iris.parentNode.getScreenCTM();
+    if (mousePt && amt && pm) {
+      const p = new DOMPoint(mousePt.x, mousePt.y).matrixTransform(pm.inverse());
+      const dx = p.x - e.rest.x, dy = p.y - e.rest.y, dist = Math.hypot(dx, dy);
+      // Full look once the mouse is ~40 units (about a head-width) away; less when it's close
+      if (dist > 1e-6) { const f = Math.min(1, dist / 40) * amt; ox = dx / dist * e.tx * f; oy = dy / dist * e.ty * f; }
+    }
+    e.iris.setAttribute('transform', `translate(${ox.toFixed(3)} ${oy.toFixed(3)}) ${e.orig}`.trim());
+  }
+  const inv = svg.getScreenCTM().inverse();
+  for (const o of eyeOverlay) {
+    const m = inv.multiply(o.el.parentNode.getScreenCTM());
+    o.g.setAttribute('transform', `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`);
+    o.g.style.display = o.top && o.top.style.display === 'none' ? 'none' : '';
+  }
+}
+
+function step(d) {
+  const n = sets[current].length;
+  if (n < 2) return;
+  if ($('pingpong').checked && d === 0) {
+    if (idx + dir >= n || idx + dir < 0) dir = -dir;
+    idx += dir;
+  } else {
+    idx = (idx + (d || 1) + n) % n;
+  }
+  render();
+}
+
+function restartTimer() {
+  clearInterval(timer);
+  if (playing) timer = setInterval(() => step(0), 1000 / $('fps').value);
+}
+
+function setPlaying(p) {
+  playing = p;
+  $('playBtn').textContent = p ? 'Pause' : 'Play';
+  $('playBtn').classList.toggle('on', p);
+  restartTimer();
+}
+
+function showMsg(html) { msg.innerHTML = html; msg.classList.remove('hidden'); }
+
+async function loadFromUrl() {
+  try {
+    const r = await fetch(SVG_URL + '?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    loadText(await r.text(), 'astronaut2.svg');
+  } catch (e) {
+    if (srcText && location.protocol === 'file:') { loadText(srcText); return; }
+    showMsg(`<div>Couldn't load <code>img/astronaut2.svg</code> automatically.</div>
+      <div>Run <code>npm run serve</code> and open <code>http://localhost:8080/tools/arm-animator.html</code>,</div>
+      <div>or drop the SVG onto this page / use <b>Open file…</b></div>`);
+  }
+}
+
+function loadFile(file) { file.text().then(t => loadText(t, file.name)); }
+
+// ---------- Lighting: normal maps built from the vector shapes, lit from the mouse ----------
+// Defaults match the game's Ooomba lighting (js/entities/Ooomba.js).
+const LIGHT_SLIDERS = [
+  // id, label, min, max, default, suffix
+  ['strength',  'Shading strength',    0, 100, 70, '%'],
+  ['ambient',   'Ambient',             0, 100, 42, '%'],
+  ['diffuse',   'Diffuse',             0, 150, 72, '%'],
+  ['specular',  'Highlight',           0, 150, 55, '%'],
+  ['shininess', 'Highlight tightness', 2, 128, 36, ''],
+  ['rim',       'Rim light',           0, 200, 90, '%'],
+  ['lightZ',    'Light height',        5, 200, 50, '%'],
+  ['depth',     'Roundness',          10, 300, 100, '%'],
+  ['detail',    'Part detail',         0, 100, 35, '%'],
+];
+$('lightSliders').innerHTML = LIGHT_SLIDERS.map(([id, label, min, max, def, suf]) =>
+  `<h2 style="margin-top:8px">${label}: <span id="L_${id}Val">${def}</span>${suf}</h2>
+   <div class="row"><input type="range" id="L_${id}" min="${min}" max="${max}" value="${def}"></div>`).join('');
+
+const Lighting = (() => {
+  const cacheN = new Map(), cacheA = new Map();   // normal maps / color images, keyed by pose
+  let canvas = null, gl = null, uni = {}, texN = null, texA = null;
+  let W = 0, H = 0, k = 1, vbx = 0, vby = 0;
+  let mode = 'lit', light = null, ticket = 0, shownTicket = 0, onScreen = null;
+  const val = id => +$('L_' + id).value;
+  const rc = document.createElement('canvas');
+  const rctx = rc.getContext('2d', { willReadFrequently: true });
+
+  function trim(map) { while (map.size > 48) map.delete(map.keys().next().value); }
+
+  function reset() {
+    if (!canvas) initGL();
+    cacheN.clear(); cacheA.clear(); onScreen = null;
+    const vb = svg.viewBox.baseVal;
+    k = 900 / Math.max(vb.width, vb.height);   // raster resolution: 900px on the long side
+    W = Math.round(vb.width * k); H = Math.round(vb.height * k); vbx = vb.x; vby = vb.y;
+    canvas.width = W; canvas.height = H;
+    gl.viewport(0, 0, W, H);
+    holder.appendChild(canvas);
+    // ?light=x,y (fractions of the view) sets the starting light; ?normals opens on the normal map
+    const q = new URLSearchParams(location.search), lq = (q.get('light') || '').split(',').map(Number);
+    light ||= lq.length === 2 && lq.every(isFinite) ? { x: W * lq[0], y: H * lq[1] } : { x: W * 0.15, y: H * 0.1 };
+    if (q.has('normals') && !light.init) { mode = 'normals'; [...$('viewBtns').children].forEach(b => b.classList.toggle('on', b.dataset.view === 'normals')); }
+    light.init = true;
+  }
+
+  function poseKey() {
+    return [currentSet(), idx, ...['buckle', 'legAngle', 'legPivot', 'bob', 'bootFollow', 'shadowStr', 'shadowSize'].map(i => $(i).value),
+      $('otherArm').checked, $('showBody').checked, $('onion').checked, $('showPivots').checked].join('|');
+  }
+
+  // Make sure the current pose's normal map + color image exist, then show them
+  function update() {
+    if (!svg || !canvas || !W) return;
+    $('stage').classList.toggle('lighting', mode !== 'off');
+    if (mode === 'off') { canvas.style.display = 'none'; svg.style.opacity = ''; holder.dataset.lit = ''; return; }
+    const pk = poseKey(), nk = pk + '|' + val('depth') + '|' + val('detail');
+    if (!cacheN.has(nk)) { cacheN.set(nk, computeNormals()); trim(cacheN); }
+    const normals = cacheN.get(nk), t = ++ticket;
+    const done = img => { if (t > shownTicket) { shownTicket = t; show(normals, img); } };
+    if (cacheA.has(pk)) done(cacheA.get(pk));
+    else makeAlbedo().then(img => { cacheA.set(pk, img); trim(cacheA); done(img); });
+  }
+
+  function show(normals, img) {
+    if (mode === 'off') return;
+    if (!onScreen || onScreen.normals !== normals) {
+      gl.bindTexture(gl.TEXTURE_2D, texN);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(normals.buffer));
+    }
+    if (!onScreen || onScreen.img !== img) {
+      gl.bindTexture(gl.TEXTURE_2D, texA);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    }
+    onScreen = { normals, img };
+    canvas.style.display = 'block';
+    holder.dataset.lit = mode === 'lit' ? '1' : '';   // live irises + glare on top (not over the normal map view)
+    svg.style.opacity = '0';   // the lit canvas replaces the SVG (it still drives layout and geometry)
+    draw();
+  }
+
+  function draw() {
+    if (!onScreen || mode === 'off') return;
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform2f(uni.res, W, H);
+    gl.uniform3f(uni.light, light.x, light.y, val('lightZ') / 100 * Math.max(W, H));
+    gl.uniform1f(uni.strength, val('strength') / 100);
+    gl.uniform1f(uni.ambient, val('ambient') / 100);
+    gl.uniform1f(uni.diffuse, val('diffuse') / 100);
+    gl.uniform1f(uni.specular, val('specular') / 100);
+    gl.uniform1f(uni.shininess, val('shininess'));
+    gl.uniform1f(uni.rimLight, val('rim') / 100);
+    gl.uniform1i(uni.mode, mode === 'normals' ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  function setMode(m) { mode = m; onScreen = null; shownTicket = ticket; update(); }
+
+  function moveLight(e) {
+    if (!canvas || mode !== 'lit') return;
+    const r = canvas.getBoundingClientRect();
+    if (!r.width) return;
+    light.x = (e.clientX - r.left) / r.width * W;
+    light.y = (e.clientY - r.top) / r.height * H;
+    draw();
+  }
+
+  // ---- normal map generation ----
+
+  function shapePath(el) {
+    const t = el.tagName, p = new Path2D(), n = a => el[a] ? el[a].baseVal.value : 0;
+    if (t === 'path') return new Path2D(el.getAttribute('d') || '');
+    if (t === 'circle') p.ellipse(n('cx'), n('cy'), n('r'), n('r'), 0, 0, Math.PI * 2);
+    else if (t === 'ellipse') p.ellipse(n('cx'), n('cy'), n('rx') || n('ry'), n('ry') || n('rx'), 0, 0, Math.PI * 2);
+    else if (t === 'rect') {
+      const r = Math.max(n('rx'), n('ry'));
+      if (r && p.roundRect) p.roundRect(n('x'), n('y'), n('width'), n('height'), r); else p.rect(n('x'), n('y'), n('width'), n('height'));
+    }
+    return p;
+  }
+
+  function isShown(el) {
+    for (let e = el; e && e !== svg; e = e.parentNode) {
+      const cs = getComputedStyle(e);
+      if (cs.display === 'none' || +cs.opacity < 0.5) return false;   // hidden, or an onion-skin ghost
+    }
+    return true;
+  }
+
+  // Pixel box (in the W x H raster) covered by an element's bbox under matrix M
+  function boxOf(M, bb, pad) {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const [x, y] of [[bb.x - pad, bb.y - pad], [bb.x + bb.width + pad, bb.y - pad], [bb.x - pad, bb.y + bb.height + pad], [bb.x + bb.width + pad, bb.y + bb.height + pad]]) {
+      const p = M.transformPoint(new DOMPoint(x, y));
+      x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y);
+    }
+    const x = Math.max(0, Math.floor(x1) - 3), y = Math.max(0, Math.floor(y1) - 3);
+    const w = Math.min(W, Math.ceil(x2) + 3) - x, h = Math.min(H, Math.ceil(y2) + 3) - y;
+    return w > 0 && h > 0 ? { x, y, w, h } : null;
+  }
+  const unionBox = (a, b) => {
+    if (!a) return { ...b };
+    const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+    return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+  };
+
+  // Rasterise shapes (fill + stroke) into an alpha mask covering box r
+  function raster(list, r) {
+    rc.width = r.w; rc.height = r.h;
+    rctx.fillStyle = rctx.strokeStyle = '#fff';
+    for (const s of list) {
+      rctx.setTransform(new DOMMatrix().translate(-r.x, -r.y).multiply(s.M));
+      rctx.fill(s.path, s.rule);
+      if (s.sw) { rctx.lineWidth = s.sw; rctx.lineJoin = 'round'; rctx.stroke(s.path); }
+    }
+    const d = rctx.getImageData(0, 0, r.w, r.h).data, a = new Uint8Array(r.w * r.h);
+    for (let i = 0; i < a.length; i++) a[i] = d[i * 4 + 3];
+    return a;
+  }
+
+  // Exact Euclidean distance (in px) from each inside pixel to the nearest outside pixel
+  function edt(a, w, h) {
+    const INF = 1e20, n = Math.max(w, h);
+    const f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+    const g = new Float64Array(w * h);
+    for (let i = 0; i < g.length; i++) g[i] = a[i] >= 128 ? INF : 0;
+    const pass = len => {
+      let q, j = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+      for (q = 1; q < len; q++) {
+        let s = ((f[q] + q * q) - (f[v[j]] + v[j] * v[j])) / (2 * q - 2 * v[j]);
+        while (s <= z[j]) { j--; s = ((f[q] + q * q) - (f[v[j]] + v[j] * v[j])) / (2 * q - 2 * v[j]); }
+        j++; v[j] = q; z[j] = s; z[j + 1] = INF;
+      }
+      for (q = 0, j = 0; q < len; q++) { while (z[j + 1] < q) j++; d[q] = (q - v[j]) ** 2 + f[v[j]]; }
+    };
+    for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) f[y] = g[y * w + x]; pass(h); for (let y = 0; y < h; y++) g[y * w + x] = d[y]; }
+    for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) f[x] = g[y * w + x]; pass(w); for (let x = 0; x < w; x++) g[y * w + x] = Math.sqrt(d[x]); }
+    return g;
+  }
+
+  // Inflate a mask into a rounded surface: a sphere for round shapes, a tube for long ones
+  function dome(a, w, h) {
+    const dist = edt(a, w, h);
+    let R = 0; for (const v of dist) if (v > R) R = v;
+    const out = new Float32Array(w * h);
+    for (let i = 0; i < out.length; i++) { const d = dist[i]; out[i] = d > 0 ? Math.sqrt(d * (2 * R - d)) : 0; }
+    // Smooth out the creases a distance field leaves along a shape's center line
+    const r = Math.max(1, Math.min(10, Math.round(R * 0.12)));
+    for (let pass = 0; pass < 3; pass++) boxBlur(out, w, h, r);
+    return out;
+  }
+
+  // In-place separable box blur (3 passes approximate a Gaussian)
+  function boxBlur(a, w, h, r) {
+    const tmp = new Float32Array(Math.max(w, h)), n = 2 * r + 1;
+    const line = (get, set, len) => {
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += get(Math.min(Math.max(i, 0), len - 1));
+      for (let i = 0; i < len; i++) {
+        tmp[i] = sum / n;
+        sum += get(Math.min(i + r + 1, len - 1)) - get(Math.max(i - r, 0));
+      }
+      for (let i = 0; i < len; i++) set(i, tmp[i]);
+    };
+    for (let y = 0; y < h; y++) line(x => a[y * w + x], (x, v) => { a[y * w + x] = v; }, w);
+    for (let x = 0; x < w; x++) line(y => a[y * w + x], (y, v) => { a[y * w + x] = v; }, h);
+  }
+
+  function computeNormals() {
+    const inv = svg.getScreenCTM().inverse();
+    const base = new DOMMatrix([k, 0, 0, k, -vbx * k, -vby * k]).multiply(new DOMMatrix([inv.a, inv.b, inv.c, inv.d, inv.e, inv.f]));
+    const groupSet = new Set(topGroups);
+
+    // Every visible filled shape, in paint order
+    const shapes = [];
+    for (const el of wrap.querySelectorAll('path, ellipse, circle, rect')) {
+      if (el.closest('.cast-shadow')) continue;   // shadows are paint, not shape
+      if (el.classList.contains('pivot-dot') || /glare|iris/i.test(labelOf(el))) continue;  // glare stays flat; irises move with the mouse
+      const cs = getComputedStyle(el);
+      if (cs.fill === 'none' || +cs.fillOpacity === 0 || !isShown(el)) continue;
+      const m = el.getScreenCTM(); if (!m) continue;
+      const M = base.multiply(new DOMMatrix([m.a, m.b, m.c, m.d, m.e, m.f]));
+      const sw = cs.stroke !== 'none' ? parseFloat(cs.strokeWidth) || 0 : 0;
+      const box = boxOf(M, el.getBBox(), sw / 2);
+      if (!box) continue;
+      let grp = el.parentNode; while (grp && !groupSet.has(grp)) grp = grp.parentNode;
+      shapes.push({ M, sw, box, grp: grp || el, rule: cs.fillRule === 'evenodd' ? 'evenodd' : 'nonzero', path: shapePath(el) });
+    }
+
+    // One big rounded surface per body part (Head, Body, each boot, each arm)
+    const parts = new Map();
+    for (const s of shapes) {
+      const p = parts.get(s.grp) || { list: [], box: null };
+      p.list.push(s); p.box = unionBox(p.box, s.box); parts.set(s.grp, p);
+    }
+    for (const p of parts.values()) p.h = dome(raster(p.list, p.box), p.box.w, p.box.h);
+
+    // Each shape: its part's surface + its own smaller bump; composite normals in paint order
+    const depth = val('depth') / 100, detail = val('detail') / 100;
+    const N = new Float32Array(W * H * 3), A = new Float32Array(W * H);
+    for (const s of shapes) {
+      const r = s.box, a = raster([s], r), e = dome(a, r.w, r.h), p = parts.get(s.grp), pb = p.box;
+      const hgt = new Float32Array(r.w * r.h);
+      for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+        const px = r.x + x - pb.x, py = r.y + y - pb.y;
+        const G = px >= 0 && py >= 0 && px < pb.w && py < pb.h ? p.h[py * pb.w + px] : 0;
+        hgt[y * r.w + x] = depth * (G + detail * e[y * r.w + x]);
+      }
+      for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+        const i = y * r.w + x, al = a[i] / 255;
+        if (!al) continue;
+        const gx = (hgt[y * r.w + Math.min(x + 1, r.w - 1)] - hgt[y * r.w + Math.max(x - 1, 0)]) / 2;
+        const gy = (hgt[Math.min(y + 1, r.h - 1) * r.w + x] - hgt[Math.max(y - 1, 0) * r.w + x]) / 2;
+        const len = Math.hypot(gx, gy, 1);
+        const o = (r.y + y) * W + r.x + x;
+        N[o * 3] = -gx / len * al + N[o * 3] * (1 - al);
+        N[o * 3 + 1] = -gy / len * al + N[o * 3 + 1] * (1 - al);
+        N[o * 3 + 2] = 1 / len * al + N[o * 3 + 2] * (1 - al);
+        A[o] = al + A[o] * (1 - al);
+      }
+    }
+
+    // Encode like img/Ooomba_normal.png: x right, y UP (raster y is down, so flip), z toward viewer
+    const out = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+      let nx = 0, ny = 0, nz = 1;
+      if (A[i] > 0) {
+        nx = N[i * 3]; ny = N[i * 3 + 1]; nz = N[i * 3 + 2];
+        const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+      }
+      out[i * 4] = nx * 127.5 + 127.5; out[i * 4 + 1] = -ny * 127.5 + 127.5; out[i * 4 + 2] = nz * 127.5 + 127.5;
+      out[i * 4 + 3] = A[i] * 255;
+    }
+    return out;
+  }
+
+  // The SVG as it's posed right now, rasterised at the normal map's size
+  function makeAlbedo() {
+    const c = svg.cloneNode(true);
+    c.removeAttribute('style'); c.setAttribute('width', W); c.setAttribute('height', H);
+    c.querySelectorAll('.pivot-dot').forEach(d => { if (d.style.display === 'none') d.remove(); });
+    for (const o of eyeOverlay) c.querySelector('#' + CSS.escape(o.el.id))?.remove();  // drawn live on top instead
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(c)], { type: 'image/svg+xml' }));
+    const img = new Image(); img.src = url;
+    return img.decode().then(() => { URL.revokeObjectURL(url); return img; });
+  }
+
+  function initGL() {
+    canvas = document.createElement('canvas'); canvas.id = 'lit'; canvas.style.display = 'none';
+    gl = canvas.getContext('webgl', { premultipliedAlpha: true, preserveDrawingBuffer: true });
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, `
+      attribute vec2 p; varying vec2 uv;
+      void main() { uv = p; gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0); }`));
+    // Same lighting as the game's Ooomba shader, but with a point light at the mouse
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, `
+      precision highp float;
+      varying vec2 uv;
+      uniform sampler2D albedo, normalMap;
+      uniform vec2 res; uniform vec3 light;
+      uniform float strength, ambient, diffuse, specular, shininess, rimLight;
+      uniform int mode;
+      const float rimWidth = 1.8;
+      void main() {
+        vec4 nt = texture2D(normalMap, uv);
+        if (mode == 1) { gl_FragColor = vec4(nt.rgb * nt.a, nt.a); return; }
+        vec4 texel = texture2D(albedo, uv);
+        vec3 n = normalize(nt.rgb * 2.0 - 1.0);
+        vec2 p = uv * res;
+        vec3 lightDir = normalize(vec3(light.x - p.x, p.y - light.y, light.z));  // y up, like the map
+        float facing = max(dot(n, lightDir), 0.0);
+        vec3 halfway = normalize(lightDir + vec3(0.0, 0.0, 1.0));
+        float shine = pow(max(dot(n, halfway), 0.0), shininess) * specular;
+        float edge = pow(1.0 - clamp(n.z, 0.0, 1.0), rimWidth);
+        float away = 0.0;
+        if (length(n.xy) > 1e-4 && length(lightDir.xy) > 1e-4) away = max(dot(normalize(n.xy), -normalize(lightDir.xy)), 0.0);
+        float rim = edge * away * rimLight;
+        vec3 lit = texel.rgb * (ambient + diffuse * facing)
+          + mix(texel.rgb, vec3(1.0), 0.35) * rim
+          + vec3(1.0, 0.98, 0.92) * shine * texel.a;
+        vec3 rgb = min(mix(texel.rgb, lit, strength), vec3(1.0));
+        gl_FragColor = vec4(rgb * texel.a, texel.a);
+      }`));
+    gl.linkProgram(prog); gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    for (const n of ['albedo', 'normalMap', 'res', 'light', 'strength', 'ambient', 'diffuse', 'specular', 'shininess', 'rimLight', 'mode'])
+      uni[n] = gl.getUniformLocation(prog, n);
+    const tex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+      for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+        gl.texParameteri(gl.TEXTURE_2D, p, v);
+      return t; };
+    texA = tex(0); texN = tex(1);
+    gl.uniform1i(uni.albedo, 0); gl.uniform1i(uni.normalMap, 1);
+    // Keep each texture bound to its own unit
+    const bind = gl.bindTexture.bind(gl);
+    gl.bindTexture = (target, t) => { gl.activeTexture(gl.TEXTURE0 + (t === texN ? 1 : 0)); bind(target, t); };
+  }
+
+  // ---- exports ----
+  function toCanvas(normals) {
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    c.getContext('2d').putImageData(new ImageData(normals, W, H), 0, 0);
+    return c;
+  }
+  function save(c, name) {
+    c.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); });
+  }
+  function currentNormals() {
+    const nk = poseKey() + '|' + val('depth') + '|' + val('detail');
+    if (!cacheN.has(nk)) cacheN.set(nk, computeNormals());
+    return cacheN.get(nk);
+  }
+  async function downloadFrame() {
+    const n = idx + 1;
+    save(toCanvas(currentNormals()), `bob-frame${n}_normal.png`);
+    const img = await makeAlbedo(), c = document.createElement('canvas'); c.width = W; c.height = H;
+    c.getContext('2d').drawImage(img, 0, 0); save(c, `bob-frame${n}.png`);
+  }
+  async function downloadSheets() {
+    const was = idx, wasPlaying = playing, frames = sets[currentSet()];
+    setPlaying(false);
+    const nSheet = document.createElement('canvas'), cSheet = document.createElement('canvas');
+    nSheet.width = cSheet.width = W * frames.length; nSheet.height = cSheet.height = H;
+    const pending = [];
+    for (let i = 0; i < frames.length; i++) {
+      idx = i; render();
+      nSheet.getContext('2d').drawImage(toCanvas(currentNormals()), i * W, 0);
+      pending.push(makeAlbedo().then(img => cSheet.getContext('2d').drawImage(img, i * W, 0)));
+    }
+    await Promise.all(pending);
+    idx = was; render(); setPlaying(wasPlaying);
+    save(nSheet, 'bob-walk_normal.png'); save(cSheet, 'bob-walk.png');
+  }
+
+  return { reset, update, draw, setMode, moveLight, downloadFrame, downloadSheets, invalidate: () => cacheN.clear() };
+})();
+function currentSet() { return current; }
+
+$('viewBtns').onclick = e => { const v = e.target.dataset.view; if (!v) return;
+  [...$('viewBtns').children].forEach(b => b.classList.toggle('on', b === e.target)); Lighting.setMode(v); };
+$('stage').addEventListener('mousemove', Lighting.moveLight);
+$('stage').addEventListener('mousemove', e => { mousePt = { x: e.clientX, y: e.clientY }; updateEyes(); });
+['shadowStr', 'shadowSize'].forEach(id => $(id).oninput = e => { $(id + 'Val').textContent = e.target.value; render(); });
+$('eyeFollow').oninput =e => { $('eyeFollowVal').textContent = e.target.value; updateEyes(); };
+for (const [id] of LIGHT_SLIDERS) $('L_' + id).oninput = e => {
+  $('L_' + id + 'Val').textContent = e.target.value;
+  if (id === 'depth' || id === 'detail') Lighting.update(); else Lighting.draw();
+};
+$('dlFrame').onclick = () => Lighting.downloadFrame();
+$('dlSheet').onclick = () => Lighting.downloadSheets();
+
+// --- wiring ---
+$('setSel').onchange = e => { current = e.target.value; idx = 0; dir = 1; buildFrameButtons(); render(); };
+$('playBtn').onclick = () => setPlaying(!playing);
+$('prevBtn').onclick = () => { setPlaying(false); step(-1); };
+$('nextBtn').onclick = () => { setPlaying(false); step(1); };
+$('frameBtns').onclick = e => { const i = e.target.dataset.i; if (i == null) return; setPlaying(false); idx = +i; render(); };
+$('fps').oninput = e => { $('fpsVal').textContent = e.target.value; restartTimer(); };
+$('buckle').oninput = e => { $('buckleVal').textContent = e.target.value; render(); };
+['legAngle', 'legPivot', 'bob', 'bootFollow'].forEach(id => $(id).oninput = e => { $(id + 'Val').textContent = e.target.value; render(); });
+$('showPivots').onchange = render;
+// ?frame=N opens paused on that frame (handy for screenshots)
+const startFrame = +new URLSearchParams(location.search).get('frame');
+if (startFrame) { setPlaying(false); idx = startFrame - 1; }
+if (new URLSearchParams(location.search).has('pivots')) $('showPivots').checked = true;
+$('zoom').oninput = e => { $('zoomVal').textContent = e.target.value; applyZoom(); };
+['onion', 'showBody', 'showLabel', 'otherArm'].forEach(id => $(id).onchange = render);
+$('pingpong').onchange = () => { dir = 1; };
+$('bgBtns').onclick = e => { const bg = e.target.dataset.bg; if (!bg) return;
+  $('stage').className = bg; [...$('bgBtns').children].forEach(b => b.classList.toggle('on', b === e.target)); };
+$('reloadBtn').onclick = loadFromUrl;
+$('openBtn').onclick = () => $('fileIn').click();
+$('fileIn').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+addEventListener('resize', applyZoom);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' && e.target.type !== 'checkbox' && e.target.type !== 'range') return;
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === 'ArrowLeft') { setPlaying(false); step(-1); }
+  else if (e.key === 'ArrowRight') { setPlaying(false); step(1); }
+  else if (e.key === 'r' || e.key === 'R') loadFromUrl();
+  else if (/^[1-9]$/.test(e.key) && sets[current] && +e.key <= sets[current].length) { setPlaying(false); idx = +e.key - 1; render(); }
+});
+
+loadFromUrl();
+</script>
+</body>
+</html>

@@ -1044,26 +1044,38 @@ local function clearTheWay(player, flight, ts)
     return (thing.pos.x - (ax + dx * t)) ^ 2 + (thing.pos.y - (ay + dy * t)) ^ 2 <= reach * reach
   end
 
+  -- (What's blown away is noted as it goes and taken out of each list in
+  -- one pass at the end — see utils.removeMarked.)
+  local gone
   for i = #state.planetoids, 1, -1 do
     local p = state.planetoids[i]
     if isMundane(p, flight.target) and inTheWay(p) then
-      table.remove(state.planetoids, i)
-      for k = #(state.coins or {}), 1, -1 do
-        if state.coins[k].planet == p then table.remove(state.coins, k) end
-      end
+      gone = gone or {}
+      gone[p] = true
       if player.lockedTarget == p then player.lockedTarget = nil end
       if player.lastInfluencePlanet == p then player.lastInfluencePlanet = nil end
       blowUp(p)
     end
   end
+  if gone then
+    utils.removeMarked(state.planetoids, gone)
+    -- (Their coins go with them.)
+    if state.coins then
+      utils.removeWhere(state.coins, function(c) return gone[c.planet] end)
+    end
+  end
+
+  gone = nil
   for i = #(state.asteroids or {}), 1, -1 do
     local a = state.asteroids[i]
     if inTheWay(a) then
-      table.remove(state.asteroids, i)
+      gone = gone or {}
+      gone[a] = true
       if player.lockedTarget == a then player.lockedTarget = nil end
       blowUp(a)
     end
   end
+  if gone then utils.removeMarked(state.asteroids, gone) end
 end
 
 -- How much of the frame's time the game should take right now (main.lua

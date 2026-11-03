@@ -342,7 +342,9 @@ function Ooomba:update()
 
   -- Walking onto a floor portal drops it in.
   if timeScale > 0 then
-    self.vel = Vector2.new((self.pos.x - prevX) / timeScale, (self.pos.y - prevY) / timeScale)
+    -- (Written into its own velocity vector, not a new one every frame —
+    -- nothing else ever shares it.)
+    self.vel.x, self.vel.y = (self.pos.x - prevX) / timeScale, (self.pos.y - prevY) / timeScale
   end
   PortalGun.tryEnterOoomba(self, true)
 end

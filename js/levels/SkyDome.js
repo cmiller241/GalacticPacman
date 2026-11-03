@@ -9,6 +9,7 @@ import worldGen from '../setup/WorldGen.js';
 import SkyDomePlanetoid from '../world/SkyDomePlanetoid.js';
 import SpaceShelter from '../world/SpaceShelter.js';
 import RobotButler from '../entities/RobotButler.js';
+import GrassBlades from '../effects/GrassBlades.js';
 
 const SkyDome = {};
 
@@ -35,6 +36,12 @@ SkyDome.build = function () {
   });
   dome.isPermanent = true;
   state.planetoids.push(dome);
+
+  // Tufts of grass blades along the walkable deck (decoration — see
+  // js/effects/GrassBlades.js), coloured from its grass texture.
+  const deckHalfW = dome.halfWidth - (dome.cornerRadius ?? 0);
+  dome.grassBlades = GrassBlades.buildStrip(dome.pos.x - deckHalfW, dome.pos.x + deckHalfW,
+    dome.trueSurfaceY(), 'img/grass.png', dome.pos.x);
 
   // The astronaut's home shelter, on the dome's deck toward its left side.
   state.spaceShelter = SpaceShelter.new(domeX - domeHalfW * 0.6, dome.trueSurfaceY());

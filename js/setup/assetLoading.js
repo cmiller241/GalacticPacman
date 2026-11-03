@@ -30,6 +30,10 @@ function loadAssets(onComplete) {
   state.platformTexture = g.newImage('img/platform.png');
   state.goombaTexture = g.newImage('img/goomba.png');
   state.oombaTexture = smooth(g.newImage('img/Ooomba.png'));
+  // Its normal map and ambient occlusion, for its sun lighting (same
+  // sheet layout as the sprite — see Ooomba.sunLightingShader).
+  state.oombaNormalTexture = smooth(g.newImage('img/Ooomba_normal.png'));
+  state.oombaAOTexture = smooth(g.newImage('img/Ooomba_ao.png'));
   state.grassTexture = g.newImage('img/grass.png');
   state.spaceShelterTexture = smooth(g.newImage('img/spaceshelter.png'));
   state.spaceShelterDoorTexture = smooth(g.newImage('img/spaceshelter_door.png'));
