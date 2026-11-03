@@ -1,6 +1,6 @@
 // js/love/input.js
 //
-// love.keyboard, love.mouse and love.joystick for the browser.
+// love.keyboard, love.mouse, love.touch and love.joystick for the browser.
 // Keyboard keys use LÖVE's key names ("left", "space", "return", "a",
 // "lshift", "kp+", "=" ...), mapped from KeyboardEvent.code so they
 // don't change with Shift. Gamepads are read through the standard
@@ -51,6 +51,20 @@ const keyboard = {
   isScancodeDown(...keys) { return keyboard.isDown(...keys); },
   setKeyRepeat(on) { keyRepeat = !!on; },
   hasKeyRepeat() { return keyRepeat; },
+};
+
+// ---------------- Touch ----------------
+// Every finger on the screen, by its id (the browser's Touch.identifier),
+// in the game's units — like LÖVE's love.touch.
+const touchesDown = new Map(); // id -> { x, y }
+
+const touch = {
+  getTouches() { return [...touchesDown.keys()]; },
+  getPosition(id) {
+    const t = touchesDown.get(id);
+    return t ? [t.x, t.y] : [0, 0];
+  },
+  getPressure() { return 1; },
 };
 
 const mouse = {
@@ -225,6 +239,47 @@ function attach(el, love, onFirstInput) {
     mouseX = x; mouseY = y;
     if (love.mousemoved) love.mousemoved(x, y, dx, dy, false);
   });
+  // Touch: love.touchpressed / touchmoved / touchreleased(id, x, y, dx,
+  // dy, pressure), one call per finger, like LÖVE on a phone. The page
+  // itself mustn't scroll, zoom or open a long-press menu under the game,
+  // and the browser mustn't turn taps into mouse clicks as well.
+  el.style.touchAction = 'none';
+  el.style.webkitUserSelect = 'none';
+  el.style.userSelect = 'none';
+  el.style.webkitTouchCallout = 'none';
+  const eachTouch = (e, fn) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const [x, y] = toCanvas(t);
+      fn(t.identifier, x, y, t.force || 1);
+    }
+  };
+  el.addEventListener('touchstart', (e) => {
+    onFirstInput();
+    eachTouch(e, (id, x, y, p) => {
+      touchesDown.set(id, { x, y });
+      if (love.touchpressed) love.touchpressed(id, x, y, 0, 0, p);
+    });
+  }, { passive: false });
+  el.addEventListener('touchmove', (e) => {
+    eachTouch(e, (id, x, y, p) => {
+      const t = touchesDown.get(id);
+      if (!t) return;
+      const dx = x - t.x, dy = y - t.y;
+      t.x = x; t.y = y;
+      if (love.touchmoved) love.touchmoved(id, x, y, dx, dy, p);
+    });
+  }, { passive: false });
+  const touchEnded = (e) => {
+    eachTouch(e, (id, x, y, p) => {
+      if (!touchesDown.has(id)) return;
+      touchesDown.delete(id);
+      if (love.touchreleased) love.touchreleased(id, x, y, 0, 0, p);
+    });
+  };
+  el.addEventListener('touchend', touchEnded, { passive: false });
+  el.addEventListener('touchcancel', touchEnded, { passive: false });
+
   el.addEventListener('wheel', (e) => {
     e.preventDefault();
     const sx = Math.sign(e.deltaX), sy = -Math.sign(e.deltaY);
@@ -232,4 +287,4 @@ function attach(el, love, onFirstInput) {
   }, { passive: false });
 }
 
-export { keyboard, mouse, joystick, pollGamepads, attach };
+export { keyboard, mouse, touch, joystick, pollGamepads, attach };

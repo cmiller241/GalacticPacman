@@ -118,6 +118,13 @@ local function getSunShadingShader()
       return vec4(mix(texel.rgb, shaded, body * shadingMix), texel.a);
     }
   ]])
+  -- The settings that are the same for every body: sent once here, not
+  -- again for each one drawn (see applySunShadingAt for the rest).
+  sunShadingShader:send("litBrightness", Planetoid.SUN_LIT_BRIGHTNESS)
+  sunShadingShader:send("overallDarken", Planetoid.SUN_OVERALL_DARKEN)
+  sunShadingShader:send("highlightAlpha", Planetoid.HIGHLIGHT_ALPHA)
+  sunShadingShader:send("highlightSize", Planetoid.HIGHLIGHT_SIZE)
+  sunShadingShader:send("highlightOffset", Planetoid.HIGHLIGHT_OFFSET)
   return sunShadingShader
 end
 
@@ -376,11 +383,6 @@ function Planetoid.applySunShadingAt(x, y, radius, padding, mix)
   shader:send("lightDir", { toSunX / distToSun, toSunY / distToSun })
   shader:send("bodyFraction", radius / (radius + padding))
   shader:send("sunStrength", strength)
-  shader:send("litBrightness", Planetoid.SUN_LIT_BRIGHTNESS)
-  shader:send("overallDarken", Planetoid.SUN_OVERALL_DARKEN)
-  shader:send("highlightAlpha", Planetoid.HIGHLIGHT_ALPHA)
-  shader:send("highlightSize", Planetoid.HIGHLIGHT_SIZE)
-  shader:send("highlightOffset", Planetoid.HIGHLIGHT_OFFSET)
   shader:send("shadingMix", mix or 1)
   love.graphics.setShader(shader)
   return shader

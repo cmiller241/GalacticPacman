@@ -2,7 +2,7 @@
 
 A piano-roll music maker for AsteroidBob's hymn remixes. It runs in the browser with no install and no build step.
 
-**Start:** double-click `composer/index.html` (Chrome or Edge works best). Press **Space** to hear the demo. The **Demo** button switches between eight remixes: *Amazing Grace* (space waltz), *Let All Exalt Jehovah's Goodness* (NAVARRE, driving hyperdrive), *A Mighty Fortress Is Our God* (boss battle), *Lead, Kindly Light* (ambient wrecked-station opening), *All Creatures of Our God and King* (pine-forest platform level), *Wake, Awake, for Night Is Flying* (frenetic drum & bass), *Wake, Awake 2* (militant battle march — the game's asteroid belt music) and *Rejoice, Ye Pure in Heart* (8-bit arcade shuffle).
+**Start:** double-click `composer/index.html` (Chrome or Edge works best). Press **Space** to hear the demo. The **Demo** button switches between nine remixes: *Amazing Grace* (space waltz), *Let All Exalt Jehovah's Goodness* (NAVARRE, driving hyperdrive), *A Mighty Fortress Is Our God* (boss battle), *Lead, Kindly Light* (ambient wrecked-station opening), *All Creatures of Our God and King* (pine-forest platform level), *Wake, Awake, for Night Is Flying* (frenetic drum & bass), *Wake, Awake 2* (militant battle march — the game's asteroid belt music), *Christ Jesus Lay in Death's Strong Bands* (triumphal brass march) and *Rejoice, Ye Pure in Heart* (8-bit arcade shuffle).
 
 ## The basics
 
@@ -66,6 +66,6 @@ A piano-roll music maker for AsteroidBob's hymn remixes. It runs in the browser 
 | `js/pianoroll.js` | The note grid editor |
 | `js/midi.js` | MIDI file import |
 | `js/wav.js` | WAV writer |
-| `js/demo.js` | Amazing Grace demo |
+| `js/demo.js` | The demo songs |
 | `js/app.js` | Toolbar, panels, shortcuts, files |
 | `tools/convert-music.cjs` | WAV → OGG/MP3 via ffmpeg |

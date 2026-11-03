@@ -46,6 +46,14 @@ local MUSIC = {
 local MUSIC_FADE_SECONDS = 1.5   -- how long a fade in/out takes
 local MUSIC_SWITCH_DELAY = 0.75  -- a new choice has to hold this long before the music changes
 
+-- The water blaster's hiss (see AudioManager:updateSpray): a seamless loop.
+local SPRAY_PATH = 'sounds/water-spray.wav'
+local SPRAY_VOLUME = 0.35          -- while spraying
+local SPRAY_SPUTTER_VOLUME = 0.12  -- at the water cap, when it only dribbles
+local SPRAY_SPUTTER_PITCH = 0.85
+local SPRAY_FADE_IN = 0.05         -- seconds to full volume
+local SPRAY_FADE_OUT = 0.18        -- seconds to silence after letting go
+
 function AudioManager.new()
   local self = setmetatable({}, AudioManager)
   self.eatDotIndex = 0  -- moved from state, same as the original's own comment
@@ -72,11 +80,20 @@ function AudioManager.new()
   self.goombaStompAudio = love.audio.newSource('sounds/mario-goomba-stomp.mp3', 'static')
   self.fireballAudio = love.audio.newSource('sounds/mario-fireball.mp3', 'static')
   self.groundPoundAudio = love.audio.newSource('sounds/groundpound.wav', 'static')
+  -- Curling into a ball and back (made by tools/gen-morph-sounds.mjs).
+  self.morphBallAudio = love.audio.newSource('sounds/morph-ball.wav', 'static')
+  self.morphUnballAudio = love.audio.newSource('sounds/morph-unball.wav', 'static')
+
+  self.sprayAudio = love.audio.newSource(SPRAY_PATH, 'static')
+  self.sprayAudio:setLooping(true)
+  self.sprayAudio:setVolume(0)
+  self.sprayLevel = 0  -- current loudness, eased toward the target
 
   local allSources = {
     self.eatDotAudio0, self.eatDotAudio1, self.deathAudio, self.jumpAudio,
     self.jumpSmallAudio, self.bangLarge, self.bangMedium, self.bangSmall,
-    self.goombaStompAudio, self.fireballAudio, self.groundPoundAudio
+    self.goombaStompAudio, self.fireballAudio, self.groundPoundAudio,
+    self.morphBallAudio, self.morphUnballAudio
   }
   for _, source in ipairs(allSources) do
     source:setVolume(0.5)
@@ -115,6 +132,16 @@ end
 
 function AudioManager:playJump()
   cloneAndPlay(self.jumpAudio)
+end
+
+-- Curling into a ball, and standing back up (Player:enterBallMode /
+-- exitBallMode).
+function AudioManager:playMorphBall()
+  cloneAndPlay(self.morphBallAudio)
+end
+
+function AudioManager:playMorphUnball()
+  cloneAndPlay(self.morphUnballAudio)
 end
 
 function AudioManager:playJumpSmall()
@@ -204,6 +231,27 @@ function AudioManager:updateMusic(name, dt)
     elseif playing then
       m.source:stop()  -- fully faded out: next time it starts from the top
     end
+  end
+end
+
+-- Call every frame: the water blaster's hiss, looping while Bob sprays
+-- (see WaterSystem.isSpraying) and fading out when he stops. sputtering:
+-- he's at the water cap, so it's only a dribble — quieter and lower.
+function AudioManager:updateSpray(spraying, sputtering, dt)
+  local target = 0
+  if spraying then target = sputtering and SPRAY_SPUTTER_VOLUME or SPRAY_VOLUME end
+  if self.sprayLevel < target then
+    self.sprayLevel = math.min(target, self.sprayLevel + SPRAY_VOLUME * dt / SPRAY_FADE_IN)
+  elseif self.sprayLevel > target then
+    self.sprayLevel = math.max(target, self.sprayLevel - SPRAY_VOLUME * dt / SPRAY_FADE_OUT)
+  end
+  local source = self.sprayAudio
+  if self.sprayLevel > 0 then
+    source:setVolume(self.sprayLevel)
+    source:setPitch(sputtering and SPRAY_SPUTTER_PITCH or 1)
+    if not source:isPlaying() then source:play() end
+  elseif source:isPlaying() then
+    source:stop()
   end
 end
 

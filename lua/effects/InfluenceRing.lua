@@ -17,6 +17,10 @@ local DASH_LENGTH = 10
 local GAP_LENGTH = 5
 local LINE_WIDTH = 3
 local COLOR = { 173 / 255, 216 / 255, 230 / 255 }
+-- Marching ants: how fast the dashes travel round the ring (world units
+-- per second, along the line — so big and small rings march at the same
+-- visible pace). Positive goes clockwise on screen; 0 stands still.
+local MARCH_SPEED = 20
 
 -- alpha: how strongly to draw it — decided by the caller (see the ring
 -- pass in main.lua's love.draw) from how much this body's gravity
@@ -33,11 +37,14 @@ function InfluenceRing.draw(x, y, radius, alpha)
   local segmentCount = math.max(1, math.floor(circumference / period))
   local angleStep = (2 * math.pi) / segmentCount
   local dashAngle = angleStep * (DASH_LENGTH / period)
+  -- How far the pattern has marched round by now (one period's worth of
+  -- travel moves it on by exactly one dash+gap, so it loops seamlessly).
+  local march = ((love.timer.getTime() * MARCH_SPEED) % period) / period * angleStep
 
   love.graphics.setColor(COLOR[1], COLOR[2], COLOR[3], alpha)
   love.graphics.setLineWidth(LINE_WIDTH)
   for i = 0, segmentCount - 1 do
-    local a0 = i * angleStep
+    local a0 = i * angleStep + march
     local a1 = a0 + dashAngle
     love.graphics.line(
       x + math.cos(a0) * radius, y + math.sin(a0) * radius,

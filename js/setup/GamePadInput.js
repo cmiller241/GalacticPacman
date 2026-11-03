@@ -14,6 +14,7 @@ import PortalGun from '../systems/PortalGun.js';
 import WeaponModes from '../systems/WeaponModes.js';
 import Recall from '../systems/Recall.js';
 import WorldObjects from '../systems/WorldObjects.js';
+import TouchControls from '../ui/TouchControls.js';
 
 const BUTTON_X_CROSS = 'a';
 const BUTTON_CIRCLE = 'b';
@@ -68,7 +69,12 @@ function maybeAutoEnterVats() {
 }
 
 function pollGamepad(dt) {
-  const gp = love.joystick.getJoysticks().find((j) => j.isGamepad()) ?? null;
+  // A real controller if one's plugged in; otherwise the on-screen touch
+  // controls while they're in use, read exactly the same way (see
+  // js/ui/TouchControls.js).
+  TouchControls.update();
+  let gp = love.joystick.getJoysticks().find((j) => j.isGamepad()) ?? null;
+  if (!gp && TouchControls.isActive()) gp = TouchControls.pad;
 
   if (!gp) {
     state.gamepadAimActive = false;
@@ -200,7 +206,18 @@ function pollGamepad(dt) {
   } else if (state.recallMode) {
     if (r2Pressed && !lastR2Pressed) Recall.activate(state.player);
     state.gamepadFireHeld = false;
+  } else if (state.pullBeamMode) {
+    // Pull Beam mode: R2 pulls, like L2.
+    state.gamepadFireHeld = false;
+    if (state.player) {
+      if (r2Pressed && !lastR2Pressed) {
+        state.player.trySelectPullTarget(state.player.lockedTarget ?? state.player.aimTargetObject);
+      } else if (!r2Pressed && lastR2Pressed && !state.vatsActive) {
+        state.player.clearPullTarget();
+      }
+    }
   } else {
+    // Fireball and Ice: fire while held (see main.js).
     state.gamepadFireHeld = r2Pressed;
   }
   lastR2Pressed = r2Pressed;
@@ -235,6 +252,8 @@ function pollGamepad(dt) {
     }
   }
   lastSquarePressed = squarePressed;
+  // (Touch: running is the move stick pushed near its edge.)
+  if (gp === TouchControls.pad && TouchControls.runHeld()) state.gamepadRunHeld = true;
 
   // R1 / L1: hard lock next / previous.
   const r1Pressed = gp.isGamepadDown(BUTTON_R1);
@@ -267,8 +286,8 @@ function pollGamepad(dt) {
     // (nothing)
   } else if (state.portalMode) {
     if (l2Pressed && !lastL2Pressed) PortalGun.fire(state.player, 'red');
-  } else if (state.waterMode || state.recallMode || state.iceMode) {
-    // (L2 does nothing in these modes for now)
+  } else if (!WeaponModes.canPull()) {
+    // (Water, Ice and Recall: L2 does nothing — R2 sprays/fires ice/recalls.)
   } else if (state.player) {
     if (l2Pressed && !lastL2Pressed) {
       state.player.trySelectPullTarget(state.player.lockedTarget ?? state.player.aimTargetObject);
@@ -277,8 +296,8 @@ function pollGamepad(dt) {
     }
   }
   lastL2Pressed = l2Pressed;
-  state.gamepadPullHeld = l2Pressed && !riding && !state.portalMode && !state.waterMode && !state.recallMode
-    && !state.iceMode;
+  state.gamepadPullHeld = !riding && WeaponModes.canPull()
+    && (l2Pressed || (state.pullBeamMode && lastR2Pressed));
 
   // Right stick: aim (or the V.A.T.S. cursor).
   const rightX = axis('rightx');

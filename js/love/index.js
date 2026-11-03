@@ -11,7 +11,7 @@
 
 import graphics, { ImageData } from './graphics.js';
 import audio from './audio.js';
-import { keyboard, mouse, joystick, pollGamepads, attach } from './input.js';
+import { keyboard, mouse, touch, joystick, pollGamepads, attach } from './input.js';
 
 const images = new Map();   // path -> ImageBitmap
 const imagePixels = new Map(); // path -> ImageData (decoded on demand)
@@ -189,12 +189,13 @@ const system = {
 
 // ---------------- the love object ----------------
 const love = {
-  graphics, audio, keyboard, mouse, joystick, timer, image, math: loveMath,
+  graphics, audio, keyboard, mouse, touch, joystick, timer, image, math: loveMath,
   window: windowApi, filesystem, event, system,
   // Callbacks — set by the game.
   load: null, update: null, draw: null,
   keypressed: null, keyreleased: null, mousepressed: null, mousereleased: null,
   mousemoved: null, wheelmoved: null, gamepadpressed: null, gamepadreleased: null,
+  touchpressed: null, touchmoved: null, touchreleased: null,
   joystickadded: null, joystickremoved: null, resize: null, focus: null, textinput: null,
   errorhandler: null,
 };
@@ -235,6 +236,8 @@ function showError(err) {
 //   any extra room (a wider or taller window than that shape) shows more
 //   on that side. So the game shows the same view on every screen.
 // Either way the canvas has one pixel per real screen pixel, so it's sharp.
+const MAX_PIXEL_RATIO = 2;
+
 love.boot = async function boot({ canvas, images: imagePaths = [], sounds: soundPaths = [], onProgress, screenUnits = 'pixels', minView = null } = {}) {
   canvasEl = canvas;
   // The canvas gets the display's real pixels (devicePixelRatio of them
@@ -244,7 +247,10 @@ love.boot = async function boot({ canvas, images: imagePaths = [], sounds: sound
   // units: see screenUnits above.
   const fit = () => {
     const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
-    const dpr = window.devicePixelRatio || 1;
+    // (At most 2 real pixels per CSS pixel: phones are often 3, which
+    // draws over twice as many pixels for detail nobody can see at
+    // that size, and costs a lot of frame rate.)
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
     canvas.width = Math.max(1, Math.round(w * dpr));
     canvas.height = Math.max(1, Math.round(h * dpr));
     canvas.style.width = w + 'px';

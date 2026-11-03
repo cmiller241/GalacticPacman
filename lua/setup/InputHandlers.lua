@@ -195,6 +195,11 @@ local function attachInputHandlers()
       PauseMenu.open()
       return
     end
+    -- T: the debug teleport list (see main.lua's own PauseMenu.onTeleportKey).
+    if key == 't' and not isrepeat and PauseMenu.onTeleportKey then
+      PauseMenu.onTeleportKey()
+      return
+    end
 
     -- Start/stop recording a trailer clip (see lua/systems/ClipRecorder.lua).
     if key == 'p' and not isrepeat then

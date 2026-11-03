@@ -23,6 +23,14 @@ const MUSIC = {
 const MUSIC_FADE_SECONDS = 1.5;  // how long a fade in/out takes
 const MUSIC_SWITCH_DELAY = 0.75; // a new choice has to hold this long before the music changes
 
+// The water blaster's hiss (see updateSpray): a seamless loop.
+const SPRAY_PATH = 'sounds/water-spray.wav';
+const SPRAY_VOLUME = 0.35;          // while spraying
+const SPRAY_SPUTTER_VOLUME = 0.12;  // at the water cap, when it only dribbles
+const SPRAY_SPUTTER_PITCH = 0.85;
+const SPRAY_FADE_IN = 0.05;         // seconds to full volume
+const SPRAY_FADE_OUT = 0.18;        // seconds to silence after letting go
+
 class AudioManager {
   static new() {
     return new AudioManager();
@@ -53,11 +61,20 @@ class AudioManager {
     this.goombaStompAudio = love.audio.newSource('sounds/mario-goomba-stomp.mp3', 'static');
     this.fireballAudio = love.audio.newSource('sounds/mario-fireball.mp3', 'static');
     this.groundPoundAudio = love.audio.newSource('sounds/groundpound.wav', 'static');
+    // Curling into a ball and back (made by tools/gen-morph-sounds.mjs).
+    this.morphBallAudio = love.audio.newSource('sounds/morph-ball.wav', 'static');
+    this.morphUnballAudio = love.audio.newSource('sounds/morph-unball.wav', 'static');
+
+    this.sprayAudio = love.audio.newSource(SPRAY_PATH, 'static');
+    this.sprayAudio.setLooping(true);
+    this.sprayAudio.setVolume(0);
+    this.sprayLevel = 0; // current loudness, eased toward the target
 
     const allSources = [
       this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio,
       this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall,
       this.goombaStompAudio, this.fireballAudio, this.groundPoundAudio,
+      this.morphBallAudio, this.morphUnballAudio,
     ];
     for (const source of allSources) source.setVolume(0.5);
 
@@ -73,6 +90,27 @@ class AudioManager {
     cloneAndPlay(source);
   }
 
+  // Call every frame: the water blaster's hiss, looping while Bob sprays
+  // (see WaterSystem.isSpraying) and fading out when he stops. sputtering:
+  // he's at the water cap, so it's only a dribble — quieter and lower.
+  updateSpray(spraying, sputtering, dt) {
+    let target = 0;
+    if (spraying) target = sputtering ? SPRAY_SPUTTER_VOLUME : SPRAY_VOLUME;
+    if (this.sprayLevel < target) {
+      this.sprayLevel = Math.min(target, this.sprayLevel + SPRAY_VOLUME * dt / SPRAY_FADE_IN);
+    } else if (this.sprayLevel > target) {
+      this.sprayLevel = Math.max(target, this.sprayLevel - SPRAY_VOLUME * dt / SPRAY_FADE_OUT);
+    }
+    const source = this.sprayAudio;
+    if (this.sprayLevel > 0) {
+      source.setVolume(this.sprayLevel);
+      source.setPitch(sputtering ? SPRAY_SPUTTER_PITCH : 1);
+      if (!source.isPlaying()) source.play();
+    } else if (source.isPlaying()) {
+      source.stop();
+    }
+  }
+
   playDeath() { cloneAndPlay(this.deathAudio); }
   playJump() { cloneAndPlay(this.jumpAudio); }
   playJumpSmall() { cloneAndPlay(this.jumpSmallAudio); }
@@ -82,6 +120,11 @@ class AudioManager {
   // The slam of a ground pound landing (see Player.js's own ground-pound
   // bookkeeping in Player.update).
   playGroundPound() { cloneAndPlay(this.groundPoundAudio); }
+
+  // Curling into a ball, and standing back up (Player.enterBallMode /
+  // exitBallMode).
+  playMorphBall() { cloneAndPlay(this.morphBallAudio); }
+  playMorphUnball() { cloneAndPlay(this.morphUnballAudio); }
 
   playBang(size, position) {
     let audioSource;

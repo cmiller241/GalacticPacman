@@ -211,6 +211,19 @@ function getLavaShader() {
       return vec4(col, alpha * overlayAlpha) * color;
     }
   `);
+  // (The settings that never change: sent once here, not on every draw.)
+  lavaShader.send('waveSpeed', WAVE_SPEED);
+  lavaShader.send('colorObsidian', COLOR_OBSIDIAN);
+  lavaShader.send('colorObsidianSheen', COLOR_OBSIDIAN_SHEEN);
+  lavaShader.send('edgeSoftness', EDGE_SOFTNESS);
+  lavaShader.send('glowBand', GLOW_BAND);
+  lavaShader.send('plasmaScale', PLASMA_SCALE);
+  lavaShader.send('detailScale', PLASMA_DETAIL_SCALE);
+  lavaShader.send('evolveSpeed', PLASMA_EVOLVE_SPEED);
+  lavaShader.send('scrollSpeed', PLASMA_SCROLL_SPEED);
+  lavaShader.send('colorDeep', COLOR_DEEP);
+  lavaShader.send('colorMid', COLOR_MID);
+  lavaShader.send('colorHot', COLOR_HOT);
   return lavaShader;
 }
 
@@ -414,7 +427,6 @@ class Lava {
     shader.send('time', sharedTime);
     // (Cooling, the surface settles flat and rises to the tile's top.)
     shader.send('waveAmplitude', WAVE_AMPLITUDE * (1 - cool));
-    shader.send('waveSpeed', WAVE_SPEED);
     // (A filled tile's surface is far above it, so it's lava all the way up.)
     shader.send('waveBaseY', this.filled ? -1000 : (WAVE_BASE_Y * (1 - cool) - EDGE_SOFTNESS * 2 * cool));
     shader.send('cool', cool);
@@ -426,17 +438,6 @@ class Lava {
       fade = t * t * (3 - 2 * t);
     }
     shader.send('overlayAlpha', 1 - fade);
-    shader.send('colorObsidian', COLOR_OBSIDIAN);
-    shader.send('colorObsidianSheen', COLOR_OBSIDIAN_SHEEN);
-    shader.send('edgeSoftness', EDGE_SOFTNESS);
-    shader.send('glowBand', GLOW_BAND);
-    shader.send('plasmaScale', PLASMA_SCALE);
-    shader.send('detailScale', PLASMA_DETAIL_SCALE);
-    shader.send('evolveSpeed', PLASMA_EVOLVE_SPEED);
-    shader.send('scrollSpeed', PLASMA_SCROLL_SPEED);
-    shader.send('colorDeep', COLOR_DEEP);
-    shader.send('colorMid', COLOR_MID);
-    shader.send('colorHot', COLOR_HOT);
 
     love.graphics.setColor(1, 1, 1, 1);
     if (this.planet) {

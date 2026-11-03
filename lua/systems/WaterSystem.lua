@@ -233,6 +233,53 @@ local Ice = { blocks = {}, frame = 0 }
 local age = 0
 local meshes, meshSizes = {}, {} -- the pools' mesh for each liquid (see drawPools)
 
+-- Scratch space reused every frame, so the water's busiest loops don't
+-- make fresh tables each time: the wet-cell list stepWater walks, and
+-- the vertices the pools and oceans are drawn from — only the first
+-- vertCount of `verts` are this draw's (the rest are kept for reuse).
+-- (One table for all of it: see LAVA_TUNING on the 200-local limit.)
+local Scratch = { cells = {}, verts = {}, vertCount = 0 }
+
+-- Removes the finished droplets, splashes, puffs and embers from their
+-- lists in one pass (see utils.removeMarked).
+Scratch.removeMarked = require("lua.utils").removeMarked
+
+-- Every key of `water` (a liquid's cells), in Scratch.cells; returns
+-- the list and how many.
+function Scratch.collectCells(water)
+  local list, n = Scratch.cells, 0
+  for i in pairs(water) do
+    n = n + 1
+    list[n] = i
+  end
+  for k = #list, n + 1, -1 do list[k] = nil end
+  return list, n
+end
+
+function Scratch.resetVerts()
+  Scratch.vertCount = 0
+end
+
+-- One vertex: position, texture coordinates (u, v), and alpha.
+function Scratch.vert(x, y, u, v, alpha)
+  local n = Scratch.vertCount + 1
+  Scratch.vertCount = n
+  local t = Scratch.verts[n]
+  if t then
+    t[1], t[2], t[3], t[4], t[8] = x, y, u, v, alpha
+  else
+    Scratch.verts[n] = { x, y, u, v, 1, 1, 1, alpha }
+  end
+end
+
+-- Two triangles over the corners 1-2-3-4 (top edge 1->2, bottom edge
+-- 4->3): depthTop/depthBottom are their u, stream their v.
+function Scratch.quad(x1, y1, x2, y2, x3, y3, x4, y4, depthTop, depthBottom, stream)
+  local vert = Scratch.vert
+  vert(x1, y1, depthTop, stream, 1); vert(x2, y2, depthTop, stream, 1); vert(x3, y3, depthBottom, stream, 1)
+  vert(x1, y1, depthTop, stream, 1); vert(x3, y3, depthBottom, stream, 1); vert(x4, y4, depthBottom, stream, 1)
+end
+
 -- How each liquid moves (see stepWater): which of a grid's tables it's
 -- kept in, and its rules.
 local WATER = { key = "water", spread = SPREAD, passes = SPREAD_PASSES, minSpread = MIN_SPREAD, evaporate = EVAPORATE_PER_SECOND }
@@ -507,8 +554,12 @@ end
 
 -- Closed gates (see Gate.lua) hold water back too, while they're closed.
 local function gateCovers(c, r)
+  -- (Called for nearly every neighbor the water looks at: no `or {}`
+  -- table made each time when there are no gates.)
+  local gates = state.gates
+  if not gates then return false end
   local x, y = grid.x0 + (c + 0.5) * CELL, grid.y0 + (r + 0.5) * CELL
-  for _, gate in ipairs(state.gates or {}) do
+  for _, gate in ipairs(gates) do
     if gate.halfHeight > 1 and math.abs(x - gate.pos.x) <= gate.halfWidth
         and math.abs(y - gate.pos.y) <= gate.halfHeight then
       return true
@@ -581,12 +632,15 @@ end
 local function stepWater(dt, liquid)
   liquid = liquid or WATER
   local cols, water = grid.cols, grid[liquid.key]
-  local list = {}
-  for i in pairs(water) do list[#list + 1] = i end
-  table.sort(list, function(a, b) return a > b end)
+  -- Bottom rows first: sorted lowest index first, then walked from the
+  -- end. (The plain sort, with no comparison function of our own, is
+  -- far faster than one that calls back into Lua for every comparison.)
+  local list, count = Scratch.collectCells(water)
+  table.sort(list)
   grid.flip = not grid.flip -- which side spreads first, alternated so it doesn't lean one way
 
-  for _, i in ipairs(list) do
+  for k = count, 1, -1 do
+    local i = list[k]
     local w = water[i]
     if w then
       local r = math.floor((i - 1) / cols)
@@ -622,9 +676,9 @@ local function stepWater(dt, liquid)
   for _ = 2, liquid.passes do
     grid.flip = not grid.flip
     -- (Any order: only falling needs the bottom rows first.)
-    list = {}
-    for i in pairs(water) do list[#list + 1] = i end
-    for _, i in ipairs(list) do
+    list, count = Scratch.collectCells(water)
+    for k = 1, count do
+      local i = list[k]
       local w = water[i]
       if w then
         local r = math.floor((i - 1) / cols)
@@ -967,12 +1021,13 @@ end
 local function stepPlanetWater(g, dt, liquid)
   liquid = liquid or WATER
   local cols, water = g.cols, g[liquid.key]
-  local list = {}
-  for i in pairs(water) do list[#list + 1] = i end
-  table.sort(list, function(a, b) return a > b end) -- (lowest rows first)
+  -- (Lowest rows first: see stepWater.)
+  local list, count = Scratch.collectCells(water)
+  table.sort(list)
   g.flip = not g.flip
 
-  for _, i in ipairs(list) do
+  for k = count, 1, -1 do
+    local i = list[k]
     local w = water[i]
     if w then
       local r = math.floor((i - 1) / cols)
@@ -1007,9 +1062,9 @@ local function stepPlanetWater(g, dt, liquid)
   for _ = 2, liquid.passes do
     g.flip = not g.flip
     -- (Any order: only falling needs the bottom rows first.)
-    list = {}
-    for i in pairs(water) do list[#list + 1] = i end
-    for _, i in ipairs(list) do
+    list, count = Scratch.collectCells(water)
+    for k = 1, count do
+      local i = list[k]
       local w = water[i]
       if w then
         local r = math.floor((i - 1) / cols)
@@ -2033,12 +2088,14 @@ local function updateLavaEmbers()
       }
     end
   end)
+  local gone
   for k = #lavaEmbers, 1, -1 do
     local e = lavaEmbers[k]
     e.x, e.y = e.x + e.vx * ts, e.y + e.vy * ts
     e.life = e.life - e.decay * ts / 60
-    if e.life <= 0 then table.remove(lavaEmbers, k) end
+    if e.life <= 0 then gone = gone or {}; gone[e] = true end
   end
+  if gone then Scratch.removeMarked(lavaEmbers, gone) end
 end
 
 -- Where the lava glows (see TileGlow.lua): fn(x, y) once for each tile's
@@ -2582,16 +2639,19 @@ local function updateSteam(dt)
     if h.life <= 0 or not sx then table.remove(hotSpots, i) end
   end
 
+  local gone
   for i = #steam, 1, -1 do
     local s = steam[i]
     s.life = s.life - gameDt
     if s.life <= 0 then
-      table.remove(steam, i)
+      gone = gone or {}
+      gone[s] = true
     else
       s.vx = s.vx + (math.random() - 0.5) * 0.06 * ts -- (drifting a little)
       s.x, s.y = s.x + s.vx * ts, s.y + s.vy * ts
     end
   end
+  if gone then Scratch.removeMarked(steam, gone) end
 end
 
 local function drawSteam()
@@ -2667,9 +2727,12 @@ function WaterSystem.update(dt)
     sprayBudget = 0
   end
 
+  local gone
   for i = #droplets, 1, -1 do
-    if updateDroplet(droplets[i], ts, dt) then table.remove(droplets, i) end
+    local d = droplets[i]
+    if updateDroplet(d, ts, dt) then gone = gone or {}; gone[d] = true end
   end
+  if gone then Scratch.removeMarked(droplets, gone) end
   updateSteam(dt)
 
   -- Waterfalls splashing where they land (found while drawing last frame).
@@ -2684,16 +2747,19 @@ function WaterSystem.update(dt)
     end
   end
 
+  gone = nil
   for i = #splashes, 1, -1 do
     local s = splashes[i]
     s.life = s.life - dt
     if s.life <= 0 then
-      table.remove(splashes, i)
+      gone = gone or {}
+      gone[s] = true
     else
       s.vx, s.vy = s.vx + s.gx * ts, s.vy + s.gy * ts
       s.x, s.y = s.x + s.vx * ts, s.y + s.vy * ts
     end
   end
+  if gone then Scratch.removeMarked(splashes, gone) end
 
   if grid or next(planetGrids) then
     stepClock = stepClock + dt * ts
@@ -2882,6 +2948,29 @@ local function getWaterShader()
     }
     #endif
   ]])
+  -- (The settings that never change: sent once here, not on every draw.
+  -- The rest are set in useWaterShader, and changed for each water body
+  -- in drawOceans.)
+  waterShader:send("colorShallow", COLOR_SHALLOW)
+  waterShader:send("colorDeep", COLOR_DEEP)
+  waterShader:send("deepAt", DEEP_AT)
+  waterShader:send("alphaShallow", ALPHA_SHALLOW)
+  waterShader:send("alphaDeep", ALPHA_DEEP)
+  waterShader:send("colorSurface", COLOR_SURFACE)
+  waterShader:send("surfaceLine", SURFACE_LINE)
+  waterShader:send("surfaceFeather", SURFACE_FEATHER)
+  waterShader:send("surfaceGlow", SURFACE_GLOW)
+  waterShader:send("colorCaustic", COLOR_CAUSTIC)
+  waterShader:send("sphereShallow", SPHERE_COLOR_SHALLOW)
+  waterShader:send("sphereDeep", SPHERE_COLOR_DEEP)
+  waterShader:send("sphereShade", SPHERE_COLOR_SHADE)
+  waterShader:send("sphereShadeStrength", SPHERE_SHADE_STRENGTH)
+  waterShader:send("sphereRim", SPHERE_COLOR_RIM)
+  waterShader:send("sphereRimStrength", SPHERE_RIM_STRENGTH)
+  waterShader:send("sphereReflected", SPHERE_COLOR_REFLECTED)
+  waterShader:send("sphereReflectedStrength", SPHERE_REFLECTED_STRENGTH)
+  waterShader:send("causticSpeed", CAUSTIC_SPEED)
+  waterShader:send("causticStrength", CAUSTIC_STRENGTH)
   return waterShader
 end
 
@@ -2891,17 +2980,18 @@ end
 -- middle of each cell where water is falling.
 local useWaterShader, useLavaShader
 
--- `verts` drawn through `liquid`'s shader (the water's or the lava's), in
--- the mesh kept for `slot`.
-local function drawLiquidMesh(slot, verts, liquid)
+-- The vertices built in Scratch (see Scratch.vert) drawn through
+-- `liquid`'s shader (the water's or the lava's), in the mesh kept for `slot`.
+local function drawLiquidMesh(slot, liquid)
+  local count = Scratch.vertCount
   local m = meshes[slot]
-  if not m or meshSizes[slot] < #verts then
-    meshSizes[slot] = math.max(#verts, (meshSizes[slot] or 0) * 2, 600)
+  if not m or meshSizes[slot] < count then
+    meshSizes[slot] = math.max(count, (meshSizes[slot] or 0) * 2, 600)
     m = love.graphics.newMesh(meshSizes[slot], "triangles", "stream")
     meshes[slot] = m
   end
-  m:setVertices(verts)
-  m:setDrawRange(1, #verts)
+  m:setVertices(Scratch.verts, 1, count)
+  m:setDrawRange(1, count)
   if liquid == LAVA then useLavaShader() else useWaterShader() end
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(m)
@@ -2917,18 +3007,13 @@ local function drawPools(liquid)
   local vx1, vy1 = cam.x + (state.visibleWidth or 0) + CELL, cam.y + (state.visibleHeight or 0) + CELL
   local cols, water = grid.cols, grid[liquid.key]
   local rippleScale = liquid == LAVA and LAVA_TUNING.RIPPLE or 1
-  local verts = {}
+  Scratch.resetVerts()
   if liquid == WATER then waterfallLandings = {} end
 
   -- depth0/depth1: how far below the surface its top/bottom edges are
   -- (0 at the surface); stream: 1 for a falling stream.
   local function quad(x0, yTop0, x1, yTop1, yBottom0, yBottom1, depthTop, depthBottom, stream)
-    local v1 = { x0, yTop0, depthTop, stream, 1, 1, 1, 1 }
-    local v2 = { x1, yTop1, depthTop, stream, 1, 1, 1, 1 }
-    local v3 = { x1, yBottom1, depthBottom, stream, 1, 1, 1, 1 }
-    local v4 = { x0, yBottom0, depthBottom, stream, 1, 1, 1, 1 }
-    verts[#verts + 1] = v1; verts[#verts + 1] = v2; verts[#verts + 1] = v3
-    verts[#verts + 1] = v1; verts[#verts + 1] = v3; verts[#verts + 1] = v4
+    Scratch.quad(x0, yTop0, x1, yTop1, x1, yBottom1, x0, yBottom0, depthTop, depthBottom, stream)
   end
   -- Two overlapping waves, so the surface moves less mechanically.
   local function ripple(x)
@@ -2988,7 +3073,8 @@ local function drawPools(liquid)
     local c = (i - 1) - r * cols
     for d = 1, 8 do
       local found
-      for _, nc in ipairs({ c - d, c + d }) do
+      for side = -1, 1, 2 do -- (c - d, then c + d)
+        local nc = c + side * d
         local n = r * cols + nc + 1
         if nc >= 0 and nc < cols and stackFloor[n] and not capped[stackFloor[n]] and stackSurface[n] < stackSurface[i] then
           found = stackSurface[n]
@@ -3215,42 +3301,28 @@ local function drawPools(liquid)
     end
   end
 
-  if #verts == 0 then return end
-  drawLiquidMesh(liquid.key, verts, liquid)
+  if Scratch.vertCount == 0 then return end
+  drawLiquidMesh(liquid.key, liquid)
 end
 
 -- Turns on the water shader with every setting from the tunables above
 -- (shared by the pools and the planets' water layers).
+-- (The settings that never change are sent once, in getWaterShader. These
+-- are the ones drawOceans changes for each water body, put back for the
+-- pools.)
+do
+local POOL_BULGE_CENTER, POOL_SUN_DIR = { 0, 0 }, { 1, 0 } -- (in this do-block: see LAVA_TUNING on the 200-local limit)
 useWaterShader = function()
   local shader = getWaterShader()
   shader:send("time", age)
-  shader:send("colorShallow", COLOR_SHALLOW)
-  shader:send("colorDeep", COLOR_DEEP)
-  shader:send("deepAt", DEEP_AT)
-  shader:send("alphaShallow", ALPHA_SHALLOW)
-  shader:send("alphaDeep", ALPHA_DEEP)
-  shader:send("colorSurface", COLOR_SURFACE)
-  shader:send("surfaceLine", SURFACE_LINE)
-  shader:send("surfaceFeather", SURFACE_FEATHER)
-  shader:send("surfaceGlow", SURFACE_GLOW)
-  shader:send("colorCaustic", COLOR_CAUSTIC)
   shader:send("causticScale", CAUSTIC_SCALE)
-  shader:send("bulgeCenter", { 0, 0 })
+  shader:send("bulgeCenter", POOL_BULGE_CENTER)
   shader:send("bulgeRadius", 1)
   shader:send("causticBulge", 0) -- (flat, for the pools — see drawOceans)
   shader:send("sphereShading", 0) -- (likewise)
-  shader:send("sunDir", { 1, 0 })
-  shader:send("sphereShallow", SPHERE_COLOR_SHALLOW)
-  shader:send("sphereDeep", SPHERE_COLOR_DEEP)
-  shader:send("sphereShade", SPHERE_COLOR_SHADE)
-  shader:send("sphereShadeStrength", SPHERE_SHADE_STRENGTH)
-  shader:send("sphereRim", SPHERE_COLOR_RIM)
-  shader:send("sphereRimStrength", SPHERE_RIM_STRENGTH)
-  shader:send("sphereReflected", SPHERE_COLOR_REFLECTED)
-  shader:send("sphereReflectedStrength", SPHERE_REFLECTED_STRENGTH)
-  shader:send("causticSpeed", CAUSTIC_SPEED)
-  shader:send("causticStrength", CAUSTIC_STRENGTH)
+  shader:send("sunDir", POOL_SUN_DIR)
   love.graphics.setShader(shader)
+end
 end
 
 -- The lava's shader: the same shapes as the water's (each vertex's
@@ -3331,23 +3403,24 @@ getLavaShader = function()
     }
     #endif
   ]])
+  -- (The settings that never change: sent once here, not on every draw.)
+  lavaShader:send("colorDeep", LAVA_TUNING.COLOR_DEEP)
+  lavaShader:send("colorMid", LAVA_TUNING.COLOR_MID)
+  lavaShader:send("colorHot", LAVA_TUNING.COLOR_HOT)
+  lavaShader:send("glowBand", LAVA_TUNING.GLOW_BAND)
+  lavaShader:send("plasmaScale", LAVA_TUNING.PLASMA_SCALE)
+  lavaShader:send("detailScale", LAVA_TUNING.PLASMA_DETAIL)
+  lavaShader:send("evolveSpeed", LAVA_TUNING.EVOLVE_SPEED)
+  lavaShader:send("scrollSpeed", LAVA_TUNING.SCROLL_SPEED)
+  lavaShader:send("pourSpeed", LAVA_TUNING.POUR_SPEED)
+  lavaShader:send("surfaceFeather", SURFACE_FEATHER)
   return lavaShader
 end
 end
 
 useLavaShader = function()
   local shader = getLavaShader()
-  shader:send("time", age)
-  shader:send("colorDeep", LAVA_TUNING.COLOR_DEEP)
-  shader:send("colorMid", LAVA_TUNING.COLOR_MID)
-  shader:send("colorHot", LAVA_TUNING.COLOR_HOT)
-  shader:send("glowBand", LAVA_TUNING.GLOW_BAND)
-  shader:send("plasmaScale", LAVA_TUNING.PLASMA_SCALE)
-  shader:send("detailScale", LAVA_TUNING.PLASMA_DETAIL)
-  shader:send("evolveSpeed", LAVA_TUNING.EVOLVE_SPEED)
-  shader:send("scrollSpeed", LAVA_TUNING.SCROLL_SPEED)
-  shader:send("pourSpeed", LAVA_TUNING.POUR_SPEED)
-  shader:send("surfaceFeather", SURFACE_FEATHER)
+  shader:send("time", age) -- (the rest never change: sent once, in getLavaShader)
   love.graphics.setShader(shader)
 end
 
@@ -3425,8 +3498,8 @@ local function drawOceans()
     local depth = depthOf(p, o.volume)
     local reach = p.radius + depth + SURFACE_FEATHER + 6
     if p.pos.x + reach > vx0 and p.pos.x - reach < vx1 and p.pos.y + reach > vy0 and p.pos.y - reach < vy1 then
-      local verts = {}
-      local function vert(x, y, d, alpha) verts[#verts + 1] = { x, y, d, 0, 1, 1, 1, alpha or 1 } end
+      Scratch.resetVerts()
+      local function vert(x, y, d, alpha) Scratch.vert(x, y, d, 0, alpha or 1) end
       local cx, cy = p.pos.x, p.pos.y
       local outline = outlineOf(p, depth)
       local n = #outline
@@ -3459,12 +3532,13 @@ local function drawOceans()
         end
       end
 
-      if not oceanMesh or oceanMeshSize < #verts then
-        oceanMeshSize = math.max(#verts, oceanMeshSize * 2, 600)
+      local count = Scratch.vertCount
+      if not oceanMesh or oceanMeshSize < count then
+        oceanMeshSize = math.max(count, oceanMeshSize * 2, 600)
         oceanMesh = love.graphics.newMesh(oceanMeshSize, "triangles", "stream")
       end
-      oceanMesh:setVertices(verts)
-      oceanMesh:setDrawRange(1, #verts)
+      oceanMesh:setVertices(Scratch.verts, 1, count)
+      oceanMesh:setDrawRange(1, count)
       if not shaderOn then
         useWaterShader()
         love.graphics.setColor(1, 1, 1, 1)
@@ -3524,7 +3598,7 @@ local function drawPlanetWater(g, liquid)
   local px, py = g.planet.pos.x, g.planet.pos.y
   local cols, water, rows = g.cols, g[liquid.key], g.rows
   local rippleScale = liquid == LAVA and LAVA_TUNING.RIPPLE or 1
-  local verts = {}
+  Scratch.resetVerts()
 
   -- How high row r's bottom edge is.
   local function cellBottom(r) return g.top - (r + 1) * CELL end
@@ -3537,12 +3611,8 @@ local function drawPlanetWater(g, liquid)
     local x2, y2 = planetPoint(g, f1, hTop1)
     local x3, y3 = planetPoint(g, f1, hBottom1)
     local x4, y4 = planetPoint(g, f0, hBottom0)
-    local v1 = { px + x1, py + y1, depthTop, stream, 1, 1, 1, 1 }
-    local v2 = { px + x2, py + y2, depthTop, stream, 1, 1, 1, 1 }
-    local v3 = { px + x3, py + y3, depthBottom, stream, 1, 1, 1, 1 }
-    local v4 = { px + x4, py + y4, depthBottom, stream, 1, 1, 1, 1 }
-    verts[#verts + 1] = v1; verts[#verts + 1] = v2; verts[#verts + 1] = v3
-    verts[#verts + 1] = v1; verts[#verts + 1] = v3; verts[#verts + 1] = v4
+    Scratch.quad(px + x1, py + y1, px + x2, py + y2, px + x3, py + y3, px + x4, py + y4,
+      depthTop, depthBottom, stream)
   end
   -- Where the ground under resting water in cell row r really is, at
   -- column position f: on the flat layout, its square cells don't follow
@@ -3603,8 +3673,8 @@ local function drawPlanetWater(g, liquid)
     local c = (i - 1) - r * cols
     for d = 1, 8 do
       local found
-      for _, k in ipairs({ c - d, c + d }) do
-        local nc = planetCol(g, k)
+      for side = -1, 1, 2 do -- (c - d, then c + d)
+        local nc = planetCol(g, c + side * d)
         local n = nc and r * cols + nc + 1
         if n and stackFloor[n] and not capped[stackFloor[n]] and stackSurface[n] > stackSurface[i] then
           found = stackSurface[n]
@@ -3623,7 +3693,8 @@ local function drawPlanetWater(g, liquid)
   local function surfaceNear(c, r)
     local cc = planetCol(g, c)
     if not cc then return nil end
-    for _, rr in ipairs({ r, r + 1, r - 1 }) do
+    for step = 0, 2 do -- (r, then r + 1, then r - 1)
+      local rr = (step == 0 and r) or (step == 1 and r + 1) or r - 1
       if rr >= 0 and rr < rows then
         local s = stackSurface[rr * cols + cc + 1]
         if s then return s end
@@ -3734,8 +3805,8 @@ local function drawPlanetWater(g, liquid)
       end
     end
   end
-  if #verts == 0 then return end
-  drawLiquidMesh("planet-" .. liquid.key, verts, liquid)
+  if Scratch.vertCount == 0 then return end
+  drawLiquidMesh("planet-" .. liquid.key, liquid)
 end
 
 -- The obsidian blocks on the level (see "Lava meeting water"). (A dirt

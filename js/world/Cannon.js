@@ -1332,28 +1332,35 @@ function clearTheWay(player, flight, ts) {
     return (thing.pos.x - (ax + dx * t)) ** 2 + (thing.pos.y - (ay + dy * t)) ** 2 <= reach * reach;
   };
 
+  // (What's blown away is noted as it goes and taken out of each list in
+  // one pass at the end — see utils.removeMarked.)
+  let gone = null;
   for (let i = state.planetoids.length - 1; i >= 0; i--) {
     const p = state.planetoids[i];
     if (isMundane(p, flight.target) && inTheWay(p)) {
-      state.planetoids.splice(i, 1);
-      const coins = state.coins ?? [];
-      for (let k = coins.length - 1; k >= 0; k--) {
-        if (coins[k].planet === p) coins.splice(k, 1);
-      }
+      (gone ??= new Set()).add(p);
       if (player.lockedTarget === p) player.lockedTarget = null;
       if (player.lastInfluencePlanet === p) player.lastInfluencePlanet = null;
       blowUp(p);
     }
   }
+  if (gone) {
+    utils.removeMarked(state.planetoids, gone);
+    // (Their coins go with them.)
+    if (state.coins) utils.removeWhere(state.coins, (c) => gone.has(c.planet));
+  }
+
+  gone = null;
   const asteroids = state.asteroids ?? [];
   for (let i = asteroids.length - 1; i >= 0; i--) {
     const a = asteroids[i];
     if (inTheWay(a)) {
-      asteroids.splice(i, 1);
+      (gone ??= new Set()).add(a);
       if (player.lockedTarget === a) player.lockedTarget = null;
       blowUp(a);
     }
   }
+  if (gone) utils.removeMarked(asteroids, gone);
 }
 
 let gauntletRocks = [];

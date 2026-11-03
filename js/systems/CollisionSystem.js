@@ -11,6 +11,12 @@ import state from '../state.js';
 import constants from '../constants.js';
 import Vector2 from '../vector2.js';
 
+// Returned when a handler has nothing to report (most frames), instead of
+// a fresh empty array / Map each time. Callers only read them.
+const NO_FLATTENED = Object.freeze([]);
+const NO_HITS = new Map();
+NO_HITS.set = () => { throw new Error('CollisionSystem: NO_HITS is read-only'); };
+
 // Smallest t in [0,1] along a->b where a circle of radius r at (cx,cy)
 // is first entered, or null.
 function sweptCircleEntryT(ax, ay, bx, by, cx, cy, r) {
@@ -52,6 +58,9 @@ class CollisionSystem {
     for (const im of immovables) {
       for (const mv of movables) {
         if (mv.isImmovable || mv.recalling) continue;
+        // A terrain shape nowhere near this body: skipped before its
+        // per-segment search (see TerrainShape.isFartherThan).
+        if (im.isFartherThan && im.isFartherThan(mv.pos.x, mv.pos.y, mv.radius)) continue;
         let normal = null, targetPos = null;
         let domeContact = null;
 
@@ -70,11 +79,13 @@ class CollisionSystem {
             if (usingDome) domeContact = surface.point;
           }
         } else {
-          const offset = mv.pos.subtract(im.pos);
-          const dist = offset.length();
+          // (Plain numbers for the check, which nearly every pair fails;
+          // vectors only once they're actually touching.)
+          const ox = mv.pos.x - im.pos.x, oy = mv.pos.y - im.pos.y;
+          const dist = Math.sqrt(ox * ox + oy * oy);
           const minDist = im.radius + mv.radius;
           if (dist < minDist && dist > 0) {
-            normal = offset.normalize();
+            normal = new Vector2(ox / dist, oy / dist);
             targetPos = im.pos.clone().add(normal.multiply(minDist));
           }
         }
@@ -174,22 +185,33 @@ class CollisionSystem {
     massProp2 = massProp2 ?? 'mass';
     const sameArray = entities1 === entities2;
 
+    // Immovable and rewinding bodies never take part in a pair below, so
+    // they're left out of the grid entirely — and out of the cell size.
+    // (The sky dome, radius ~4000, used to set the cells 8000 across:
+    // wider than the whole streamed 3x3 of world cells, so every body
+    // landed in the same few buckets and every pair got checked.)
+    const takesPart = (e) => !(e.isImmovable || e.recalling);
+
     let maxRadius = 0;
     for (const e of entities1) {
       const r = e[radiusProp1];
-      if (r && r > maxRadius) maxRadius = r;
+      if (r && r > maxRadius && takesPart(e)) maxRadius = r;
     }
     if (!sameArray) {
       for (const e of entities2) {
         const r = e[radiusProp2];
-        if (r && r > maxRadius) maxRadius = r;
+        if (r && r > maxRadius && takesPart(e)) maxRadius = r;
       }
     }
     const gridSize = Math.max(maxRadius * 2, 50);
 
+    // Numeric bucket keys (no strings built each frame). Rows stay far
+    // under GRID_KEY_ROWS / 2 in either direction, so keys never collide.
+    const GRID_KEY_ROWS = 1048576;
     const grid = new Map();
     entities2.forEach((e, j) => {
-      const key = Math.floor(e.pos.x / gridSize) + ',' + Math.floor(e.pos.y / gridSize);
+      if (!takesPart(e)) return;
+      const key = Math.floor(e.pos.x / gridSize) * GRID_KEY_ROWS + Math.floor(e.pos.y / gridSize);
       let bucket = grid.get(key);
       if (!bucket) { bucket = []; grid.set(key, bucket); }
       bucket.push(j);
@@ -202,33 +224,37 @@ class CollisionSystem {
 
       for (let dRow = -1; dRow <= 1; dRow++) {
         for (let dCol = -1; dCol <= 1; dCol++) {
-          const bucket = grid.get((col + dCol) + ',' + (row + dRow));
+          const bucket = grid.get((col + dCol) * GRID_KEY_ROWS + (row + dRow));
           if (!bucket) continue;
           for (const j of bucket) {
             if (sameArray && j <= i) continue;
             const p2 = entities2[j];
             if (p1.isImmovable || p2.isImmovable || p1.recalling || p2.recalling) continue;
-            const offset = p1.pos.subtract(p2.pos);
-            const distSq = offset.lengthSq();
+            // (All in plain numbers — the same arithmetic the vector
+            // version did, without its dozen throwaway vectors.)
+            const ox = p1.pos.x - p2.pos.x, oy = p1.pos.y - p2.pos.y;
+            const distSq = ox * ox + oy * oy;
             const sumR = p1[radiusProp1] + p2[radiusProp2];
             if (distSq < sumR * sumR && distSq > 0) {
               const dist = Math.sqrt(distSq);
               const overlap = sumR - dist;
-              const normal = offset.normalize();
-              const tangent = Vector2.new(-normal.y, normal.x);
+              const nx = ox / dist, ny = oy / dist; // the normal...
+              const tx = -ny, ty = nx;             // ...and the tangent
               const m1 = p1[massProp1], m2 = p2[massProp2];
               const totalMass = m1 + m2;
               const sep1 = overlap * (m2 / totalMass);
               const sep2 = overlap * (m1 / totalMass);
-              p1.pos.add(normal.multiply(sep1));
-              p2.pos.add(normal.multiply(-sep2));
-              const v1 = p1.vel.clone(), v2 = p2.vel.clone();
-              const v1n = normal.dot(v1), v2n = normal.dot(v2);
-              const v1t = tangent.dot(v1), v2t = tangent.dot(v2);
+              p1.pos.x += nx * sep1; p1.pos.y += ny * sep1;
+              p2.pos.x += nx * -sep2; p2.pos.y += ny * -sep2;
+              const v1x = p1.vel.x, v1y = p1.vel.y, v2x = p2.vel.x, v2y = p2.vel.y;
+              const v1n = nx * v1x + ny * v1y, v2n = nx * v2x + ny * v2y;
+              const v1t = tx * v1x + ty * v1y, v2t = tx * v2x + ty * v2y;
               const newV1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
               const newV2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
-              p1.vel = normal.multiply(newV1n).add(tangent.multiply(v1t));
-              p2.vel = normal.multiply(newV2n).add(tangent.multiply(v2t));
+              // (Fresh velocity vectors, as before, in case anything holds
+              // on to the old ones.)
+              p1.vel = new Vector2(nx * newV1n + tx * v1t, ny * newV1n + ty * v1t);
+              p2.vel = new Vector2(nx * newV2n + tx * v2t, ny * newV2n + ty * v2t);
             }
           }
         }
@@ -332,6 +358,12 @@ class CollisionSystem {
     // Planets with their own player collision (CrackedPlanetoid.js: caves,
     // ceilings and walls, not just a surface to land on).
     if (planet.collidePlayer) return planet.collidePlayer(player);
+    // A terrain shape nowhere near him: nothing to land on (it only lands
+    // him within player.radius + SURFACE_TOLERANCE of one of its segments).
+    if (planet.isFartherThan
+        && planet.isFartherThan(player.pos.x, player.pos.y, player.radius + constants.SURFACE_TOLERANCE)) {
+      return false;
+    }
     if (planet.isRoundedRect) {
       if (planet.isSkyDome) {
         if (typeof planet.isWithinGravityWindow === 'function'
@@ -387,11 +419,13 @@ class CollisionSystem {
     // Water planets are never solid ground.
     if (planet.isWaterPlanet) return false;
 
-    const offset = player.pos.subtract(planet.pos);
-    const dist = offset.length();
+    // (Plain numbers for the check, made for every planetoid every frame
+    // he's in the air; a vector only once he's landing.)
+    const ox = player.pos.x - planet.pos.x, oy = player.pos.y - planet.pos.y;
+    const dist = Math.sqrt(ox * ox + oy * oy);
     const surfaceDist = planet.radius + player.radius;
     if (dist <= surfaceDist + constants.SURFACE_TOLERANCE) {
-      const normal = offset.normalize();
+      const normal = new Vector2(ox, oy).normalize();
       player.pos = planet.pos.clone().add(normal.multiply(surfaceDist));
       player.onSurface = true;
       player.currentPlanet = planet;
@@ -447,8 +481,9 @@ class CollisionSystem {
 
   // Returns the Ooombas that finished going flat THIS frame.
   handlePlayerOoombaCollisions(player, ooombas) {
-    const flattened = [];
-    if (!ooombas) return flattened;
+    // (Only made when one's actually flattened; most frames none are.)
+    let flattened = null;
+    if (!ooombas) return NO_FLATTENED;
 
     for (const o of ooombas) {
       // (Not frozen in an ice cube, either: see WaterSystem.js's "Ice".)
@@ -460,9 +495,9 @@ class CollisionSystem {
           else player.startDeath();
         }
       }
-      if (o.isSquashing && o.updateSquash(player)) flattened.push(o);
+      if (o.isSquashing && o.updateSquash(player)) (flattened ??= []).push(o);
     }
-    return flattened;
+    return flattened ?? NO_FLATTENED;
   }
 
   // -> [Set hitFireballs, Set killedOoombas]
@@ -531,8 +566,8 @@ class CollisionSystem {
   handleCoinCollisions(player, coins) {
     for (let i = coins.length - 1; i >= 0; i--) {
       const c = coins[i];
-      const dist = player.pos.subtract(c.pos).length();
-      if (dist <= player.radius + constants.COIN_RADIUS) {
+      const dx = player.pos.x - c.pos.x, dy = player.pos.y - c.pos.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= player.radius + constants.COIN_RADIUS) {
         if (state.audioManager) state.audioManager.playEatDot();
         coins.splice(i, 1);
         state.score = state.score + 1;
@@ -542,14 +577,17 @@ class CollisionSystem {
 
   // -> Map asteroid -> the planetoid it hit.
   handlePlanetAsteroidCollisions(planetoids, asteroids) {
-    const toBreak = new Map();
-    if (!asteroids) return toBreak;
+    // (Only made once an asteroid actually hits; see NO_HITS.)
+    let toBreak = null;
+    if (!asteroids) return NO_HITS;
 
     for (const p of planetoids) {
       for (const a of asteroids) {
-        if (!p.isSkyDome) {
+        // (A terrain shape nowhere near it can't be touching it — see
+        // TerrainShape.isFartherThan.)
+        if (!p.isSkyDome && !(p.isFartherThan && p.isFartherThan(a.pos.x, a.pos.y, a.radius))) {
           const dist = this.distanceToPlanetSurface(a.pos, p);
-          if (dist < a.radius) toBreak.set(a, p);
+          if (dist < a.radius) (toBreak ??= new Map()).set(a, p);
         }
 
         if (typeof p.nearestDomeSurfacePoint === 'function') {
@@ -557,7 +595,7 @@ class CollisionSystem {
           if (a.pos.y < topY) {
             const domeSurface = p.nearestDomeSurfacePoint(a.pos.x, a.pos.y);
             if (domeSurface.distance < a.radius) {
-              toBreak.set(a, p);
+              (toBreak ??= new Map()).set(a, p);
               if (typeof p.triggerShieldImpact === 'function') {
                 const intensity = Math.min(1, a.radius / 45);
                 p.triggerShieldImpact(domeSurface.point.x, domeSurface.point.y, intensity);
@@ -570,12 +608,12 @@ class CollisionSystem {
           const topY = p.pos.y - (p.halfHeight ?? 0);
           if (a.pos.y > topY) {
             const baseSurface = p.nearestBaseSurfacePoint(a.pos.x, a.pos.y);
-            if (baseSurface.distance < a.radius) toBreak.set(a, p);
+            if (baseSurface.distance < a.radius) (toBreak ??= new Map()).set(a, p);
           }
         }
       }
     }
-    return toBreak;
+    return toBreak ?? NO_HITS;
   }
 
   // Fireball vs WALL tiles (only those flagged isWall). -> Set
@@ -665,8 +703,8 @@ class CollisionSystem {
       let hit = false;
 
       for (const a of asteroids) {
-        const dist = f.pos.subtract(a.pos).length();
-        if (dist < f.radius + a.radius) {
+        const dx = f.pos.x - a.pos.x, dy = f.pos.y - a.pos.y;
+        if (Math.sqrt(dx * dx + dy * dy) < f.radius + a.radius) {
           hitFireballs.add(f);
           toBreakAsteroids.add(a);
           hit = true;
@@ -694,8 +732,22 @@ class CollisionSystem {
               skipRest = true;
             }
           }
-          if (!skipRest) {
-            const dist = this.distanceToPlanetSurface(f.pos, p);
+          // (A terrain shape nowhere near it can't be hit — see
+          // TerrainShape.isFartherThan.)
+          if (!skipRest && !(p.isFartherThan && p.isFartherThan(f.pos.x, f.pos.y, f.radius))) {
+            let dist;
+            if (p.isOpenPath) {
+              // A one-way ledge (one he can jump up through from below) is
+              // only there for a shot heading into its walkable side: one
+              // going up through it from underneath carries on, the same
+              // as the portal gun's shots (see PortalGun.js). From above,
+              // it's a floor.
+              const surface = p.nearestSurfacePoint(f.pos.x, f.pos.y);
+              dist = surface.distance;
+              if (f.vel.x * surface.normal.x + f.vel.y * surface.normal.y >= 0) dist = Infinity;
+            } else {
+              dist = this.distanceToPlanetSurface(f.pos, p);
+            }
             if (dist < f.radius) {
               hitFireballs.add(f);
               planetHits.push({ fireball: f, planet: p });

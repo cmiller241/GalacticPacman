@@ -24,13 +24,16 @@ const rnd = () => lua.random();
 worldGen.CELL_SIZE = 3000;
 worldGen.GRID_SIZE = 40;
 worldGen.CENTER_CELL = { col: worldGen.GRID_SIZE / 2, row: worldGen.GRID_SIZE / 2 };
-worldGen.CELL_CHECK_INTERVAL = 30;
+// Seconds between checks of which cells are near enough to be streamed
+// in (see worldGen.updateActiveCells, from main.js). In seconds, not
+// frames, so it's the same at any frame rate.
+worldGen.CELL_CHECK_SECONDS = 0.5;
 
 worldGen.BELT_INNER_CELLS = 2;
 worldGen.BELT_OUTER_CELLS = 3;
 worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5;
 
-worldGen.BELT_SPAWN_INTERVAL = 6;
+worldGen.BELT_SPAWN_SECONDS = 0.1; // between drip checks (seconds, not frames: the same at any frame rate)
 worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500;
 worldGen.BELT_CELL_BURST_RESPECTS_CAP = true;
 const BELT_SPAWN_ARC_SPACING = 300;
@@ -299,7 +302,7 @@ function focusNearBelt(fx, fy) {
 
 let lastFocusBeltTheta = null;
 
-// Called every BELT_SPAWN_INTERVAL frames from main.js.
+// Called every BELT_SPAWN_SECONDS from main.js.
 worldGen.updateBeltSpawning = function () {
   const [fx, fy] = worldGen.streamFocus();
   if (fx == null || !focusNearBelt(fx, fy)) {
@@ -540,48 +543,37 @@ function cullDistantObjects(activeCellKeys, focusX, focusY) {
     return worldGen.cellKey(cell.col, cell.row);
   };
 
-  for (let i = state.planetoids.length - 1; i >= 0; i--) {
-    const p = state.planetoids[i];
-    if (p.isPermanent) continue;
+  // (Each list culled in one pass — see utils.removeWhere.)
+  utils.removeWhere(state.planetoids, (p) => {
+    if (p.isPermanent) return false;
     if (p.isBeltPlanetoid) {
-      if (focusX != null) {
-        const dx = p.pos.x - focusX, dy = p.pos.y - focusY;
-        if (dx * dx + dy * dy > beltCullRadius * beltCullRadius) state.planetoids.splice(i, 1);
-      }
-    } else if (!activeCellKeys[keyOf(p.pos.x, p.pos.y)]) {
-      state.planetoids.splice(i, 1);
+      if (focusX == null) return false;
+      const dx = p.pos.x - focusX, dy = p.pos.y - focusY;
+      return dx * dx + dy * dy > beltCullRadius * beltCullRadius;
     }
-  }
+    return !activeCellKeys[keyOf(p.pos.x, p.pos.y)];
+  });
 
   const survivingPlanetoids = new Set(state.planetoids);
 
   if (state.asteroids) {
-    for (let i = state.asteroids.length - 1; i >= 0; i--) {
-      const a = state.asteroids[i];
-      if (!activeCellKeys[keyOf(a.pos.x, a.pos.y)] && !a.isGauntlet) state.asteroids.splice(i, 1);
-    }
+    utils.removeWhere(state.asteroids, (a) => !activeCellKeys[keyOf(a.pos.x, a.pos.y)] && !a.isGauntlet);
   }
 
   if (state.coins) {
-    for (let i = state.coins.length - 1; i >= 0; i--) {
-      const c = state.coins[i];
-      if (!c.planet || !survivingPlanetoids.has(c.planet)) {
-        state.coins.splice(i, 1);
-      } else if (!c.planet.isBeltPlanetoid && !activeCellKeys[keyOf(c.planet.pos.x, c.planet.pos.y)]) {
-        state.coins.splice(i, 1);
-      }
-    }
+    utils.removeWhere(state.coins, (c) => {
+      if (!c.planet || !survivingPlanetoids.has(c.planet)) return true;
+      return !c.planet.isBeltPlanetoid && !activeCellKeys[keyOf(c.planet.pos.x, c.planet.pos.y)];
+    });
   }
 
   if (state.fireBars) {
     state.activeFireBarIds = state.activeFireBarIds ?? {};
-    for (let i = state.fireBars.length - 1; i >= 0; i--) {
-      const bar = state.fireBars[i];
-      if (!activeCellKeys[keyOf(bar.pos.x, bar.pos.y)]) {
-        if (bar.fireBarId != null) delete state.activeFireBarIds[bar.fireBarId];
-        state.fireBars.splice(i, 1);
-      }
-    }
+    utils.removeWhere(state.fireBars, (bar) => {
+      if (activeCellKeys[keyOf(bar.pos.x, bar.pos.y)]) return false;
+      if (bar.fireBarId != null) delete state.activeFireBarIds[bar.fireBarId];
+      return true;
+    });
   }
 }
 

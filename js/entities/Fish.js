@@ -5,13 +5,14 @@
 // filled rather than just an outline) that wanders freely inside the
 // water sphere and occasionally emits an air bubble, using the same
 // radial (angle + distance-from-water-center) bubble motion Player.js's
-// own swimming already uses.
+// own swimming already uses — both through js/effects/Bubbles.js.
 
 import love from '../love/index.js';
 import lua from '../love/lua.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
 import Splash from '../effects/Splash.js';
+import Bubbles from '../effects/Bubbles.js';
 
 // ---------------------------------------------------------------------
 // Tunables
@@ -41,15 +42,7 @@ const RETARGET_MAX_SECONDS = 22;
 // to trickle, not a focal effect.
 const BUBBLE_SPAWN_CHANCE = 0.03;
 const BUBBLE_MAX_COUNT = 3;
-const BUBBLE_FADE_DISTANCE = 20;
-const BUBBLE_RISE_SPEED_MIN = 0.4;
-const BUBBLE_RISE_SPEED_MAX = 0.9;
-const BUBBLE_WOBBLE_FREQ_MIN = 0.01;
-const BUBBLE_WOBBLE_FREQ_MAX = 0.03;
-const BUBBLE_WOBBLE_AMPLITUDE = 0.1;
-const BUBBLE_RADIUS_MIN = 1.5;
-const BUBBLE_RADIUS_MAX = 3.5;
-const BUBBLE_COLOR = [0.85, 0.97, 1.0];
+const BUBBLES = { radiusMin: 1.2, radiusMax: 3.2, riseMin: 0.4, riseMax: 0.9 }; // see js/effects/Bubbles.js
 
 // Occasional leaps out of the water and back in — a real ballistic arc
 // (outward + sideways launch velocity, pulled back by a hand-rolled
@@ -146,20 +139,6 @@ const WIGGLE_AMPLITUDE = 0.45; // radians the tail swings each way from center
 // a faster swimmer beats its tail faster.
 const WIGGLE_SPEED_PER_UNIT_SPEED = 0.13;
 
-function newBubble(centerX, centerY, angle, startR, targetR) {
-  return {
-    centerX,
-    centerY,
-    baseAngle: angle,
-    r: startR,
-    targetR,
-    wobblePhase: Math.random() * Math.PI * 2,
-    wobbleFreq: BUBBLE_WOBBLE_FREQ_MIN + Math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
-    riseSpeed: BUBBLE_RISE_SPEED_MIN + Math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
-    radius: BUBBLE_RADIUS_MIN + Math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
-  };
-}
-
 // Shortest-path angle interpolation — turns `current` toward `target` by
 // at most `maxDelta` radians, going whichever way is closer.
 function turnToward(current, target, maxDelta) {
@@ -245,18 +224,10 @@ class Fish {
       const angle = dist > 1 ? Math.atan2(away.y, away.x) : (Math.random() * Math.PI * 2);
 
       const spawnR = dist + FISH_LENGTH * 0.5;
-      const targetR = water.radius;
-      if (spawnR < targetR) {
-        this.bubbles.push(newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR));
-      }
+      Bubbles.spawn(this.bubbles, water.pos.x, water.pos.y, angle, spawnR, water.radius, BUBBLES);
     }
 
-    for (let i = this.bubbles.length - 1; i >= 0; i--) {
-      const b = this.bubbles[i];
-      b.r += b.riseSpeed * ts;
-      b.wobblePhase += b.wobbleFreq * ts;
-      if (b.r >= b.targetR) this.bubbles.splice(i, 1);
-    }
+    Bubbles.update(this.bubbles, ts);
   }
 
   update() {
@@ -538,21 +509,7 @@ class Fish {
   // after the water planet's second draw pass) so bubbles stay visible on
   // top of the translucent water fill.
   drawBubbles() {
-    for (const b of this.bubbles) {
-      const angle = b.baseAngle + Math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE;
-      const bx = b.centerX + Math.cos(angle) * b.r;
-      const by = b.centerY + Math.sin(angle) * b.r;
-
-      const fadeStart = b.targetR - BUBBLE_FADE_DISTANCE;
-      let fade = 1;
-      if (b.r > fadeStart) fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE;
-
-      love.graphics.setColor(BUBBLE_COLOR[0], BUBBLE_COLOR[1], BUBBLE_COLOR[2], 0.5 * fade);
-      love.graphics.circle('fill', bx, by, b.radius);
-      love.graphics.setColor(1, 1, 1, 0.75 * fade);
-      love.graphics.circle('line', bx, by, b.radius);
-    }
-    love.graphics.setColor(1, 1, 1, 1);
+    Bubbles.draw(this.bubbles);
   }
 }
 

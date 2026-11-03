@@ -6,6 +6,8 @@ export default {
     "img/Fisherman-Head.png",
     "img/Fisherman-Line.png",
     "img/Ooomba.png",
+    "img/Ooomba_ao.png",
+    "img/Ooomba_normal.png",
     "img/Robot2.png",
     "img/body.png",
     "img/goomba.png",
@@ -53,7 +55,10 @@ export default {
     "sounds/jumpsmall.wav",
     "sounds/mario-fireball.mp3",
     "sounds/mario-goomba-stomp.mp3",
+    "sounds/morph-ball.wav",
+    "sounds/morph-unball.wav",
     "sounds/music/let-all-exalt-navarre-hyperdrive-loop.ogg",
-    "sounds/music/wake-awake-2-battle-march-loop.ogg"
+    "sounds/music/wake-awake-2-battle-march-loop.ogg",
+    "sounds/water-spray.wav"
   ]
 };

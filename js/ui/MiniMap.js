@@ -109,8 +109,17 @@ class Minimap {
 
     const winW = g.getWidth();
     const winH = g.getHeight();
-    const x0 = winW - this.size - this.margin;
-    const y0 = winH - this.size - this.margin;
+    let x0 = winW - this.size - this.margin;
+    let y0 = winH - this.size - this.margin;
+    // With the touch controls showing, smaller and up in the top-right
+    // corner, under the pause button, clear of the right thumb's buttons
+    // (see js/ui/TouchControls.js).
+    const touch = state.touchControlsVisible && state.touchLayout;
+    if (touch) {
+      this.size = state.touchLayout.minimapSize;
+      x0 = winW - this.size - state.touchLayout.margin;
+      y0 = state.touchLayout.minimapY;
+    }
 
     const cellSize = worldGen.CELL_SIZE ?? 3000;
     this.viewSpan = cellSize * this.viewCells;

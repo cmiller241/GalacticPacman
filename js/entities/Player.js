@@ -13,6 +13,7 @@ import Vector2 from '../vector2.js';
 import constants from '../constants.js';
 import DustPuff from '../effects/DustPuff.js';
 import Splash from '../effects/Splash.js';
+import Bubbles from '../effects/Bubbles.js';
 import GroundPoundBurst from '../effects/GroundPoundBurst.js';
 import SilhouetteGlow from '../effects/SilhouetteGlow.js';
 import TransporterEffect from '../effects/TransporterEffect.js';
@@ -189,29 +190,14 @@ const INVINCIBLE_FLICKER_INTERVAL = 0.1; // seconds per blink phase
 const DEATH_TICKS = 50;
 
 const BUBBLE_HEAD_GAP = 1.4;         // spawn distance from center, as a multiple of this.radius — clears his helmet instead of sitting on it
-const BUBBLE_FADE_DISTANCE = 20;     // world units of travel, just before reaching the water's own radius, that a bubble fades out over
-const BUBBLE_RISE_SPEED_MIN = 0.5;   // world units per baseline frame, radially outward
-const BUBBLE_RISE_SPEED_MAX = 1.1;
-const BUBBLE_WOBBLE_FREQ_MIN = 0.01; // radians per baseline frame the angular wobble oscillates at
-const BUBBLE_WOBBLE_FREQ_MAX = 0.03;
-const BUBBLE_WOBBLE_AMPLITUDE = 0.1; // radians of angular sway at full swing
-const BUBBLE_RADIUS_MIN = 2.5;
-const BUBBLE_RADIUS_MAX = 6;
-const BUBBLE_COLOR = [0.85, 0.97, 1.0];
-
-function newBubble(centerX, centerY, angle, startR, targetR) {
-  return {
-    centerX,
-    centerY,
-    baseAngle: angle,
-    r: startR,
-    targetR,
-    wobblePhase: Math.random() * Math.PI * 2,
-    wobbleFreq: BUBBLE_WOBBLE_FREQ_MIN + Math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
-    riseSpeed: BUBBLE_RISE_SPEED_MIN + Math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
-    radius: BUBBLE_RADIUS_MIN + Math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
-  };
-}
+// Sizes and rise speeds for his bubbles; the rest of their look and
+// motion lives in js/effects/Bubbles.js.
+const BUBBLES = {
+  radiusMin: 2,   // world units, before they swell on the way up
+  radiusMax: 5.5,
+  riseMin: 0.5,   // world units per baseline frame, radially outward
+  riseMax: 1.1,
+};
 
 // Down/Triangle only ENTER/EXIT ball mode on a clean press. Flip to
 // false to turn the ball off.
@@ -478,6 +464,7 @@ class Player {
     if (state.vatsActive) return; // in V.A.T.S. he only picks a target and pulls to it
     this.morphState = 'toBall';
     this.morphElapsed = 0;
+    if (state.audioManager) state.audioManager.playMorphBall();
     // Curling up mid ground pound calls the pound off (a ball doesn't
     // pound) — he just falls as a ball.
     this.isGroundPounding = false;
@@ -508,6 +495,7 @@ class Player {
     }
     this.morphState = 'toHuman';
     this.morphElapsed = 0;
+    if (state.audioManager) state.audioManager.playMorphUnball();
   }
 
   // Advances whichever transition (if any) is currently playing, and
@@ -1177,39 +1165,17 @@ class Player {
       // Spawned past the player's OWN position along this same radial
       // line — that keeps it "above his head" on any side of the core.
       const spawnR = dist + this.radius * BUBBLE_HEAD_GAP;
-      const targetR = water.radius;
-      if (spawnR < targetR) {
-        this.bubbles.push(newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR));
-      }
+      Bubbles.spawn(this.bubbles, water.pos.x, water.pos.y, angle, spawnR, water.radius, BUBBLES);
     }
 
-    for (let i = this.bubbles.length - 1; i >= 0; i--) {
-      const b = this.bubbles[i];
-      b.r += b.riseSpeed * timeScale;
-      b.wobblePhase += b.wobbleFreq * timeScale;
-      if (b.r >= b.targetR) this.bubbles.splice(i, 1);
-    }
+    Bubbles.update(this.bubbles, timeScale);
   }
 
   // Drawn separately from the rest of the player (see main.js's own call
   // site, right after the water planet's second draw pass) so bubbles
   // stay visible on top of the translucent water fill.
   drawBubbles() {
-    for (const b of this.bubbles ?? []) {
-      const angle = b.baseAngle + Math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE;
-      const bx = b.centerX + Math.cos(angle) * b.r;
-      const by = b.centerY + Math.sin(angle) * b.r;
-
-      const fadeStart = b.targetR - BUBBLE_FADE_DISTANCE;
-      let fade = 1;
-      if (b.r > fadeStart) fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE;
-
-      love.graphics.setColor(BUBBLE_COLOR[0], BUBBLE_COLOR[1], BUBBLE_COLOR[2], 0.5 * fade);
-      love.graphics.circle('fill', bx, by, b.radius);
-      love.graphics.setColor(1, 1, 1, 0.75 * fade);
-      love.graphics.circle('line', bx, by, b.radius);
-    }
-    love.graphics.setColor(1, 1, 1, 1);
+    Bubbles.draw(this.bubbles ?? []);
   }
 
   update() {
@@ -1676,8 +1642,8 @@ class Player {
   // drawFullBody) instead of drifting into the idle sway.
   isUsingBlaster() {
     if (WaterSystem.isSpraying()) return true;
-    const mode = state.weaponMode ?? 'blaster';
-    if (state.gamepadFireHeld || (state.mouseDown && (mode === 'blaster' || mode === 'ice'))) return true;
+    const mode = state.weaponMode ?? 'fireball';
+    if (state.gamepadFireHeld || (state.mouseDown && (mode === 'fireball' || mode === 'ice'))) return true;
     const now = love.timer.getTime();
     if (this.lastShotTime != null && now - this.lastShotTime < BLASTER_IN_USE_LINGER) return true;
     if (PortalGun.lastShotTime != null && now - PortalGun.lastShotTime < BLASTER_IN_USE_LINGER) return true;

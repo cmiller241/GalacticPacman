@@ -14,6 +14,10 @@ const DASH_LENGTH = 10;
 const GAP_LENGTH = 5;
 const LINE_WIDTH = 3;
 const COLOR = [173 / 255, 216 / 255, 230 / 255];
+// Marching ants: how fast the dashes travel round the ring (world units
+// per second, along the line — so big and small rings march at the same
+// visible pace). Positive goes clockwise on screen; 0 stands still.
+const MARCH_SPEED = 20;
 
 // alpha: how strongly to draw it — decided by the caller (see the ring
 // pass in main.js's love.draw) from how much this body's gravity
@@ -30,11 +34,14 @@ InfluenceRing.draw = function (x, y, radius, alpha) {
   const segmentCount = Math.max(1, Math.floor(circumference / period));
   const angleStep = (2 * Math.PI) / segmentCount;
   const dashAngle = angleStep * (DASH_LENGTH / period);
+  // How far the pattern has marched round by now (one period's worth of
+  // travel moves it on by exactly one dash+gap, so it loops seamlessly).
+  const march = ((love.timer.getTime() * MARCH_SPEED) % period) / period * angleStep;
 
   love.graphics.setColor(COLOR[0], COLOR[1], COLOR[2], alpha);
   love.graphics.setLineWidth(LINE_WIDTH);
   for (let i = 0; i < segmentCount; i++) {
-    const a0 = i * angleStep;
+    const a0 = i * angleStep + march;
     const a1 = a0 + dashAngle;
     love.graphics.line(
       x + Math.cos(a0) * radius, y + Math.sin(a0) * radius,

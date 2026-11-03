@@ -398,6 +398,13 @@ local function getRopeShader()
       return vec4(c, a) * color;
     }
   ]])
+  -- (The settings that never change: sent once here, not on every draw.)
+  ropeShader:send("width", ROPE_DRAW_WIDTH)
+  ropeShader:send("pitch", ROPE_PITCH)
+  ropeShader:send("charHalf", CHAR_HALF)
+  ropeShader:send("ropeColor", COLOR_ROPE)
+  ropeShader:send("darkColor", COLOR_ROPE_DARK)
+  ropeShader:send("charColor", COLOR_ROPE_CHAR)
   return ropeShader
 end
 
@@ -491,6 +498,12 @@ local function getRockShader()
       return vec4(c, alpha) * color;
     }
   ]])
+  -- (The settings that never change: sent once here, not on every draw.)
+  rockShader:send("pad", ROCK_PAD)
+  rockShader:send("bevel", ROCK_BEVEL)
+  rockShader:send("darkColor", COLOR_ROCK_SPOT)
+  rockShader:send("lightColor", COLOR_ROCK_TOP)
+  rockShader:send("rimColor", COLOR_ROCK_EDGE)
   return rockShader
 end
 
@@ -514,14 +527,8 @@ function RopeRock:drawRope()
 
   local s = getRopeShader()
   s:send("len", len)
-  s:send("width", ROPE_DRAW_WIDTH)
-  s:send("pitch", ROPE_PITCH)
   s:send("burnAt", self.burn and self.burn.at * len or -1)
-  s:send("charHalf", CHAR_HALF)
   s:send("time", love.timer.getTime())
-  s:send("ropeColor", COLOR_ROPE)
-  s:send("darkColor", COLOR_ROPE_DARK)
-  s:send("charColor", COLOR_ROPE_CHAR)
   love.graphics.setShader(s)
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(getPixel(), self.top.x - perpX * ROPE_DRAW_WIDTH / 2, self.top.y - perpY * ROPE_DRAW_WIDTH / 2,
@@ -540,12 +547,7 @@ function RopeRock:drawRock()
   local s = getRockShader()
   s:send("halfSize", { self.halfWidth, self.halfHeight })
   s:send("corner", math.min(ROCK_CORNER, self.halfWidth, self.halfHeight))
-  s:send("pad", ROCK_PAD)
-  s:send("bevel", ROCK_BEVEL)
   s:send("seed", self.seed)
-  s:send("darkColor", COLOR_ROCK_SPOT)
-  s:send("lightColor", COLOR_ROCK_TOP)
-  s:send("rimColor", COLOR_ROCK_EDGE)
   love.graphics.setShader(s)
   love.graphics.setColor(1, 1, 1, 1)
   local w, h = (self.halfWidth + ROCK_PAD) * 2, (self.halfHeight + ROCK_PAD) * 2

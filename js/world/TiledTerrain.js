@@ -200,6 +200,32 @@ function projectOntoSegment(seg, worldX, worldY) {
   return [t, px, py, Math.sqrt(ddx * ddx + ddy * ddy)];
 }
 
+// Upright shapes (forceUprightJump — ordinary ground and slopes) keep
+// him standing straight up, directly above the point he's on (see
+// worldPointAtArcPosition). So the point that goes with a position near
+// one is the one straight below (or above) it — not the nearest point,
+// which on a slope is off to the uphill side: landing there, or working
+// out his place along the shape from there, moved him up the slope
+// every time he jumped and came back down.
+//
+// Returns [y, segment, how far along it (0..1)] for that point: of the
+// segments spanning x, the one whose height there is nearest y. null if
+// none spans x (past either end of the shape).
+function pointStraightBelow(shape, x, y) {
+  let best = null, bestDist = Infinity;
+  for (const seg of shape.segments) {
+    const ax = seg.a.x, bx = seg.b.x;
+    const dx = bx - ax;
+    if (!seg.isWallFace && Math.abs(dx) > 1e-9 && x >= Math.min(ax, bx) && x <= Math.max(ax, bx)) {
+      const t = (x - ax) / dx;
+      const py = seg.a.y + (seg.b.y - seg.a.y) * t;
+      const d = Math.abs(y - py);
+      if (d < bestDist) { bestDist = d; best = [py, seg, t]; }
+    }
+  }
+  return best;
+}
+
 class TerrainShape {
   constructor(segments) {
     this.segments = segments;
@@ -234,17 +260,51 @@ class TerrainShape {
       for (const p of [seg.a, seg.b]) radius = Math.max(radius, p.subtract(this.pos).length());
     }
     this.radius = Math.max(1, radius);
+    this.refreshBounds();
   }
 
   nearestSurfacePoint(worldX, worldY) {
-    let best = null;
+    // (The best so far kept in locals: one result object at the end, not
+    // one for every closer segment found on the way.)
+    let bestDist = null, bestX = 0, bestY = 0, bestNormal = null;
     for (const seg of this.segments) {
       const [, px, py, dist] = projectOntoSegment(seg, worldX, worldY);
-      if (!best || dist < best.distance) {
-        best = { point: new Vector2(px, py), normal: seg.normal, distance: dist };
+      if (bestDist === null || dist < bestDist) {
+        bestDist = dist; bestX = px; bestY = py; bestNormal = seg.normal;
       }
     }
-    return best;
+    if (bestDist === null) return null;
+    return { point: new Vector2(bestX, bestY), normal: bestNormal, distance: bestDist };
+  }
+
+  // True when (x, y) is certainly more than `reach` from every point of
+  // this shape's segments — a cheap test to skip the per-segment work.
+  // Uses boundX/boundY/boundRadius (see refreshBounds), which always
+  // enclose every segment, unlike pos/radius, which a merged wall-climb
+  // shape keeps from before its merge.
+  isFartherThan(x, y, reach) {
+    const dx = x - this.boundX, dy = y - this.boundY;
+    const r = this.boundRadius + reach;
+    return dx * dx + dy * dy > r * r;
+  }
+
+  // A circle round every segment end (and so every point of every
+  // segment). Called whenever the segments change.
+  refreshBounds() {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const seg of this.segments) {
+      minX = Math.min(minX, seg.a.x, seg.b.x); maxX = Math.max(maxX, seg.a.x, seg.b.x);
+      minY = Math.min(minY, seg.a.y, seg.b.y); maxY = Math.max(maxY, seg.a.y, seg.b.y);
+    }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    let rSq = 0;
+    for (const seg of this.segments) {
+      for (const p of [seg.a, seg.b]) {
+        const dx = p.x - cx, dy = p.y - cy;
+        rSq = Math.max(rSq, dx * dx + dy * dy);
+      }
+    }
+    this.boundX = cx; this.boundY = cy; this.boundRadius = Math.sqrt(rSq);
   }
 
   distanceToSurface(worldX, worldY) {
@@ -308,6 +368,17 @@ class TerrainShape {
             }
           }
         }
+      }
+    }
+    // On an upright shape, the landing point is the one straight below
+    // (see pointStraightBelow). Whether and when it's a landing at all is
+    // left exactly as found above.
+    if (best && this.forceUprightJump) {
+      const below = pointStraightBelow(this, curX, curY);
+      if (below) {
+        best.point.x = curX;
+        best.point.y = below[0];
+        best.normal = below[1].normal;
       }
     }
     return best;
@@ -379,6 +450,20 @@ class TerrainShape {
   // on" can disagree. Left false for the wall-push resync, which fires
   // legitimately while genuinely walking the wall face itself.
   arcPositionForWorldPoint(worldX, worldY, excludeWallFace) {
+    // An upright shape: the place straight below the point (see
+    // pointStraightBelow), when there's one.
+    if (this.forceUprightJump) {
+      const below = pointStraightBelow(this, worldX, worldY);
+      if (below) {
+        const [, seg, t] = below;
+        let along = 0;
+        for (const s of this.segments) {
+          if (s === seg) return along + t * seg.length;
+          along += s.length;
+        }
+      }
+    }
+
     let traveled = 0;
     let bestArc = 0, bestDistSq = Infinity;
     for (const seg of this.segments) {
@@ -436,6 +521,7 @@ class TerrainShape {
     this.pos.y = (ay + by) / 2;
     this.halfHeight = Math.max(1, Math.abs(dy) / 2);
     this.radius = Math.max(1, len / 2);
+    this.boundX = this.pos.x; this.boundY = this.pos.y; this.boundRadius = len / 2;
   }
 }
 
@@ -1231,6 +1317,7 @@ function mergeWallClimbShapes(shapeA, shapeB) {
   }
   shapeA.totalLength = 0;
   for (const seg of shapeA.segments) shapeA.totalLength += seg.length;
+  shapeA.refreshBounds();
 }
 
 // Runs after every individual ramp-climb shape exists — looks up, for
@@ -2070,6 +2157,9 @@ TiledTerrain.load = function (mapData, anchorX, anchorY) {
     waterSolids,
     collisionData: layer.data,
     tileProps,
+    // (For GrassBlades.build — what art is drawn where.)
+    tileLayers,
+    tilesets,
     mapWidth: width,
     mapHeight: height,
     canvas,

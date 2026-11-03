@@ -10,6 +10,7 @@ const Demo = {
       { id: 'creatures', title: 'All Creatures of Our God and King — Pine Forest', about: 'LASST UNS ERFREUEN (Cologne, 1623). Lilting 3/4 woodland platformer tune: flute melody, rolling harp, soft strings, hand drums, birdsong; flute duet on the Alleluias.', build: () => Demo.allCreatures() },
       { id: 'wachet', title: 'Wake, Awake, for Night Is Flying — Asteroid Belt Run', about: 'WACHET AUF (Nicolai, 1599). Frenetic 172 BPM drum & bass: acid bass, chiptune arps, plucked melody, laser zaps and a siren breakdown.', build: () => Demo.wakeAwake() },
       { id: 'wachet2', title: 'Wake, Awake 2 — Battle March', about: 'WACHET AUF (Nicolai, 1599) as a militant villain-style march in C minor: brass melody, galloping low ostinato, timpani, military snare, choir finale.', build: () => Demo.wakeAwakeMarch() },
+      { id: 'christlag', title: 'Christ Jesus Lay in Death\'s Strong Bands — Triumphal March', about: 'CHRIST LAG IN TODESBANDEN (Walter, 1524; Bach\'s harmony, BWV 277). Triumphant D-Dorian brass march at 112 BPM: galloping low brass, timpani, military snare; the second time through adds choir, crashes and high trumpets.', build: () => Demo.christLag() },
       { id: 'rejoice', title: 'Rejoice, Ye Pure in Heart — Starport Arcade', about: 'MARION (Messiter, 1883). Swung 8-bit shuffle: chiptune lead, NES-style arpeggio chords, bouncing bass, key change the second time through.', build: () => Demo.rejoice() },
     ];
   },
@@ -341,6 +342,161 @@ const Demo = {
     march(TURN, 1);
     roll(43, TURN + 8, 2, 0.35, 0.9);
     for (let k = 0; k < 16; k++) D(38, TURN + 6 + k * 0.125, 0.35 + k * 0.04);
+
+    for (const tr of song.tracks) tr.notes.sort((a, b) => a.s - b.s || a.p - b.p);
+    return song;
+  },
+
+  // "Christ Jesus Lay in Death's Strong Bands" — tune CHRIST LAG IN TODESBANDEN (Johann Walter / Martin Luther,
+  // 1524, from the Easter chant Victimae paschali laudes), in J. S. Bach's four-part harmony, BWV 277 (public
+  // domain). Voices from the Mutopia Project's BWV 277 MIDI (only the notes are used). The melody starts on a
+  // one-beat pickup; it's in D Dorian and ends on a D-major chord.
+  // Asteroid-belt music: a triumphant brass march. The hymn plays twice in the loop — brass and drums, strings
+  // joining for the repeat; then again with choir, crashes on every line and trumpets an octave up at the end.
+  christLag() {
+    const song = Song.create();
+    song.title = 'Christ Jesus Lay in Death\'s Strong Bands (Triumphal March)';
+    song.bpm = 112;
+    song.timeSig = { num: 4, den: 4 };
+    song.key = { root: 2, scale: 'dorian' }; // D Dorian
+    song.bars = 39;
+    // A 4-bar intro plays once; the loop is the hymn twice (with a 1-bar fanfare between) plus a 2-bar turnaround.
+    song.loop = { enabled: true, start: 16, end: 156 };
+    song.master = { volume: 0.85, reverbSeconds: 2.8 };
+    song.tracks = [];
+
+    const unpack = str => str.trim().split(/\s+/).map(t => { const [p, s, d] = t.split(',').map(Number); return { p, s, d }; });
+    // [pitch, beat, length]. Beat 0 is the pickup; bars start on beats 1, 5, 9, ...
+    const S0 = unpack('69,0,1 68,1,1 69,2,0.5 71,2.5,0.5 72,3,1 74,4,1 72,5,1 71,6,1 69,7,1 69,8,1 65,9,1 67,10,1 69,11,1 67,12,0.5 65,12.5,0.5 64,13,0.5 62,13.5,0.5 64,14,1 62,15,1 69,16,1 68,17,1 69,18,0.5 71,18.5,0.5 72,19,1 74,20,1 72,21,1 71,22,1 69,23,1 69,24,1 65,25,1 67,26,1 69,27,1 67,28,0.5 65,28.5,0.5 64,29,0.5 62,29.5,0.5 64,30,1 62,31,1 62,33,0.5 64,33.5,0.5 65,34,1 67,35,1 62,36,0.5 64,36.5,0.5 65,37,1 67,38,1 69,39,1 69,40,1 74,41,1 73,42,1 74,43,1 76,44,0.5 74,44.5,0.5 72,45,1 71,46,1 69,47,1 71,48,1 72,49,1 69,50,0.5 70,50.5,0.5 72,51,1 67,52,1 65,53,1 64,54,1 62,55,2 69,57,1 67,58,1 65,59,1 64,60,1 62,61,3');
+    const A0 = unpack('65,0,1 65,1,0.5 64,1.5,1 68,2.5,0.5 69,3,1 71,4,1 71,5,0.5 69,5.5,1 68,6.5,0.5 64,7,1 64,8,1 64,9,0.5 62,9.5,0.5 61,10,0.5 62,10.5,0.5 64,11,1.5 62,12.5,0.5 61,13,0.5 62,13.5,1 61,14.5,0.5 57,15,1 65,16,1 65,17,0.5 64,17.5,1 68,18.5,0.5 69,19,1 71,20,1 71,21,0.5 69,21.5,1 68,22.5,0.5 64,23,1 64,24,1 64,25,0.5 62,25.5,0.5 61,26,0.5 62,26.5,0.5 64,27,1.5 62,28.5,0.5 61,29,0.5 62,29.5,1 61,30.5,0.5 57,31,1 57,33,1 62,34,1 62,35,0.5 60,35.5,0.5 58,36,0.5 60,36.5,0.5 62,37,0.5 57,37.5,0.5 62,38,0.5 60,38.5,0.5 60,39,1 65,40,0.5 67,40.5,0.5 69,41,0.5 70,41.5,0.5 70,42,0.5 69,42.5,0.5 69,43,1 64,44,1 64,45,0.5 65,45.5,1 64,46.5,0.5 64,47,1 65,48,1 65,49,0.5 64,49.5,0.5 65,50,1 65,51,1 64,52,1.5 62,53.5,1 61,54.5,0.5 62,55,2 62,57,1.5 64,58.5,0.5 61,59,0.5 62,59.5,1 61,60.5,0.5 57,61,3');
+    const T0 = unpack('62,0,0.5 60,0.5,0.5 59,1,1 60,2,0.5 62,2.5,0.5 64,3,1 65,4,0.5 64,4.5,0.5 64,5,0.5 65,5.5,1 64,6.5,0.25 62,6.75,0.25 61,7,1 57,8,1 57,9,1 58,10,1 57,11,1 57,12,1 57,13,0.5 53,13.5,0.5 55,14,0.5 52,14.5,0.5 53,15,1 62,16,0.5 60,16.5,0.5 59,17,1 60,18,0.5 62,18.5,0.5 64,19,1 65,20,0.5 64,20.5,0.5 64,21,0.5 65,21.5,1 64,22.5,0.25 62,22.75,0.25 61,23,1 57,24,1 57,25,1 58,26,1 57,27,1 57,28,1 57,29,0.5 53,29.5,0.5 55,30,0.5 52,30.5,0.5 53,31,1 53,33,0.5 55,33.5,0.5 57,34,1 55,35,0.5 57,35.5,0.5 58,36,1 57,37,0.5 65,37.5,0.5 65,38,0.5 64,38.5,0.5 65,39,1 60,40,1 53,41,1 55,42,1 62,43,0.5 60,43.5,0.5 59,44,1 59,45,0.5 57,45.5,0.5 57,46,0.5 56,46.5,0.5 60,47,1 62,48,1 55,49,0.5 60,49.5,0.5 60,50,1 60,51,0.5 62,51.5,0.5 64,52,0.5 62,52.5,0.5 61,53,0.5 57,53.5,0.5 58,54,0.5 57,54.5,0.25 55,54.75,0.25 53,55,2 57,57,0.5 60,57.5,0.5 58,58,1 57,59,1 55,60,2 54,62,0.5 52,62.5,0.5 54,63,1');
+    const B0 = unpack('50,0,1 50,1,1 48,2,0.5 47,2.5,0.5 45,3,0.5 57,3.5,1 56,4.5,0.5 57,5,0.5 53,5.5,0.5 50,6,0.5 52,6.5,0.5 45,7,1 49,8,1 50,9,0.5 53,9.5,0.5 52,10,0.5 50,10.5,0.5 49,11,0.5 45,11.5,0.5 50,12,1 57,13,1 45,14,1 50,15,1 50,16,1 50,17,1 48,18,0.5 47,18.5,0.5 45,19,0.5 57,19.5,1 56,20.5,0.5 57,21,0.5 53,21.5,0.5 50,22,0.5 52,22.5,0.5 45,23,1 49,24,1 50,25,0.5 53,25.5,0.5 52,26,0.5 50,26.5,0.5 49,27,0.5 45,27.5,0.5 50,28,1 57,29,1 45,30,1 50,31,1 50,33,1.5 48,34.5,0.5 46,35,0.5 45,35.5,0.5 43,36,1 50,37,0.5 48,37.5,0.5 46,38,0.5 48,38.5,0.5 41,39,1 53,40,0.5 52,40.5,0.5 50,41,1 52,42,1 54,43,1 56,44,1 57,45,0.5 53,45.5,0.5 50,46,0.5 52,46.5,0.5 45,47,1 50,48,1 48,49,1 41,50,0.5 43,50.5,0.5 45,51,0.5 46,51.5,0.5 48,52,0.5 46,52.5,0.5 45,53,0.5 41,53.5,0.5 43,54,0.5 45,54.5,0.5 46,55,2 42,57,1 43,58,1 45,59,2 38,61,3');
+    // Hold the final D-major chord through the bar's last beat.
+    for (const v of [S0, A0, T0, B0]) { const n = v[v.length - 1]; n.d = 65 - n.s; }
+
+    const P1 = 15;           // pass 1 starts here (its pickup is the intro's last beat)
+    const P2 = P1 + 68;      // pass 2, after a 1-bar fanfare (pickup on that bar's last beat)
+    const TURN = P2 + 65;    // 2-bar turnaround; its last beat is the pickup back into the loop
+    const END = TURN + 8;
+    const LINES = [0, 8, 16, 24, 33, 40, 48, 57]; // each line's first note (pickup), hymn beats
+    const shift = (list, o) => list.map(n => ({ p: n.p, s: n.s + o, d: n.d }));
+
+    const mk = opts => { const t = Song.newTrack(song, opts); song.tracks.push(t); return t; };
+    const horns = mk({ name: 'Brass Melody', instrument: 'brass', volume: 0.5, fx: { reverb: 0.35 } });
+    const trumpets = mk({ name: 'High Trumpets', instrument: 'brass', volume: 0.3, pan: 0.2, fx: { reverb: 0.45 } });
+    const section = mk({ name: 'Brass Chords', instrument: 'brass', volume: 0.26, pan: -0.2, fx: { reverb: 0.4, filter: { cutoff: 3500, q: 0.7 } } });
+    const strings = mk({ name: 'Strings', instrument: 'strings', volume: 0.2, pan: 0.25, fx: { reverb: 0.45 } });
+    const low = mk({ name: 'Low Brass Gallop', instrument: 'brass', volume: 0.3, fx: { reverb: 0.2, filter: { cutoff: 1600, q: 1 } } });
+    const sub = mk({ name: 'Sub (Bach\'s bass)', instrument: 'bass', volume: 0.4, fx: { reverb: 0.05 } });
+    const choir = mk({ name: 'Choir', instrument: 'choir', volume: 0.34, fx: { reverb: 0.5 } });
+    const timp = mk({ name: 'Timpani', instrument: 'timpani', volume: 0.55, fx: { reverb: 0.3 } });
+    const drums = mk({ name: 'Snare & Cymbals', instrument: 'drums', volume: 0.55, fx: { reverb: 0.2 } });
+    const add = (tr, p, s, d, v) => tr.notes.push({ p, s, d, v });
+    const D = (p, s, v) => add(drums, p, s, 0.25, v);
+
+    // The bass note at beat t (the last one, through the hymn's one rest), into the gallop's octave.
+    const bassRoot = (B, t) => {
+      let n = null;
+      for (const m of B) if (m.s <= t + EPS) n = m;
+      if (!n) return null;
+      let r = n.p;
+      while (r >= 48) r -= 12;
+      while (r < 36) r += 12;
+      return r;
+    };
+    // Low brass: a three-note triplet gallop on beats 1-3 of each bar, one hit on 4. withSub: the sub doubles it
+    // (outside the hymn — inside it, the sub plays Bach's own bass line instead).
+    const gallopBeat = (r, t, v, withSub = false) => {
+      const four = ((t - 16) % 4 + 4) % 4 === 3;
+      if (four) add(low, r, t, 0.5, v);
+      else [0, 1 / 3, 2 / 3].forEach((o, i) => add(low, r, t + o, 0.22, i === 0 ? v : v * 0.6));
+      if (withSub) add(sub, r, t, four ? 0.5 : 0.6, v);
+    };
+    const timpRoot = r => (r + 12 > 55 ? r : r + 12);
+    const roll = (p, end, beats, v0, v1) => {
+      const n = Math.round(beats / 0.125);
+      for (let i = 0; i < n; i++) add(timp, p, end - beats + i * 0.125, 0.125, v0 + (v1 - v0) * i / n);
+    };
+    const snareRoll = (end, beats, v0, v1) => {
+      const n = Math.round(beats / 0.125);
+      for (let k = 0; k < n; k++) add(drums, 38, end - beats + k * 0.125, 0.125, v0 + (v1 - v0) * k / n);
+    };
+    // Military snare: a marching pattern each bar, marching bass drum on 1 and 3.
+    const march = (s, v = 1) => {
+      for (const [o, a] of [[0, 0.8], [0.5, 0.35], [0.75, 0.3], [1, 0.7], [2, 0.8], [2.5, 0.35], [2.75, 0.3], [3, 0.7], [3.25, 0.35], [3.5, 0.45], [3.75, 0.55]]) D(38, s + o, a * v);
+      D(36, s, 0.85 * v);
+      D(36, s + 2, 0.75 * v);
+    };
+
+    // ---- one pass of the hymn starting at song beat o. big: the second, fuller time through.
+    const pass = (o, big) => {
+      const S = shift(S0, o), A = shift(A0, o), T = shift(T0, o), B = shift(B0, o);
+      const at = h => o + h; // hymn beat -> song beat
+      for (const n of S) {
+        add(horns, n.p, n.s, n.d * 0.92, big ? 0.95 : 0.82);
+        if (big && n.s >= at(48) - EPS) add(trumpets, n.p + 12, n.s, n.d * 0.92, 0.75);
+      }
+      for (const n of [...A, ...T]) {
+        add(section, n.p, n.s, n.d * 0.95, 0.6);
+        if (big || n.s >= at(16) - EPS) add(strings, n.p + 12, n.s, n.d, big ? 0.55 : 0.45);
+      }
+      if (big) for (const n of [...S, ...A, ...T]) add(choir, n.p, n.s, n.d, n === S[S.length - 1] ? 0.75 : 0.6);
+      else for (const n of S) if (n.s >= at(57) - EPS) add(choir, n.p, n.s, n.d, 0.6); // choir joins the last line
+      for (const n of B) add(sub, n.p >= 50 ? n.p - 12 : n.p, n.s, n.d * 0.9, 0.55);
+
+      // Gallop and marching drums on every beat/bar the hymn covers (its bars start one beat after the pickup).
+      const first = at(1), last = at(65);
+      for (let t = first; t < last - EPS; t++) {
+        const r = bassRoot(B, t);
+        if (r !== null) gallopBeat(r, t, big ? 0.9 : 0.8);
+      }
+      for (let t = first; t < last - EPS; t += 4) {
+        march(t, big ? 1.1 : 1);
+        const r = bassRoot(B, t);
+        if (r !== null) add(timp, timpRoot(r), t, 1, big ? 0.9 : 0.8);
+      }
+      // Into each line: a timpani roll on A (the dominant) and a snare roll; crashes on the big moments.
+      for (const h of LINES.slice(1)) {
+        roll(45, at(h), 1, 0.3, 0.75);
+        snareRoll(at(h), 1, 0.3, 0.75);
+        if (big || h === 33 || h === 57) D(49, at(h) + (h === 33 || h === 57 ? 0 : 1), 0.8);
+      }
+      D(49, first, 0.85);
+      D(57, at(61), 0.9); // the final chord
+    };
+    pass(P1, false);
+    pass(P2, true);
+
+    // ---- intro (once): timpani pounding D and A, the snare marching in, then the gallop and open-fifth brass stabs
+    for (let b = 0; b < 15; b++) add(timp, b % 2 ? 45 : 38, b, 1, 0.5 + b * 0.025);
+    for (let b = 4; b < 16; b += 4) march(b, 0.6 + b * 0.03);
+    for (let t = 8; t < 15; t++) gallopBeat(38, t, 0.75, true);
+    for (const s of [8, 12]) for (const p of [50, 57, 62, 69]) add(section, p, s, 1.5, 0.85);
+    for (const p of [50, 57, 62]) add(choir, p, 8, 7, 0.5);
+    roll(45, 16, 1, 0.3, 0.85);
+    snareRoll(16, 1, 0.35, 0.8);
+
+    // ---- fanfare bar between the passes: D-major triplet stabs, then A (the dominant) under the pickup
+    const fan = P1 + 65;
+    for (const [o, v] of [[0, 0.9], [1 / 3, 0.6], [2 / 3, 0.7], [1, 0.95], [2, 0.9]]) for (const p of [62, 66, 69]) add(section, p, fan + o, o < 1 ? 0.25 : 0.9, v);
+    for (const p of [69, 74]) add(horns, p, fan + 1, 1.8, 0.85);
+    for (const p of [57, 61, 64]) add(strings, p + 12, fan + 2, 2, 0.5);
+    for (let t = fan; t < fan + 4; t++) gallopBeat(t < fan + 2 ? 38 : 45, t, 0.85, true);
+    march(fan, 1);
+    add(timp, 50, fan, 1, 0.9);
+    roll(45, P2 + 1, 2, 0.35, 0.9);
+
+    // ---- turnaround (2 bars): B♭ major, then A major — then the pickup marches back to the top of the loop
+    for (const [s, r, ch] of [[TURN, 46, [62, 65, 70]], [TURN + 4, 45, [61, 64, 69]]]) {
+      for (let t = s; t < s + 4; t++) gallopBeat(r, t, 0.85, true);
+      for (const p of ch) { add(section, p, s, 3.8, 0.85); add(strings, p + 12, s, 4, 0.55); add(choir, p, s, 3, 0.55); }
+      add(timp, timpRoot(r), s, 1, 0.85);
+      march(s, 1);
+    }
+    D(49, TURN, 0.85);
+    add(horns, 69, END - 1, 0.92, 0.85); // the pickup (the hymn's first note)
+    roll(45, END, 2, 0.35, 0.9);
+    snareRoll(END, 2, 0.35, 0.95);
 
     for (const tr of song.tracks) tr.notes.sort((a, b) => a.s - b.s || a.p - b.p);
     return song;

@@ -19,6 +19,7 @@ import worldGen from '../setup/WorldGen.js';
 import Asteroid from '../entities/Asteroid.js';
 import Ooomba from '../entities/Ooomba.js';
 import MetalGradient from '../effects/MetalGradient.js';
+import TouchControls from './TouchControls.js';
 
 const TitleScreen = {};
 const rnd = () => lua.random();
@@ -936,11 +937,14 @@ function drawPrompt() {
   const g = love.graphics;
   const font = getPromptFont();
   const icons = state.buttonIcons;
-  const icon = icons ? (usingGamepad() ? icons.CROSS : icons.ENTER) : null;
+  // (On a phone or tablet: "TAP TO START" — see TouchControls.prefersTouch.)
+  const touch = TouchControls.prefersTouch();
+  const icon = touch ? null : icons ? (usingGamepad() ? icons.CROSS : icons.ENTER) : null;
 
   let before = 'PRESS';
   const after = 'TO START';
-  if (!icon) before = usingGamepad() ? 'PRESS X' : 'PRESS ENTER';
+  if (touch) before = 'TAP';
+  else if (!icon) before = usingGamepad() ? 'PRESS X' : 'PRESS ENTER';
 
   const beforeW = font.getWidth(before), afterW = font.getWidth(after);
   let iconScale = 1, iconW = 0;

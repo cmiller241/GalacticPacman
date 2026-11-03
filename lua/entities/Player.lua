@@ -17,6 +17,7 @@ local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local DustPuff = require("lua.effects.DustPuff")
 local Splash = require("lua.effects.Splash")
+local Bubbles = require("lua.effects.Bubbles")
 local GroundPoundBurst = require("lua.effects.GroundPoundBurst")
 local SilhouetteGlow = require("lua.effects.SilhouetteGlow")
 local TransporterEffect = require("lua.effects.TransporterEffect")
@@ -211,29 +212,14 @@ local INVINCIBLE_FLICKER_INTERVAL = 0.1 -- seconds per blink phase — matches t
 local DEATH_TICKS = 50
 
 local BUBBLE_HEAD_GAP         = 1.4 -- spawn distance from center, as a multiple of self.radius past the player's own position — clears his helmet instead of sitting on it
-local BUBBLE_FADE_DISTANCE    = 20   -- world units of travel, just before reaching the water's own radius, that a bubble fades out over
-local BUBBLE_RISE_SPEED_MIN   = 0.5  -- world units per baseline frame, radially outward
-local BUBBLE_RISE_SPEED_MAX   = 1.1
-local BUBBLE_WOBBLE_FREQ_MIN  = 0.01 -- radians per baseline frame the angular wobble oscillates at
-local BUBBLE_WOBBLE_FREQ_MAX  = 0.03
-local BUBBLE_WOBBLE_AMPLITUDE = 0.1  -- radians of angular sway at full swing
-local BUBBLE_RADIUS_MIN       = 2.5
-local BUBBLE_RADIUS_MAX       = 6
-local BUBBLE_COLOR            = { 0.85, 0.97, 1.0 }
-
-local function newBubble(centerX, centerY, angle, startR, targetR)
-  return {
-    centerX = centerX,
-    centerY = centerY,
-    baseAngle = angle,
-    r = startR,
-    targetR = targetR,
-    wobblePhase = math.random() * math.pi * 2,
-    wobbleFreq = BUBBLE_WOBBLE_FREQ_MIN + math.random() * (BUBBLE_WOBBLE_FREQ_MAX - BUBBLE_WOBBLE_FREQ_MIN),
-    riseSpeed = BUBBLE_RISE_SPEED_MIN + math.random() * (BUBBLE_RISE_SPEED_MAX - BUBBLE_RISE_SPEED_MIN),
-    radius = BUBBLE_RADIUS_MIN + math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN),
-  }
-end
+-- Sizes and rise speeds for his bubbles; the rest of their look and
+-- motion lives in lua/effects/Bubbles.lua.
+local BUBBLES = {
+  radiusMin = 2,   -- world units, before they swell on the way up
+  radiusMax = 5.5,
+  riseMin = 0.5,   -- world units per baseline frame, radially outward
+  riseMax = 1.1,
+}
 
 function Player.new(x, y)
   local self = setmetatable({}, Player)
@@ -555,6 +541,7 @@ function Player:enterBallMode()
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
   self.morphState = "toBall"
   self.morphElapsed = 0
+  if state.audioManager then state.audioManager:playMorphBall() end
   -- Curling up mid ground pound calls the pound off (see
   -- tryGroundPound: a ball doesn't pound) — he just falls as a ball.
   self.isGroundPounding = false
@@ -592,6 +579,7 @@ function Player:exitBallMode()
   end
   self.morphState = "toHuman"
   self.morphElapsed = 0
+  if state.audioManager then state.audioManager:playMorphUnball() end
 end
 
 -- Advances whichever transition (if any) is currently playing, and
@@ -1556,20 +1544,10 @@ function Player:updateBubbles()
     -- currently on. Skipped entirely if he's already right at the
     -- surface, with no room left to spawn one before the target.
     local spawnR = dist + self.radius * BUBBLE_HEAD_GAP
-    local targetR = water.radius
-    if spawnR < targetR then
-      table.insert(self.bubbles, newBubble(water.pos.x, water.pos.y, angle, spawnR, targetR))
-    end
+    Bubbles.spawn(self.bubbles, water.pos.x, water.pos.y, angle, spawnR, water.radius, BUBBLES)
   end
 
-  for i = #self.bubbles, 1, -1 do
-    local b = self.bubbles[i]
-    b.r = b.r + b.riseSpeed * timeScale
-    b.wobblePhase = b.wobblePhase + b.wobbleFreq * timeScale
-    if b.r >= b.targetR then
-      table.remove(self.bubbles, i)
-    end
-  end
+  Bubbles.update(self.bubbles, timeScale)
 end
 
 -- Drawn separately from the rest of the player (see main.lua's own call
@@ -1578,23 +1556,7 @@ end
 -- muddied underneath it — matches how the water planet's own now-removed
 -- ambient bubbles used to layer.
 function Player:drawBubbles()
-  for _, b in ipairs(self.bubbles or {}) do
-    local angle = b.baseAngle + math.sin(b.wobblePhase) * BUBBLE_WOBBLE_AMPLITUDE
-    local bx = b.centerX + math.cos(angle) * b.r
-    local by = b.centerY + math.sin(angle) * b.r
-
-    local fadeStart = b.targetR - BUBBLE_FADE_DISTANCE
-    local fade = 1
-    if b.r > fadeStart then
-      fade = 1 - (b.r - fadeStart) / BUBBLE_FADE_DISTANCE
-    end
-
-    love.graphics.setColor(BUBBLE_COLOR[1], BUBBLE_COLOR[2], BUBBLE_COLOR[3], 0.5 * fade)
-    love.graphics.circle("fill", bx, by, b.radius)
-    love.graphics.setColor(1, 1, 1, 0.75 * fade)
-    love.graphics.circle("line", bx, by, b.radius)
-  end
-  love.graphics.setColor(1, 1, 1, 1)
+  Bubbles.draw(self.bubbles or {})
 end
 
 function Player:update()
