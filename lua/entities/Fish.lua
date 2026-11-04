@@ -58,20 +58,15 @@ local BUBBLES = { radiusMin = 1.2, radiusMax = 3.2, riseMin = 0.4, riseMax = 0.9
 -- airborne), NOT a canned animation, so it naturally rises, curves, and
 -- comes back down.
 --
--- DECIDING to jump and actually LAUNCHING are deliberately two separate
--- steps (see self.headingToJump / Fish:decideToJump / Fish:trySwimUpdate)
--- rather than one check that fires wherever the fish happens to already
--- be: an earlier version rolled the jump right there, wherever a fish
--- happened to be while merely "somewhat near" the surface — which
--- launched from well short of the water's TRUE edge more often than
--- not, so the splash fired before the fish ever reached the shoreline,
--- and the arc (tuned assuming a launch right at the surface) usually
--- never even cleared the true edge at all. Now, deciding to jump just
--- picks a shoreline point (radius = swimBandRadii()'s own maxR) as the
--- fish's next target and lets its ordinary steering carry it there;
--- the leap only actually launches once it truly arrives — so the exit
--- splash and the launch position are always genuinely at the shore,
--- matching how Player.lua's own water crossing already looks.
+-- DECIDING to jump and actually LAUNCHING are two separate steps (see
+-- self.headingToJump / Fish:decideToJump / Fish:trySwimUpdate).
+-- Deciding picks a shoreline point (radius = swimBandRadii()'s maxR) as
+-- the fish's next target and lets its ordinary steering carry it there;
+-- the leap only launches once it arrives. Launching from wherever the
+-- fish happened to be would start most leaps short of the water's true
+-- edge: the splash would fire before it reached the shore, and the arc
+-- (tuned for a launch right at the surface) often wouldn't clear the
+-- edge at all.
 --
 -- The water's own gravityRadius (radius + constants.INFLUENCE_PADDING,
 -- see Planetoid.lua) is the hard ceiling on how high that arc is ever
@@ -202,10 +197,9 @@ local HEAD_SHAPE = {
    0.55, -0.30,
 }
 
--- Same waist-to-tail-tip points FISH_SHAPE used to have, but expressed
--- relative to TAIL_PIVOT_X (i.e. that subtracted out of every x) so
--- rotating this piece around the pivot in :draw() sweeps it correctly
--- instead of orbiting some other point.
+-- The waist-to-tail-tip points, relative to TAIL_PIVOT_X (subtracted
+-- from every x), so rotating this piece round the pivot in :draw()
+-- sweeps it instead of orbiting some other point.
 local TAIL_SHAPE = {
    0.00,  0.07, -- waist, upper
   -0.38,  0.42, -- upper tail tip
@@ -381,13 +375,10 @@ function Fish:trySwimUpdate(ts)
       return
     elseif self.headingToJumpElapsed > JUMP_SHORE_TIMEOUT_SECONDS then
       -- Hard safety net — this state must not be able to persist
-      -- indefinitely no matter what. Setting jumpCooldown here (an
-      -- earlier version didn't) is what actually matters: without it,
-      -- jumpCooldown was already <= 0 (that's what allowed deciding to
-      -- jump in the first place), so a timed-out attempt would leave a
-      -- fish immediately eligible to decide again on the very next
-      -- frame — repeating this same failed attempt forever, which is
-      -- what "the timeout" actually looked like in practice.
+      -- indefinitely. Setting jumpCooldown here matters: it was already
+      -- <= 0 (that's what allowed deciding to jump), so without it a
+      -- timed-out attempt would leave the fish free to decide again on
+      -- the very next frame, repeating the same failed attempt forever.
       self.headingToJump = false
       self.jumpCooldown = JUMP_COOLDOWN_SECONDS
       self:pickNewTarget()
@@ -422,16 +413,12 @@ function Fish:trySwimUpdate(ts)
   self.pos.y = self.pos.y + math.sin(self.heading) * approachSpeed * ts
 
   -- Defensive clamp back into a swim band — ALWAYS enforced, including
-  -- while headingToJump (an earlier version skipped it then, reasoning
-  -- that the shore target already sits at the boundary so there was
-  -- nothing to correct — but the steering can still overshoot a single
-  -- point target at a shallow angle, same as any other target, and with
-  -- no clamp at all in that state there was nothing stopping an
-  -- overshooting fish from sailing out into open space and slowly
-  -- looping back, which read as "speeds off, loops around, does it
-  -- again." While headingToJump the ceiling is widened to just inside
-  -- the water's TRUE edge (rather than the ordinary, more conservative
-  -- maxR) so it can still actually reach the shore to launch from.
+  -- while headingToJump: the steering can overshoot the shore target at
+  -- a shallow angle like any other target, and without the clamp a fish
+  -- would sail out into open space and slowly loop back. While
+  -- headingToJump the ceiling is widened to just inside the water's TRUE
+  -- edge (rather than the ordinary, more conservative maxR) so it can
+  -- still reach the shore to launch from.
   local minR, maxR = self:swimBandRadii()
   if self.headingToJump then
     maxR = water.radius - 5
@@ -457,14 +444,10 @@ end
 --     search below): aimed straight at the other water body's own
 --     center direction, so the shore point is the one closest to it.
 --   - Ordinary in-place hop: chosen NEAR the fish's own current
---     angular position (see JUMP_SHORE_ANGLE_SPREAD), not fully random
---     around the whole pool — an earlier version picked a completely
---     random angle, which meant a fish deciding to jump on one side of
---     the pool could end up assigned a shore point clear on the
---     opposite side, forcing a long beeline across the entire diameter
---     before it could ever launch. That read as the fish suddenly
---     "speeding to the other side" rather than a natural short swim out
---     to the nearest bit of shore.
+--     angular position (see JUMP_SHORE_ANGLE_SPREAD). A fully random
+--     angle could send it beelining across the whole pool to the far
+--     shore, which reads as "speeding to the other side" rather than a
+--     short swim out to the nearest bit of shore.
 function Fish:decideToJump()
   local water = self.water
   local _, maxR = self:swimBandRadii()
@@ -478,22 +461,16 @@ function Fish:decideToJump()
   -- origin launch only has to bridge the gap between its own reach and
   -- the destination's ring, not the destination's true surface.
   --
-  -- Picks UNIFORMLY AT RANDOM among every reachable body, not always the
-  -- single nearest one — an earlier version always took the nearest,
-  -- which reads fine with just two pools but silently starves any
-  -- target that isn't the closest once there are several: the three
-  -- small pools added later all sit clustered right next to each other,
-  -- so from inside that cluster the nearest reachable body is nearly
-  -- always ANOTHER small pool, and the far larger pool loses that
-  -- distance comparison every single time even when perfectly in reach.
-  -- That one-directional bias — not a real reach limit — is what made
-  -- fish drain into the small-pool cluster and never climb back out.
+  -- Picks UNIFORMLY AT RANDOM among every reachable body, not the
+  -- nearest. The three small pools sit clustered together, so from
+  -- inside the cluster the nearest reachable body is nearly always
+  -- another small pool; always taking the nearest would drain fish into
+  -- the cluster and never let them jump back to the big pool.
   local crossCandidates = {}
   if state.planetoids then
     -- Same flat, size-independent allowance :updateJump's safety clamp
-    -- uses — see JUMP_CROSS_REACH_BONUS's own comment for why this
-    -- can't be the old radius-proportional formula (it silently gave
-    -- small origin pools far less real reach than large ones).
+    -- uses — see JUMP_CROSS_REACH_BONUS's own comment for why it isn't
+    -- proportional to the pool's radius.
     local crossCeiling = water.radius + JUMP_CROSS_REACH_BONUS
     for _, p in ipairs(state.planetoids) do
       if p.isWaterPlanet and p ~= water then
@@ -523,13 +500,7 @@ function Fish:decideToJump()
     self.crossTargetDir = Vector2.new(math.cos(angle), math.sin(angle))
   else
     -- Chosen NEAR the fish's own current angular position, not fully
-    -- random around the whole pool — an earlier version picked a
-    -- completely random angle, which meant a fish deciding to jump on
-    -- one side of the pool could end up assigned a shore point clear on
-    -- the opposite side, forcing a long beeline across the entire
-    -- diameter before it could ever launch. That read as the fish
-    -- suddenly "speeding to the other side" rather than a natural short
-    -- swim out to the nearest bit of shore.
+    -- random round the pool (see decideToJump's comment above).
     local currentAngle = math.atan2(self.pos.y - water.pos.y, self.pos.x - water.pos.x)
     angle = currentAngle + (math.random() - 0.5) * JUMP_SHORE_ANGLE_SPREAD
   end

@@ -27,7 +27,6 @@ local state = require("lua.state")
 local utils = require("lua.utils")
 local Beam = require("lua.world.Beam")
 local Lava = require("lua.world.Lava")
-local WaterPlanet = require("lua.world.WaterPlanet")
 local Spikey = require("lua.world.Spikey")
 local MissileOutpost = require("lua.world.MissileOutpost")
 local PortalGun = require("lua.systems.PortalGun")
@@ -261,7 +260,6 @@ local function updateMissileOutposts()
 end
 
 local function updateSharedClocks()
-  WaterPlanet.updateSharedClock()
   Spikey.updateSharedClock()
 end
 

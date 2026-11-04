@@ -1,10 +1,13 @@
 -- main.lua
+--
+-- love.load builds the world; love.update and love.draw run each frame as
+-- a list of named steps, in order. Debug overlays are in
+-- lua/debug/DebugDraw.lua, the HUD text in lua/ui/Hud.lua, and the start
+-- positions and teleport list in lua/setup/StartPositions.lua.
 
 local state = require("lua.state")
 local constants = require("lua.constants")
-local Vector2 = require("lua.vector2")
 local Planetoid = require("lua.world.Planetoid")
-local Asteroid = require("lua.entities.Asteroid")
 local StompBurst = require("lua.effects.StompBurst")
 local TitleScreen = require("lua.ui.TitleScreen")
 local PauseMenu = require("lua.ui.PauseMenu")
@@ -17,6 +20,7 @@ local assetLoading = require("lua.setup.assetLoading")
 local inputHandlers = require("lua.setup.InputHandlers")
 local gamepadInput = require("lua.setup.GamePadInput")
 local worldGen = require("lua.setup.WorldGen")
+local StartPositions = require("lua.setup.StartPositions")
 local World = require("lua.levels.World")
 local WorldObjects = require("lua.systems.WorldObjects")
 local Projectiles = require("lua.systems.Projectiles")
@@ -27,7 +31,6 @@ local MiniMap = require("lua.ui.MiniMap")
 local BeltOrbit = require("lua.systems.BeltOrbitSystem")
 local utils = require("lua.utils")
 local LockOutline = require("lua.effects.LockOutline")
-local InfluenceRing = require("lua.effects.InfluenceRing")
 local VatsOverlay = require("lua.effects.VatsOverlay")
 local VatsCursor = require("lua.effects.VatsCursor")
 local PortalGun = require("lua.systems.PortalGun")
@@ -42,18 +45,8 @@ local MissileOutpost = require("lua.world.MissileOutpost")
 local CameraShake = require("lua.effects.CameraShake")
 local WeaponModes = require("lua.systems.WeaponModes")
 local WeaponBar = require("lua.ui.WeaponBar")
-
-local collisionSystem
-
--- Reused every frame rather than built fresh each time: the planetoids
--- the collision passes check (see collidablePlanetoids in love.update),
--- which of them are immovable, and the camera nudged by screen shake.
-local collidablePlanetoids, immovablePlanetoids = {}, {}
-local shakenCamera = { x = 0, y = 0 }
--- An empty list for `ipairs(state.cannons or NONE)` and the like, when a
--- world list doesn't exist — instead of a new empty table every frame.
--- Read-only: nothing may add to it.
-local NONE = setmetatable({}, { __newindex = function() error("main.lua: NONE is read-only") end })
+local DebugDraw = require("lua.debug.DebugDraw")
+local Hud = require("lua.ui.Hud")
 
 -- =====================================================================
 -- START POSITION (for testing)
@@ -76,204 +69,53 @@ local NONE = setmetatable({}, { __newindex = function() error("main.lua: NONE is
 --                 (needs World.SHOW.expressway — see lua/levels/World.lua)
 --
 -- If the planet you pick is switched off, he starts at the shelter and
--- the console says why.
+-- the console says why. T in game opens a list of the same places.
 local START_AT = "fisherman"
 local TILED_START_COLUMN = 146 -- counting from 0, like Tiled (146: over the middle of Level2's cracked, poundable column)
 
--- Each option sets state.respawnPoint (see Player:respawn). Called near
--- the end of love.load, once every planet exists. `expresswayEntry` is
--- { planet, cannon } when the expressway was built, else nil.
-local START_POSITIONS = {
-  mining = function()
-    local planet = state.miningPlanet
-    if not planet then return false end
-    -- The planet drifts: followsPlanet keeps the point on top of it
-    -- every frame (see love.update).
-    return {
-      x = planet.pos.x, y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
-      planet = planet, followsPlanet = true,
-    }
-  end,
+local collisionSystem
 
-  fisherman = function()
-    local rect = state.roundedRectPlanet
-    if not rect then return false end
-    -- No planet named: he lands through the ordinary collision pass.
-    return {
-      x = rect.pos.x - rect.halfWidth * 0.4,
-      y = rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
-    }
-  end,
-
-  cracked = function()
-    local planet = state.crackedPlanet
-    if not planet then return false end
-    return {
-      x = planet.pos.x,
-      y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS - 20,
-    }
-  end,
-
-  tiled = function()
-    local planet = state.tiledPlanet
-    if not planet then return false end
-    local columns = planet.rings[1].count
-    local angle = -math.pi / 2 + (TILED_START_COLUMN + 0.5) / columns * 2 * math.pi
-    local dist = planet.radius + constants.PLAYER_RADIUS + 20
-    return {
-      x = planet.pos.x + math.cos(angle) * dist,
-      y = planet.pos.y + math.sin(angle) * dist,
-    }
-  end,
-
-  tunnel = function()
-    -- On the sky dome's ground, a few steps left of the ball tunnel's
-    -- mouth in Level1 (map column 33, row 35),
-    -- dropping onto the floor (row 36).
-    local level = state.tiledLevels and state.tiledLevels[1]
-    if not level then return false end
-    local T = 64
-    return {
-      x = level.anchorX + 27.5 * T,
-      y = level.anchorY + 36 * T - constants.PLAYER_RADIUS - 20,
-    }
-  end,
-
-  pinball = function()
-    if not state.pinballPlanet then return false end
-    local portal = state.pinballPlanet.interior:getPortalPosition()
-    return { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
-  end,
-
-  expressway = function(expresswayEntry)
-    if not expresswayEntry then return false end
-    -- Standing a little round from the cannon, not in it.
-    local entryPlanet, entryCannon = expresswayEntry.planet, expresswayEntry.cannon
-    local standAngle = entryCannon.mountAngle - 0.45
-    local standDist = entryPlanet.radius + constants.PLAYER_RADIUS
-    return {
-      x = entryPlanet.pos.x + math.cos(standAngle) * standDist,
-      y = entryPlanet.pos.y + math.sin(standAngle) * standDist,
-      planet = entryPlanet,
-    }
-  end,
-}
-
-local function applyStartPosition(expresswayEntry)
-  if START_AT == "shelter" then return end
-  local place = START_POSITIONS[START_AT]
-  local point = place and place(expresswayEntry)
-  if not point then
-    print(string.format('main.lua: START_AT = "%s" %s - starting at the shelter instead.', START_AT,
-      place and "but that planet is switched off" or "isn't a known start position"))
-    return
-  end
-  state.respawnPoint = point
-  -- He isn't waiting behind the shelter door, so skip its intro.
-  state.spaceShelter.playerInFront = true
-  state.spaceShelter.introDone = true
-end
-
--- =====================================================================
--- DEBUG TELEPORT (T)
--- =====================================================================
--- T pauses the game with a list of every start position above; picking
--- one puts him there straight away, the same as starting there would
--- (see PauseMenu.openList). It also becomes his respawn point, so dying
--- brings him back to it.
-local TELEPORT_PLACES = {
-  { key = "shelter", label = "SPACE SHELTER" },
-  { key = "mining", label = "MINING PLANET" },
-  { key = "fisherman", label = "FISHERMAN'S PLANET" },
-  { key = "cracked", label = "CRACKED PLANET" },
-  { key = "tiled", label = "TILED PLANET" },
-  { key = "tunnel", label = "SKY DOME BALL TUNNEL" },
-  { key = "pinball", label = "PINBALL TABLE" },
-  { key = "expressway", label = "EXPRESSWAY" },
-}
-
--- Remembered by love.load for the teleport list: the shelter's own
--- respawn point (before START_AT changes it) and the expressway's entry.
-local shelterRespawnPoint, expresswayEntry
-local lastTeleport = 1 -- the list opens on whichever was picked last
-
--- Where `key` (a TELEPORT_PLACES key) would put him right now, or nil
--- if that planet is switched off.
-local function teleportPoint(key)
-  if key == "shelter" then return shelterRespawnPoint end
-  return START_POSITIONS[key](expresswayEntry) or nil
-end
-
-local function teleportTo(key)
-  local player, point = state.player, teleportPoint(key)
-  if not (player and point) then return end
-  state.respawnPoint = point
-  -- (Out of the shelter's intro, if it was still playing.)
-  if state.spaceShelter then
-    state.spaceShelter.playerInFront = true
-    state.spaceShelter.introDone = true
-  end
-  -- Nothing from where he was comes with him.
-  player:clearPullTarget()
-  player:clearLockTarget()
-  state.vatsActive = false
-  player.deathZoneRespawn = nil -- (Player:respawn would go there instead)
-  player:respawn()
-  -- The camera jumps with him, and the world round him is streamed in
-  -- now rather than up to half a second later.
-  state.portalCameraGlide = nil
-  state.cannonZoomFlying, state.cannonZoomReturn = nil, nil
-  Camera.pointAtPlayer()
-  worldGen.updateActiveCells()
-  state.cellCheckTimer = 0
-end
-
-local function openTeleportList()
-  local options = {}
-  for i, place in ipairs(TELEPORT_PLACES) do
-    options[i] = { label = place.label, enabled = teleportPoint(place.key) ~= nil }
-  end
-  PauseMenu.openList("TELEPORT", options, function(index)
-    lastTeleport = index
-    teleportTo(TELEPORT_PLACES[index].key)
-  end, lastTeleport)
-end
+-- Reused every frame rather than built fresh each time: the planetoids
+-- the collision passes check (see runWorldCollisions), which of them are
+-- immovable, and the camera nudged by screen shake.
+local collidablePlanetoids, immovablePlanetoids = {}, {}
+local shakenCamera = { x = 0, y = 0 }
+-- An empty list for `ipairs(state.cannons or NONE)` and the like, when a
+-- world list doesn't exist — instead of a new empty table every frame.
+-- Read-only: nothing may add to it.
+local NONE = setmetatable({}, { __newindex = function() error("main.lua: NONE is read-only") end })
 
 -- Upward speed (world units per baseline frame) the player hops off a
 -- freshly flattened Ooomba with — a small rebound, well under a jump.
 local OOOMBA_STOMP_BOUNCE = 7
--- Opacity of the 'R' gravity rings (see the ring pass in love.draw).
-local INFLUENCE_RING_ALPHA_PULLING = 0.9  -- the body whose gravity has hold of him right now
-local INFLUENCE_RING_ALPHA_INSIDE = 0.5   -- he's inside its reach, but another body has the stronger claim
-local INFLUENCE_RING_ALPHA_NEAR = 0.35    -- he's just outside its reach...
-local INFLUENCE_RING_ALPHA_FAR = 0.05     -- ...down to this once he's INFLUENCE_RING_FADE_DISTANCE beyond it
-local INFLUENCE_RING_FADE_DISTANCE = 700
+-- V.A.T.S. slow motion: the time scale it eases to, how fast (per
+-- baseline frame), and how close counts as there.
 local VATS_TIME_SCALE = 0.05
 local VATS_EASE_RATE = 0.12
 local VATS_EASE_SNAP_THRESHOLD = 0.005
+-- Frame time is measured in 60fps frames, clamped to a 20fps floor so a
+-- stall can't fling anything through geometry.
+local FPS_BASELINE = 60
+local MAX_FRAME_DT = 0.05
 
--- love.load runs once when the program starts — and again, in full,
--- every time the pause menu's EXIT TO TITLE is chosen (see
--- lua/ui/PauseMenu.lua and the PauseMenu.onExitToTitle hookup below).
--- Rebuilding the whole world from scratch is what guarantees a fresh
--- game really is fresh: every Ooomba back, every lever and gate in its
--- starting position, every coin uncollected, with no per-object "undo"
--- anywhere to keep in step as the game grows. Only the genuinely
--- one-time setup (window, images/sounds, input callbacks) is skipped on
--- those later runs.
+-- =====================================================================
+-- LOAD
+-- =====================================================================
+-- love.load runs once at startup, and again in full every time the pause
+-- menu's EXIT TO TITLE is chosen. Rebuilding the whole world is what
+-- makes a fresh game fresh: every Ooomba back, every lever reset, every
+-- coin uncollected. Only one-time setup (window, assets, input
+-- callbacks) is skipped on later runs.
 local hasLoadedOnce = false
 
--- Empties everything a previous run of love.load left in `state`.
--- Most of the world's lists are simply assigned fresh further down, but
--- a few are only ever APPENDED to there (or created with `or {}`), and
--- would otherwise come back with last game's contents still in them.
+-- Empties everything a previous run of love.load left in `state`. Most
+-- lists are assigned fresh in love.load, but a few are only appended to
+-- there and would otherwise keep last game's contents.
 local function resetWorldState()
   state.planetoids, state.enemies = {}, {}
   -- Every object list the registry knows (levers, coins, fish, ...).
   WorldObjects.reset()
 
-  -- Set only inside conditional blocks below — cleared so nothing from
-  -- the last game survives if a block doesn't run.
   state.tiledLevels, state.recallables = nil, nil
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
@@ -288,7 +130,6 @@ local function resetWorldState()
   WaterSystem.reset()
   Recall.reset()
 
-  -- Whatever was in progress.
   Camera.reset()
   state.cameraDirector = nil
   state.dialogueActive = false
@@ -298,9 +139,7 @@ local function resetWorldState()
   state.vatsWasActive = false
   state.gamepadPullHeld = false
 
-  -- The old world's canvases (baked terrain and so on) are garbage now;
-  -- collected here, before building their replacements, rather than
-  -- left to pile up alongside them.
+  -- Twice: the first pass runs finalizers, the second frees what they released.
   collectgarbage()
   collectgarbage()
 end
@@ -312,26 +151,12 @@ function love.load()
   if firstLoad then
     love.window.setTitle("Asteroid Bob")
 
-    -- conf.lua starts in 1920x1080 borderless fullscreen (16:9, for
-    -- trailer clips). If fullscreen is ever turned off there, fill the
-    -- screen with an ordinary maximized window instead.
     if not love.window.getFullscreen() then
       love.window.maximize()
     end
   end
 
-  -- Pixel-art default: LÖVE's own default is "linear" filtering, which
-  -- blends neighboring texels — including across tile boundaries in a
-  -- shared atlas image (img/platform.png) the moment it's sampled while
-  -- baking TiledTerrain's level canvas. That's what caused both the faint
-  -- seam lines between tiles (bleeding a sliver of the adjacent tile's
-  -- edge color) and the overall soft/anti-aliased look instead of crisp
-  -- SNES-style pixels. Must be set before any image/canvas is created —
-  -- it only affects textures loaded after this call, not retroactively —
-  -- so this has to run before assetLoading.loadAssets() below. Anything
-  -- that specifically wants smooth shading instead (Planetoid's canvas)
-  -- already sets its own filter explicitly afterward, which overrides
-  -- this default for that one texture only.
+  -- Pixel-art default (crisp tiles, no seams between atlas tiles).
   love.graphics.setDefaultFilter("nearest", "nearest")
 
   resetWorldState()
@@ -343,19 +168,8 @@ function love.load()
   state.showCollisionDebug = false
   state.showBeltCellDebug = false
   state.showInfluenceRings = false
-  -- Global record of which one-time scripted NPC sequences (see
-  -- Script.lua/CameraDirector.lua) have already played out, keyed by an
-  -- arbitrary id each script chooses for itself (e.g. "robotButlerIntro")
-  -- — checked by the NPC's own tryInteract so the full sequence only ever
-  -- plays once per session, falling back to an ordinary one-line
-  -- greeting afterward.
   state.scriptsCompleted = {}
   state.vatsActive = false
-  -- Whether cycling the lock-on target with L1/R1 also drops into
-  -- V.A.T.S. (slow motion + the screen overlay) on its own. Off: L1/R1
-  -- just pick the next/previous target in real time, and V.A.T.S. is
-  -- only ever entered deliberately, with Triangle (see GamePadInput.lua's
-  -- own maybeAutoEnterVats and Triangle handling).
   state.vatsAutoEnterOnLock = false
   state.vatsTimeScale = VATS_TIME_SCALE
   state.score = 0
@@ -367,44 +181,36 @@ function love.load()
   if firstLoad then
     assetLoading.loadAssets()
     inputHandlers.attachInputHandlers()
-    -- EXIT TO TITLE: run this whole function again (see its own header).
+    -- EXIT TO TITLE: run this whole function again.
     PauseMenu.onExitToTitle = function() love.load() end
-    -- T: the debug teleport list (see openTeleportList).
-    PauseMenu.onTeleportKey = openTeleportList
+    PauseMenu.onTeleportKey = StartPositions.openTeleportList
   end
 
   collisionSystem = CollisionSystem.new()
   state.starfield = Starfield.new()
 
-  -- Every hand-placed landmark, the dome's Tiled interior and the
-  -- player (see lua/levels/World.lua).
+  -- Every hand-placed landmark, the dome's Tiled interior and the player
+  -- (see lua/levels/World.lua).
   local world = World.build()
-  -- (For the T teleport list.)
-  shelterRespawnPoint = state.respawnPoint
-  expresswayEntry = world.expresswayEntry
 
-  -- Testing start spot (START_AT, top of this file), now that every
+  -- The testing start spot (START_AT, top of this file), now that every
   -- planet it could pick exists.
-  applyStartPosition(world.expresswayEntry)
+  StartPositions.init({
+    shelterRespawnPoint = state.respawnPoint,
+    expresswayEntry = world.expresswayEntry,
+    tiledStartColumn = TILED_START_COLUMN,
+  })
+  StartPositions.apply(START_AT)
 
-  -- Stream the 3x3 around the house, not world center — must run AFTER
-  -- the dome above is created and assigned to state.skyDomePlanet, not
-  -- before: cell generation steers new planetoids/asteroids away from
-  -- the dome's footprint (see WorldGen.lua's isNearSkyDome), and it can
-  -- only do that for cells generated while state.skyDomePlanet is
-  -- already set — which, for this exact starting neighborhood, is
-  -- every cell that actually overlaps the dome's home area.
+  -- Stream the 3x3 around the house (after the dome exists, so cells
+  -- steer clear of it).
   worldGen.generateStartingNeighborhood(World.HOME_CELL_COL, World.HOME_CELL_ROW)
 
   state.sun = Sun.new(state.sceneWidth / 2, state.sceneHeight / 2, 1920)
 
   state.gravitySystem = GravitySystem.new(state.planetoids)
 
-  -- Everything above sets the game up exactly as it starts — the title
-  -- screen then borrows the player and stands him out in the belt until
-  -- start is pressed (see lua/ui/TitleScreen.lua).
-  -- Fading in from black when this is a return from the pause menu, so
-  -- the rebuild isn't a hard cut.
+  -- The title screen borrows the player until start is pressed.
   TitleScreen.enter(not firstLoad)
 
   -- Pointed at the player from the very first frame (love.update keeps
@@ -412,34 +218,9 @@ function love.load()
   Camera.pointAtPlayer()
 end
 
-local function updatePlanetoidsPhysics()
-  for _, p in ipairs(state.planetoids) do
-    if p.recalling then
-      -- Rewinding: Recall.update moves it (see lua/systems/Recall.lua).
-    elseif p.isImmovable then
-      p.vel.x, p.vel.y = 0, 0
-    else
-      p.pos:addScaled(p.vel, state.timeScale)
-
-      if p.pos.x - p.radius < 0 then
-        p.pos.x = p.radius
-        p.vel.x = -p.vel.x
-      end
-      if p.pos.x + p.radius > state.sceneWidth then
-        p.pos.x = state.sceneWidth - p.radius
-        p.vel.x = -p.vel.x
-      end
-      if p.pos.y - p.radius < 0 then
-        p.pos.y = p.radius
-        p.vel.y = -p.vel.y
-      end
-      if p.pos.y + p.radius > state.sceneHeight then
-        p.pos.y = state.sceneHeight - p.radius
-        p.vel.y = -p.vel.y
-      end
-    end
-  end
-end
+-- =====================================================================
+-- UPDATE
+-- =====================================================================
 
 -- Is he anywhere in the Sky Dome level? Standing on (or last pulled by)
 -- the dome's deck or any of its Tiled level's tiles (each tile is its own
@@ -471,38 +252,15 @@ local function musicForPlayer()
   return nil
 end
 
-function love.update(dt)
-  if dt > 0 then
-    state.fps = (state.fps or 0) * 0.9 + (1 / dt) * 0.1
-  end
-
-  gamepadInput.pollGamepad(dt)
-
-  -- Paused (see lua/ui/PauseMenu.lua): nothing below runs at all —
-  -- no movement, physics, timers or world streaming — until the menu
-  -- is closed. The pad is still polled above, since that's how the menu
-  -- itself is driven.
-  if PauseMenu.isOpen() then return end
-
-  -- V.A.T.S. rules. While it's active (Triangle — see GamePadInput.lua)
-  -- the player doesn't act on his own: no walking (see the move call
-  -- further down), and no jumping, ground-pounding, curling into a ball
-  -- or firing (each of those Player methods refuses while
-  -- state.vatsActive). All he can do is choose a target — L1/R1 or the
-  -- right-stick cursor — and press L2 to pull-beam to it, which ends
-  -- V.A.T.S. (Player:trySelectPullTarget).
-  --
-  -- A pull already under way when V.A.T.S. is entered carries on by
-  -- itself, even with L2 released (GamePadInput.lua doesn't drop it
-  -- while V.A.T.S. is active) — which is what lets him chain from one
-  -- planetoid to the next without landing: pull, V.A.T.S., pick the
-  -- next, pull again.
-  --
-  -- And the moment V.A.T.S. ends, however it ends:
-  --   - whatever was locked during it is unlocked;
-  --   - a pull that was only still going because V.A.T.S. was holding
-  --     it — nobody is actually holding L2 (or the right mouse button)
-  --     — is dropped, back to the ordinary hold-to-pull rule.
+-- V.A.T.S. (Triangle — see GamePadInput.lua): while it's active he only
+-- picks a pull target; walking, jumping and firing are refused (see
+-- noSteering in movePlayer, and the Player methods that check
+-- state.vatsActive). A pull already under way carries on even with L2
+-- released, which lets him chain pulls without landing.
+--
+-- The moment it ends: whatever was locked is unlocked, and a pull that
+-- nobody is holding L2 (or the right mouse button) for is dropped.
+local function handleVatsEnd()
   if state.vatsWasActive and not state.vatsActive and state.player then
     state.player:clearLockTarget()
     if state.player.pullTarget and not (state.gamepadPullHeld or love.mouse.isDown(1)) then
@@ -510,29 +268,16 @@ function love.update(dt)
     end
   end
   state.vatsWasActive = state.vatsActive
+end
 
-  TitleScreen.update(dt)
-  VatsCursor.update(dt)
-
-  -- Background music fades to suit where he is (see lua/AudioManager.lua).
-  if state.audioManager then state.audioManager:updateMusic(musicForPlayer(), dt) end
-
-  -- Normalizes this frame's real elapsed time to "how many 60fps-baseline
-  -- frames this update represents" (1.0 at exactly 60fps) — clamped so a
-  -- stall or frame-drop spike can't fling anything through geometry.
-  -- Every per-frame rate below is expressed in these units so the game's
-  -- existing speed/force/easing tuning (all written assuming ~60fps)
-  -- keeps meaning the same thing at exactly 60 FPS, and produces the same
-  -- real-time behavior at any other frame rate.
-  local FPS_BASELINE = 60
-  local MAX_FRAME_DT = 0.05 -- clamp to a 20fps floor
+-- Sets state.timeScale, which everything that moves multiplies its
+-- per-frame movement by. It's this frame's length in 60fps frames (1.0 at
+-- exactly 60fps, so all the tuning written for 60fps holds at any frame
+-- rate), times the V.A.T.S. slow-motion ease, times a cannon shot's
+-- hit-stop (see Cannon.timeFactor).
+local function updateTimeScale(dt)
   local frameNorm = math.min(dt, MAX_FRAME_DT) * FPS_BASELINE
 
-  -- state.vatsMultiplier is the slow-motion easing value on its own (1 =
-  -- normal speed, VATS_TIME_SCALE = full slow-mo). VATS_EASE_RATE is
-  -- itself a per-baseline-frame rate, so it's scaled by frameNorm too —
-  -- otherwise the slow-mo blend-in/out speed would still vary with frame
-  -- rate even after everything else stopped.
   state.timeScaleTarget = state.vatsActive and VATS_TIME_SCALE or 1
   local timeScaleDiff = state.timeScaleTarget - state.vatsMultiplier
   if math.abs(timeScaleDiff) < VATS_EASE_SNAP_THRESHOLD then
@@ -541,233 +286,208 @@ function love.update(dt)
     state.vatsMultiplier = state.vatsMultiplier + timeScaleDiff * math.min(VATS_EASE_RATE * frameNorm, 1)
   end
 
-  -- state.timeScale is what nearly every moving thing in the game (Player,
-  -- Asteroid, Coin, Fireball, Ooomba, Particle, FireBar, GravitySystem,
-  -- BeltOrbitSystem, ...) multiplies its per-update movement/velocity by.
-  -- It was never actually tied to real elapsed time — only to the VATS
-  -- slow-mo easing above — so every one of those systems was advancing by
-  -- a fixed amount PER FRAME rather than per SECOND. That's why raising
-  -- the frame rate visibly sped the whole game up: 150 FPS produced 150
-  -- movement steps per second of real time versus 60 FPS's 60.
-  state.timeScale = state.vatsMultiplier * frameNorm
-  -- A cannon shot's hit-stop (see Cannon.timeFactor): the whole game all
-  -- but frozen for an instant when he hits a bumper.
-  state.timeScale = state.timeScale * Cannon.timeFactor()
+  state.timeScale = state.vatsMultiplier * frameNorm * Cannon.timeFactor()
+end
 
+-- Drifting planetoids move and bounce off the edges of the world.
+local function updatePlanetoidsPhysics()
+  for _, p in ipairs(state.planetoids) do
+    if p.recalling then
+      -- Rewinding: Recall.update moves it (see lua/systems/Recall.lua).
+    elseif p.isImmovable then
+      p.vel.x, p.vel.y = 0, 0
+    else
+      p.pos:addScaled(p.vel, state.timeScale)
+
+      if p.pos.x - p.radius < 0 then
+        p.pos.x = p.radius
+        p.vel.x = -p.vel.x
+      end
+      if p.pos.x + p.radius > state.sceneWidth then
+        p.pos.x = state.sceneWidth - p.radius
+        p.vel.x = -p.vel.x
+      end
+      if p.pos.y - p.radius < 0 then
+        p.pos.y = p.radius
+        p.vel.y = -p.vel.y
+      end
+      if p.pos.y + p.radius > state.sceneHeight then
+        p.pos.y = state.sceneHeight - p.radius
+        p.vel.y = -p.vel.y
+      end
+    end
+  end
+end
+
+-- Planetoids, and everything in the world's object lists. All of this
+-- runs before the player moves, so he's carried along by whatever he's
+-- standing on.
+local function updateWorld(dt)
   updatePlanetoidsPhysics()
 
-  -- Planetoids that turn on the spot (see CrystalPlanet.lua) — before
-  -- Player:move below, which is what places him on the planetoid he's
-  -- being carried round by.
+  -- Planetoids that turn on the spot (see CrystalPlanet.lua).
   for _, p in ipairs(state.planetoids) do
     if p.updateRotation and not p.recalling then p:updateRotation(state.timeScale) end
   end
 
-  -- Goes with START_AT = "mining" (top of this file): keeps the respawn
-  -- point on top of the mining planet as it drifts.
+  -- START_AT = "mining": keeps the respawn point on top of the drifting planet.
   if state.respawnPoint and state.respawnPoint.followsPlanet then
     local point, planet = state.respawnPoint, state.respawnPoint.planet
     point.x, point.y = planet.pos.x, planet.pos.y - planet.radius - constants.PLAYER_RADIUS
   end
 
-  -- Duck-typed, same pattern state.spikeys' own update loop already
-  -- uses: only SphereMove (so far) actually has an :update() of its
-  -- own, driving self.pos directly along its fixed patrol path — every
-  -- other planetoid type is left untouched here, same as always.
+  -- Planetoids with their own movement (SphereMove's patrol path, so far).
   for _, p in ipairs(state.planetoids) do
     if p.update and not p.recalling then p:update() end
   end
 
-  -- Recall: rewinding planetoids moved back along their recorded paths
-  -- (shoving whatever's in the way), and every planetoid's path recorded
-  -- — after their own movement above, before the player's below, so he's
-  -- carried along on one that's rewinding. See lua/systems/Recall.lua.
+  -- Rewinding planetoids moved back along their recorded paths, and every
+  -- planetoid's path recorded (see lua/systems/Recall.lua).
   Recall.update(dt)
 
-  -- Everything in the world's object lists (rope rocks, asteroids, coins,
-  -- Ooombas, fire bars, levers, fish, NPCs, ...) — before the player
-  -- moves, so one standing on a rope rock is carried along. Order and
-  -- details: lua/systems/WorldObjects.lua.
+  -- Rope rocks, asteroids, coins, Ooombas, fire bars, levers, fish, NPCs,
+  -- ... (order and details: lua/systems/WorldObjects.lua).
   WorldObjects.update("world", dt)
 
-  -- Player.lua reads this to freeze movement/jumping for as long as any
-  -- conversation is showing, same "empty keys" trick state.introLocked
-  -- uses just below.
+  -- Player.lua reads this to freeze him while any conversation is showing.
   state.dialogueActive = WorldObjects.anyDialogueActive()
+end
 
-  -- Empty keys while the opening cutscene is running — the player
-  -- still stands on the deck normally (gravity/collision below are
-  -- untouched), just with no WALKING input read, so they don't wander
-  -- off mid-sequence before the door's finished its own choreography.
-  -- Also empty while inside the pinball planet — he's a ball under
-  -- PinballInterior's own gravity/collision there (see just below),
-  -- not something walking-input steers directly, same as a real
-  -- pinball only ever responding to flippers/plunger/gravity.
-  -- On the title screen he's driven by its own autopilot instead (see
-  -- TitleScreen.lua) — the real keys never reach him there at all.
-  -- Going through a portal: he follows the portal path instead of all
-  -- the normal movement/gravity/collision below (see lua/systems/PortalGun.lua).
-  -- A left click since last frame (see InputHandlers.lua), fired below
-  -- once he's moved; dropped if he can't fire this frame.
-  local mouseFire = state.mouseFirePending
-  state.mouseFirePending = false
-  if state.player.portalTransit then
-    PortalGun.updateTransit(state.player, state.timeScale)
-  else
-    if state.titleScreen then
-      state.player:move(TitleScreen.getKeys())
+-- Walking input. On the title screen its autopilot steers him (see
+-- TitleScreen.lua). No steering during the opening cutscene, inside the
+-- pinball table, in V.A.T.S., or in or shot from a cannon.
+local function movePlayer(player)
+  if state.titleScreen then
+    player:move(TitleScreen.getKeys())
+    return
+  end
+  local noSteering = state.introLocked or player.inPinball or state.vatsActive
+    or player.inCannon or player.cannonFlight
+  -- Standing, he can't walk or run into a gap lower than he is tall — a
+  -- ball tunnel (see TiledTerrain.lua's Level:headroomAt) — unless he's
+  -- already somewhere that low.
+  local level = state.tiledLevels and state.tiledLevels[1]
+  local px, py, parc = player.pos.x, player.pos.y, player.surfaceArcPos
+  local hadRoom = level and player.onSurface and not player.isBall and level:headroomAt(px, py, player.radius)
+  player:move(noSteering and {} or state.keys)
+  if hadRoom and player.onSurface and not player.isBall and not level:headroomAt(player.pos.x, player.pos.y, player.radius) then
+    player.pos.x, player.pos.y, player.surfaceArcPos = px, py, parc
+    player.isWalking = false
+    player.groundMoveSpeedX = 0
+  end
+end
+
+-- Ooombas are lethal to touch unless landed on from above (see
+-- CollisionSystem:handlePlayerOoombaCollisions). Each one squashed flat
+-- this frame is removed, with a burst on the ground under his feet (or
+-- where it stood, if he's no longer on top of it) and a small hop for
+-- him. "Up" is the Ooomba's own up (Ooomba.up): up the screen on
+-- terrain, out from the center on a round planetoid; the hop is relative
+-- to what it was standing on, which may be moving. Skipped on the title
+-- screen: he can't die before the game starts.
+local function handleOoombaStomps(player)
+  if not (state.ooombas and #state.ooombas > 0) or state.titleScreen then return end
+  local flattened = collisionSystem:handlePlayerOoombaCollisions(player, state.ooombas)
+  for _, o in ipairs(flattened) do
+    local up = o.up
+    local groundX, groundY = o.pos.x - up.x * o.halfHeight, o.pos.y - up.y * o.halfHeight
+    if o.squashPressed then
+      -- The point on the ground directly beneath him.
+      local sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x
+      StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up)
+      if not player.onSurface then
+        local groundVelX, groundVelY = o:groundVelocity()
+        local rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y
+        player.vel.x = player.vel.x + up.x * (OOOMBA_STOMP_BOUNCE - rising)
+        player.vel.y = player.vel.y + up.y * (OOOMBA_STOMP_BOUNCE - rising)
+        player.isGroundPounding = false
+      end
     else
-      -- (No walking in V.A.T.S. either — see the V.A.T.S. rules near the
-      -- top of this function.)
-      -- (Nor while he's in a cannon or flying from one: the shot goes
-      -- dead straight — see lua/world/Cannon.lua.)
-      local noSteering = state.introLocked or state.player.inPinball or state.vatsActive
-        or state.player.inCannon or state.player.cannonFlight
-      -- Standing, he can't walk or run into a gap lower than he is tall —
-      -- a ball tunnel (see TiledTerrain.lua's Level:headroomAt) — unless
-      -- he's already somewhere that low.
-      local pl = state.player
-      local level = state.tiledLevels and state.tiledLevels[1]
-      local px, py, parc = pl.pos.x, pl.pos.y, pl.surfaceArcPos
-      local hadRoom = level and pl.onSurface and not pl.isBall and level:headroomAt(px, py, pl.radius)
-      state.player:move(noSteering and {} or state.keys)
-      if hadRoom and pl.onSurface and not pl.isBall and not level:headroomAt(pl.pos.x, pl.pos.y, pl.radius) then
-        pl.pos.x, pl.pos.y, pl.surfaceArcPos = px, py, parc
-        pl.isWalking = false
-        pl.groundMoveSpeedX = 0
-      end
+      StompBurst.spawn(groundX, groundY, up)
     end
-
-    -- PinballInterior:updateBall entirely REPLACES normal gravity and
-    -- planet collision while he's inside it (see Player.lua's own
-    -- inPinball comment) — state.player:update() still runs normally
-    -- either way, since it's what actually advances teleport/ball-morph/
-    -- invincibility, none of which should pause just because he's now
-    -- inside the table.
-    if state.player.inPinball then
-      local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
-      state.player.inPinball:updateBall(state.player, state.timeScale, jumpHeld)
-    elseif state.player.pullTarget then
-      state.player:applyPullForce()
-    elseif not (state.player.inCannon or state.player.cannonFlight) then
-      -- (No gravity in a cannon, or on a cannon shot — see Cannon.lua.)
-      state.gravitySystem:applyTo(state.player)
+    if state.audioManager then state.audioManager:playGoombaStomp() end
+    for i = #state.ooombas, 1, -1 do
+      if state.ooombas[i] == o then table.remove(state.ooombas, i) end
     end
+  end
+end
 
-    state.player:update()
-
-    -- Cannons: swallowing him, holding him while they aim, firing him —
-    -- and his flight once fired (see lua/world/Cannon.lua).
-    for _, cannon in ipairs(state.cannons or NONE) do
-      cannon:update(state.player, state.timeScale)
-    end
-    Cannon.updateFlight(state.player, state.timeScale)
-    -- (And the coins down their routes — after the flight's moved him
-    -- for the frame.)
-    for _, cannon in ipairs(state.cannons or NONE) do
-      cannon:updateCoins(state.player, state.timeScale / 60)
-    end
-
-    -- Into a portal? Checked before collision, so landing on a floor
-    -- portal doesn't stop his fall first (see PortalGun.tryEnter).
-    PortalGun.tryEnter(state.player)
-
-    if not state.player.inPinball and not state.player.inCannon then
-      collisionSystem:handlePlayerPlanetCollisions(state.player)
-    end
-
-    -- Gamepad R2 fire: a continuous-hold flag (see GamePadInput.lua),
-    -- not an edge-triggered press — called every frame while held, same
-    -- as the mouse-click path (love.mousepressed -> shootFireball in
-    -- InputHandlers.lua). shootFireball()'s own fireCooldown/lastShotTime
-    -- check is what actually throttles the real fire rate; this is what
-    -- was missing before — GamePadInput.lua already set
-    -- state.gamepadFireHeld every frame from the trigger's analog value,
-    -- but nothing ever read it, so R2 silently did nothing.
-    -- (A left click is handled here too — see mouseFire above.)
-    if (state.gamepadFireHeld or mouseFire) and state.player then
-      if state.iceMode then state.player:shootIceBolt() else state.player:shootFireball() end
-    end
-
-    -- Reset once per frame, before re-checking walls AND Spikeys below —
-    -- neither handlePlayerWallCollisions nor handlePlayerSpikeyCollisions
-    -- ever CLEARS this, only sets it on actual contact, so without this
-    -- the flag would latch true forever after the first touch instead of
-    -- reflecting only THIS frame's contact (see Player:jump's wall-jump
-    -- branch, which is also what lets him "jump off" a Spikey — see
-    -- CollisionSystem:handlePlayerSpikeyCollisions's own comment).
-    state.player.touchingWall = nil
-    state.player.wallContactNormal = nil
-
-    if state.tiledLevels then
-      for _, level in ipairs(state.tiledLevels) do
-        collisionSystem:handlePlayerWallCollisions(state.player, level.walls)
-        -- Ball-tunnel pieces, and (standing, in the air) his head.
-        level:pushPlayer(state.player)
-      end
-    end
-    -- Plungers: solid to him, loaded by pushing into them, fire him
-    -- when he lets go (see lua/world/Plunger.lua).
-    for _, plunger in ipairs(state.plungers or NONE) do plunger:update(state.player, state.timeScale) end
-
-    collisionSystem:handlePlayerSpikeyCollisions(state.player, state.spikeys)
-
-    -- Ooombas: lethal to touch, unless landed on from above — see
-    -- CollisionSystem:handlePlayerOoombaCollisions. Anything it returns
-    -- has just finished being squashed flat: gone, with a burst under the
-    -- player's feet (or where it stood, if he's no longer on top of it)
-    -- and a small hop for him off the top of it.
-    --
-    -- "Under his feet", "the ground" and "a hop" are all along the
-    -- Ooomba's own up direction (Ooomba.up) — straight up the screen on
-    -- terrain, straight out from the center on a round planetoid — and
-    -- the hop is relative to whatever it was standing on, which for a
-    -- belt planetoid is itself moving.
-    --
-    -- Skipped entirely on the title screen: Bob's autopilot keeps clear
-    -- of Ooombas there (see TitleScreen.lua), and if he ever does brush
-    -- one anyway, nothing happens — he can't die before the game starts.
-    if state.ooombas and #state.ooombas > 0 and not state.titleScreen then
-      local flattened = collisionSystem:handlePlayerOoombaCollisions(state.player, state.ooombas)
-      for _, o in ipairs(flattened) do
-        local player = state.player
-        local up = o.up
-        local groundX, groundY = o.pos.x - up.x * o.halfHeight, o.pos.y - up.y * o.halfHeight
-        if o.squashPressed then
-          -- The point on the ground directly beneath him.
-          local sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x
-          StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up)
-          if not player.onSurface then
-            local groundVelX, groundVelY = o:groundVelocity()
-            local rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y
-            player.vel.x = player.vel.x + up.x * (OOOMBA_STOMP_BOUNCE - rising)
-            player.vel.y = player.vel.y + up.y * (OOOMBA_STOMP_BOUNCE - rising)
-            player.isGroundPounding = false
-          end
-        else
-          StompBurst.spawn(groundX, groundY, up)
-        end
-        if state.audioManager then state.audioManager:playGoombaStomp() end
-        for i = #state.ooombas, 1, -1 do
-          if state.ooombas[i] == o then table.remove(state.ooombas, i) end
-        end
-      end
-    end
-
-    collisionSystem:handlePlayerSkyDomeContainment(state.player, state.skyDomePlanet)
+-- The player for one frame: moving, gravity (or whatever replaces it),
+-- cannons, portals, firing, and his collisions with the world.
+-- `fire` is true when he should shoot this frame.
+local function updatePlayer(player, fire)
+  -- Going through a portal: he follows its path instead of everything
+  -- below (see lua/systems/PortalGun.lua).
+  if player.portalTransit then
+    PortalGun.updateTransit(player, state.timeScale)
+    return
   end
 
-  -- Belt planetoids alone can number in the hundreds
-  -- (worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500), and almost all of them
-  -- sit outside the camera at any given moment. Bouncing off each other
-  -- (or off an asteroid/fireball) is purely a background physics detail
-  -- with no visible payoff when it happens off-screen, so any belt
-  -- planetoid the player can't currently see is left out of every
-  -- planetoid-involved collision pass below — built once per frame and
-  -- reused by all of them. Regular planets and the dome/hill shapes are
-  -- never filtered out here: they're comparatively few, and (for the
-  -- immovable ones) always meant to react precisely regardless of
-  -- visibility.
+  movePlayer(player)
+
+  -- Inside the pinball table its own ball physics replace gravity and
+  -- planet collision (see lua/interiors/PinballInterior.lua). No gravity
+  -- in a cannon or on a cannon shot either.
+  if player.inPinball then
+    local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
+    player.inPinball:updateBall(player, state.timeScale, jumpHeld)
+  elseif player.pullTarget then
+    player:applyPullForce()
+  elseif not (player.inCannon or player.cannonFlight) then
+    state.gravitySystem:applyTo(player)
+  end
+
+  -- Timers, teleport, ball morph, invincibility, ... (always runs).
+  player:update()
+
+  -- Cannons swallowing, aiming and firing him, his flight once fired,
+  -- and then the coins down their routes (see lua/world/Cannon.lua).
+  for _, cannon in ipairs(state.cannons or NONE) do
+    cannon:update(player, state.timeScale)
+  end
+  Cannon.updateFlight(player, state.timeScale)
+  for _, cannon in ipairs(state.cannons or NONE) do
+    cannon:updateCoins(player, state.timeScale / 60)
+  end
+
+  -- Before collision, so landing on a floor portal doesn't stop his fall
+  -- first (see PortalGun.tryEnter).
+  PortalGun.tryEnter(player)
+
+  if not player.inPinball and not player.inCannon then
+    collisionSystem:handlePlayerPlanetCollisions(player)
+  end
+
+  -- shootFireball / shootIceBolt throttle the fire rate themselves.
+  if fire then
+    if state.iceMode then player:shootIceBolt() else player:shootFireball() end
+  end
+
+  -- Wall and Spikey collisions only ever set these, so they're cleared
+  -- first to mean "touching this frame" (Player:jump's wall jump reads them).
+  player.touchingWall = nil
+  player.wallContactNormal = nil
+
+  for _, level in ipairs(state.tiledLevels or NONE) do
+    collisionSystem:handlePlayerWallCollisions(player, level.walls)
+    -- Ball-tunnel pieces, and (standing, in the air) his head.
+    level:pushPlayer(player)
+  end
+  -- Plungers: solid to him, loaded by pushing into them, fire him when he
+  -- lets go (see lua/world/Plunger.lua).
+  for _, plunger in ipairs(state.plungers or NONE) do plunger:update(player, state.timeScale) end
+
+  collisionSystem:handlePlayerSpikeyCollisions(player, state.spikeys)
+  handleOoombaStomps(player)
+  collisionSystem:handlePlayerSkyDomeContainment(player, state.skyDomePlanet)
+end
+
+-- Collisions between everything that isn't the player, plus coin pickups.
+local function runWorldCollisions()
+  -- Belt planetoids can number in the hundreds, nearly all off screen,
+  -- where bumping into each other has no visible payoff — so off-screen
+  -- ones are left out of every planetoid collision pass below. Other
+  -- planetoids are few, and always collide.
   local count = 0
   for _, p in ipairs(state.planetoids) do
     if not p.isBeltPlanetoid or utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
@@ -777,78 +497,58 @@ function love.update(dt)
   end
   for i = #collidablePlanetoids, count + 1, -1 do collidablePlanetoids[i] = nil end -- (last frame's extras)
 
+  -- Movable planetoids bounce off each other (pairs with an immovable
+  -- one are skipped)...
   collisionSystem:handleElasticCollisions(collidablePlanetoids)
 
-  -- Any planetoid tagged isImmovable (the sky dome and its TiledTerrain
-  -- hill shapes are the current examples) gets the same surface-accurate
-  -- bounce treatment FireBar's
-  -- block already has below, against every OTHER planetoid — this is
-  -- what handleElasticCollisions above deliberately skips (it excludes
-  -- any pair where either side is immovable). Without this, an
-  -- immovable planetoid never reacted to anything touching it at all,
-  -- which is what let regular planetoids silently overlap/sit inside
-  -- the dome instead of repelling off its actual dome+base shape.
-  -- Asteroids are deliberately NOT included here — they always break
-  -- against a planet's true surface (dome included), handled by
-  -- handlePlanetAsteroidCollisions below instead; bouncing them here
-  -- too would be redundant with that.
-  do
-    local immovableCount = 0
-    for _, p in ipairs(collidablePlanetoids) do
-      if p.isImmovable then
-        immovableCount = immovableCount + 1
-        immovablePlanetoids[immovableCount] = p
-      end
-    end
-    for i = #immovablePlanetoids, immovableCount + 1, -1 do immovablePlanetoids[i] = nil end
-    if #immovablePlanetoids > 0 then
-      collisionSystem:handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids)
+  -- ...and off the immovable ones' (the sky dome's, the Tiled hills')
+  -- true surfaces. Asteroids aren't included: they break against a
+  -- planet instead (handlePlanetAsteroidCollisions below).
+  local immovableCount = 0
+  for _, p in ipairs(collidablePlanetoids) do
+    if p.isImmovable then
+      immovableCount = immovableCount + 1
+      immovablePlanetoids[immovableCount] = p
     end
   end
+  for i = #immovablePlanetoids, immovableCount + 1, -1 do immovablePlanetoids[i] = nil end
+  if immovableCount > 0 then
+    collisionSystem:handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids)
+  end
 
+  -- Fire bars are a hazard to him (not on the title screen) and solid to
+  -- asteroids. Planetoids pass through them: bouncing off fought the
+  -- belt's orbit and pooled planetoids round each bar.
   if state.fireBars and #state.fireBars > 0 then
-    -- Not lethal on the title screen. They ARE drawn there, and Bob's
-    -- autopilot is what keeps him out of them (see TitleScreen.lua's own
-    -- "Fire bars" section) — this is only the safety net behind that: he
-    -- can't die before the game starts.
-    if collisionSystem.handlePlayerFireBarCollisions and not state.titleScreen then
+    if not state.titleScreen then
       collisionSystem:handlePlayerFireBarCollisions(state.player, state.fireBars)
     end
-    -- Deliberately no handleImmovableCollisions(state.fireBars, state.planetoids)
-    -- call -- planetoids used to bounce off a firebar's tiny pivot
-    -- collision radius, which fought BeltOrbitSystem's own sun-centered
-    -- restore force and visibly pooled belt planetoids around each bar.
-    -- FireBars are only meant to be a hazard for the player; asteroids
-    -- (free physics, not orbit-scripted) still collide with them below.
     if state.asteroids and #state.asteroids > 0 then
       collisionSystem:handleImmovableCollisions(state.fireBars, state.asteroids)
     end
   end
 
+  -- Asteroids bounce off each other, and break apart on hitting a
+  -- planetoid (see Breakage.breakAsteroid). They aren't lethal to him.
   if state.asteroids and #state.asteroids > 0 then
-    -- No handlePlayerAsteroidCollisions call: all it does is
-    -- player:startDeath() on contact, and asteroids aren't meant to be
-    -- lethal — that was only ever harmless because startDeath used to
-    -- be an empty stub.
     collisionSystem:handleElasticCollisions(state.asteroids)
-
-    -- An asteroid that hits a planetoid breaks apart — see Breakage.breakAsteroid.
     local toBreak = collisionSystem:handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids)
     for asteroid, planet in pairs(toBreak) do
       Breakage.breakAsteroid(asteroid, planet)
     end
   end
 
-  -- Runs on the title screen too — Bob collects whatever coins his
-  -- autopilot carries him through, sound and all. Anything that adds to
-  -- state.score there is wiped when the game actually starts (see
-  -- TitleScreen.lua's own beginGame).
+  -- On the title screen too: his autopilot collects coins (the score is
+  -- wiped when the game starts — see TitleScreen.lua's beginGame).
   if state.coins then
     collisionSystem:handleCoinCollisions(state.player, state.coins)
   end
+end
 
-  -- Portals follow whatever they're stuck to (moved above) and emit
-  -- their particles; the shot streaks fade (see lua/systems/PortalGun.lua).
+-- Portals, water, projectiles, effects, the belt's orbit and the sun.
+local function updateSystems(dt)
+  -- Portals follow whatever they're stuck to and emit their particles;
+  -- the shot streaks fade (see lua/systems/PortalGun.lua).
   PortalGun.update(dt)
   -- Spraying, droplets, and water flowing/pooling/evaporating.
   WaterSystem.update(dt)
@@ -862,8 +562,7 @@ function love.update(dt)
   -- can hit (see lua/systems/Projectiles.lua).
   Projectiles.update(collisionSystem, collidablePlanetoids)
 
-  -- Explosions, wall-jump contact rings and debris particles: purely
-  -- time-driven visuals (see lua/systems/WorldObjects.lua).
+  -- Explosions, wall-jump contact rings and debris particles.
   WorldObjects.update("effects", dt)
 
   BeltOrbit.apply(state.planetoids)
@@ -871,9 +570,11 @@ function love.update(dt)
   if state.sun then
     state.sun:update()
   end
+end
 
-  -- World streaming and the belt's drip, every so many seconds (real
-  -- time, not frames — so neither runs more often at a higher frame rate).
+-- World streaming and the belt's drip, every so many seconds of real time
+-- (so neither runs more often at a higher frame rate).
+local function updateStreaming(dt)
   state.cellCheckTimer = (state.cellCheckTimer or 0) + dt
   if state.cellCheckTimer >= worldGen.CELL_CHECK_SECONDS then
     state.cellCheckTimer = 0
@@ -885,26 +586,49 @@ function love.update(dt)
     state.beltSpawnTimer = 0
     worldGen.updateBeltSpawning()
   end
+end
+
+function love.update(dt)
+  if dt > 0 then
+    state.fps = (state.fps or 0) * 0.9 + (1 / dt) * 0.1
+  end
+
+  -- Polled even while paused: it's what drives the pause menu.
+  gamepadInput.pollGamepad(dt)
+  if PauseMenu.isOpen() then return end
+
+  handleVatsEnd()
+  TitleScreen.update(dt)
+  VatsCursor.update(dt)
+
+  -- Background music fades to suit where he is (see lua/AudioManager.lua).
+  if state.audioManager then state.audioManager:updateMusic(musicForPlayer(), dt) end
+
+  updateTimeScale(dt)
+  updateWorld(dt)
+
+  -- A left click since last frame (see InputHandlers.lua) fires once he's
+  -- moved, and is dropped if he can't fire this frame. R2 fires for as
+  -- long as it's held.
+  local mouseFire = state.mouseFirePending
+  state.mouseFirePending = false
+  updatePlayer(state.player, state.gamepadFireHeld or mouseFire)
+
+  runWorldCollisions()
+  updateSystems(dt)
+  updateStreaming(dt)
 
   -- Zoom and camera position for this frame (see lua/systems/Camera.lua).
   Camera.update(dt)
 end
 
-function love.draw()
-  Planetoid.beginFrame()
-  state.starfield:draw(state.camera, state.visibleWidth, state.visibleHeight)
+-- =====================================================================
+-- DRAW
+-- =====================================================================
 
-  love.graphics.push()
-  love.graphics.scale(state.zoom, state.zoom)
-  -- Snapped to whole screen pixels: the camera follows the player's exact
-  -- (fractional) position, and drawing the world at sub-pixel offsets
-  -- made the pixel-art ("nearest"-filtered) tiles and textures shimmer —
-  -- big static things like the pinball planet visibly quivered as the
-  -- camera moved. state.camera itself stays exact for everything else.
-  local zoom = state.zoom
-  love.graphics.translate(-math.floor(state.camera.x * zoom + 0.5) / zoom,
-                          -math.floor(state.camera.y * zoom + 0.5) / zoom)
-
+-- Everything up to the planetoids: stars are drawn before this, in
+-- screen space.
+local function drawBackground()
   -- Bob's and the Ooombas' shadow shapes for this frame (see
   -- lua/effects/CharacterShadows.lua) — up front, since the Space Shelter
   -- just below takes them, as well as the level's tiles further down.
@@ -916,26 +640,17 @@ function love.draw()
     GrassBlades.draw(state.skyDomePlanet.grassBlades)
   end
 
-  -- In front of the background hex canvas (baked scrolling grid, drawn
-  -- INSIDE :draw() -> drawDome()) but behind the foreground hex canvas
-  -- (the larger bulging/rippled one, drawn separately much later via
-  -- drawForegroundGlass — see below) — sandwiched between the two
-  -- layers, not in front of both.
-  --
-  -- The door itself is drawn HERE only once state.spaceShelter.playerInFront
-  -- is true (opening cutscene reached fully-open — see
-  -- SpaceShelter.lua's own intro state machine) — the player then draws
-  -- on top of it further down. Until then it's drawn later instead,
-  -- right after the player (see below), so the closed/opening door
-  -- covers the player standing behind it.
+  -- The shelter sits between the dome's background hex layer (drawn by
+  -- :draw() above) and its foreground glass (drawForegroundGlass, near
+  -- the end). Its door is drawn here once he's stepped out in front of it
+  -- (see SpaceShelter.lua's intro); until then it's drawn after him, so
+  -- the closed door covers him.
   if state.spaceShelter then
     local shelter = state.spaceShelter
     shelter:drawBody()
     if shelter.playerInFront then
       shelter:drawDoor()
-      -- His shadow on the shelter (and its doors), the same as on the
-      -- level's tiles — only once he's stepped out in front of it, not
-      -- while he's still inside behind the closed door.
+      -- His shadow on the shelter and its doors, only once he's in front.
       CharacterShadows.drawOntoSprite(function()
         shelter:drawBody()
         shelter:drawDoor()
@@ -947,92 +662,29 @@ function love.draw()
     state.sun:draw()
   end
 
-  -- Viewport culling below: this game can have hundreds of active
-  -- planetoids (BELT_PLANETOIDS_PER_CELL=36 alone) and dozens of fire
-  -- bars alive at once in the streamed 3x3 cell neighborhood, almost
-  -- all off-screen at any given moment — skipping their (comparatively
-  -- expensive, especially Planetoid's own per-frame stencil sun-shading
-  -- pass) draw calls entirely when they can't possibly be visible is
-  -- the single biggest lever for frame time here. Update/physics
-  -- (position integration, orbits, collisions) deliberately still runs
-  -- for everything regardless of visibility — culling THAT risks a
-  -- visible "catch-up" pop the moment something re-enters view, which
-  -- culling only :draw() never risks. (Each WorldObjects layer culls its
-  -- own items the same way — see lua/systems/WorldObjects.lua.)
+  -- Asteroids. Each WorldObjects layer skips its own off-screen items
+  -- (see lua/systems/WorldObjects.lua). Updates still run for everything.
   WorldObjects.draw("backdrop")
 
-  -- Influence-radius rings ('R' toggles — see InputHandlers.lua): only
-  -- for planetoids GravitySystem itself treats as plain circular gravity
-  -- sources (has influenceRadius, not isRoundedRect — see
-  -- GravitySystem:findDominantPlanet's own branching). The dome and
-  -- TiledTerrain shapes are deliberately skipped: their real gravity
-  -- range isn't a circle at all (isWithinGravityWindow / "whatever's
-  -- underfoot"), so a ring around them would just be wrong, not merely
-  -- redundant.
-  --
-  -- How strongly each ring shows says how much that body's gravity
-  -- matters to him RIGHT NOW (see the INFLUENCE_RING_* values at the top
-  -- of this file): brightest for the one actually pulling on him,
-  -- clearly visible for any other whose reach he's inside, and for the
-  -- rest fading with how far outside the ring's own edge he is. It used
-  -- to fade with his distance from the body's CENTER, which made a big
-  -- ring fainter than a small one for no better reason than its size —
-  -- standing on a large sphere, well inside its reach, its ring was
-  -- nearly invisible.
-  if state.showInfluenceRings then
-    local player = state.player
-    local pulling = (player.onSurface and player.currentPlanet)
-      or (state.gravitySystem and state.gravitySystem:findDominantPlanet(player.pos))
-    for _, p in ipairs(state.planetoids) do
-      if p.influenceRadius and not p.isRoundedRect
-         and utils.isOnScreen(p.pos.x, p.pos.y, p.influenceRadius, 50) then
-        local dx, dy = player.pos.x - p.pos.x, player.pos.y - p.pos.y
-        local outside = math.sqrt(dx * dx + dy * dy) - p.influenceRadius -- negative: he's within its reach
-        local alpha
-        if p == pulling then
-          alpha = INFLUENCE_RING_ALPHA_PULLING
-        elseif outside <= 0 then
-          alpha = INFLUENCE_RING_ALPHA_INSIDE
-        else
-          local t = math.min(1, outside / INFLUENCE_RING_FADE_DISTANCE)
-          alpha = INFLUENCE_RING_ALPHA_NEAR + (INFLUENCE_RING_ALPHA_FAR - INFLUENCE_RING_ALPHA_NEAR) * t
-        end
-        InfluenceRing.draw(p.pos.x, p.pos.y, p.influenceRadius, alpha)
-      end
-    end
-  end
+  DebugDraw.influenceRings()
 
   -- Prisms: before the planetoids, so the one each stands on covers its
   -- sunken foot (see lua/world/Prism.lua).
   WorldObjects.draw("planetFeet")
+end
 
+-- Planetoids, cannons, hazards and the Tiled levels.
+local function drawTerrain()
   -- The fire bars' fireballs lighting up the planets near them (see
   -- lua/effects/FireBarGlow.lua) — added over each one right after it's drawn.
   FireBarGlow.prepare()
   for _, p in ipairs(state.planetoids) do
-    -- The dome is ALSO in this list (for gravity/physics bookkeeping —
-    -- see GravitySystem.new(state.planetoids)), but already drew
-    -- explicitly above; drawing it again here would re-paint the whole
-    -- background hex layer on top of everything sandwiched between the
-    -- two explicit dome draw calls (the shelter — see above — and
-    -- anything else meant to sit behind the foreground hex but in
-    -- front of the background one).
-    -- Every water body's own SHELL (isWaterPlanet — there can be more
-    -- than one now, see the second WaterPlanet.new() call above) is
-    -- ALSO excluded here and drawn again later, right after the player
-    -- (see that draw call's own comment) — same reasoning as the lava
-    -- fix: it needs to render ON TOP of him whenever they overlap, so
-    -- he reads as submerged rather than floating in front of the water.
-    -- Checked via the flag rather than comparing against specific named
-    -- water planet variables, so this keeps working regardless of how
-    -- many water bodies end up existing.
+    -- The dome already drew above. Water planets draw after the player,
+    -- so he looks submerged in them.
     if p ~= state.skyDomePlanet and not p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
       p:draw()
       FireBarGlow.drawOnto(p)
-      -- Duck-typed: only PinballPlanet has one right now (see
-      -- lua/interiors/PinballInterior.lua and this planet's own setup
-      -- comment), but any future planetoid with its own .interior
-      -- overlay rides this same draw pass for free.
+      -- (The pinball planet's table — see lua/interiors/PinballInterior.lua.)
       if p.interior then
         p.interior:draw()
       end
@@ -1042,8 +694,8 @@ function love.draw()
   -- The belt outposts' missile cannons (see lua/world/MissileOutpost.lua).
   MissileOutpost.drawCannons(state.outposts)
 
-  -- Cannons, on their planets, and the rails along their routes, out in
-  -- space wherever they are (see lua/world/Cannon.lua).
+  -- Cannons on their planets, and the rails along their routes (see
+  -- lua/world/Cannon.lua).
   for _, cannon in ipairs(state.cannons or NONE) do
     cannon:drawRails()
     if not cannon.isTrack then -- (a track's just rails: no cannon of its own)
@@ -1055,14 +707,10 @@ function love.draw()
   -- Recall's yellow overlay on rewinding planetoids (and the aim ring).
   Recall.draw()
 
-  -- Spikeys (lua/world/Spikey.lua) — deliberately not planetoids, so
-  -- not drawn by the loop just above.
+  -- Spikeys (lua/world/Spikey.lua) — not planetoids, so not drawn above.
   WorldObjects.draw("hazards")
 
   if state.tiledLevels then
-    -- (Bob's and the Ooombas' shadows on the level's tiles — see
-    -- lua/effects/CharacterShadows.lua, prepared at the top of
-    -- love.draw — are drawn over each level, before they themselves are.)
     -- Glowing things (fireballs, lava, portals, ...) lighting the tiles
     -- up (see lua/effects/TileGlow.lua).
     TileGlow.prepare()
@@ -1073,115 +721,26 @@ function love.draw()
         TileGlow.drawOnto(level)
         -- Tufts of grass blades poking out of its grass (see lua/effects/GrassBlades.lua).
         GrassBlades.draw(level.grassBlades)
-        if state.showCollisionDebug then
-          love.graphics.setLineWidth(4)
-          -- Ordinary ground/ramp shapes (red) first, then the solid wall
-          -- blocks (blue), then wall-climb loop shapes (green) LAST —
-          -- see this file's own note on why the wall-climb path and the
-          -- solid wall blocks legitimately overlap in the same tiles.
-          -- Drawing green last keeps that overlapping stretch of path
-          -- visible on top instead of buried under the wall rectangles.
-          love.graphics.setColor(1, 0, 0, 1)
-          for _, shape in ipairs(level.shapes) do
-            if not shape.isWallClimb then
-              for _, seg in ipairs(shape.segments) do
-                love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
-              end
-            end
-          end
-          love.graphics.setColor(0.2, 0.6, 1, 1)
-          for _, wall in ipairs(level.walls or NONE) do
-            love.graphics.rectangle("line",
-              wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
-              wall.halfWidth * 2, wall.halfHeight * 2)
-          end
-          -- Wall-climb shapes (ramp-to-wall-to-ceiling loops — see
-          -- TiledTerrain.lua's buildRampClimbShape/
-          -- linkAndMergeWallClimbShapes) draw green, so a multi-tile
-          -- path like a full loop is visibly distinct from plain
-          -- ground/ramp shapes at a glance, same red/blue/green
-          -- convention this debug view already uses to tell top vs wall
-          -- shapes apart.
-          love.graphics.setColor(0.2, 1, 0.2, 1)
-          for _, shape in ipairs(level.shapes) do
-            if shape.isWallClimb then
-              for _, seg in ipairs(shape.segments) do
-                love.graphics.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y)
-              end
-            end
-          end
-          love.graphics.setColor(1, 1, 1, 1)
-          love.graphics.setLineWidth(1)
-        end
+        DebugDraw.levelShapes(level)
       end
     end
   end
 
-  -- Rope rocks, gates, levers, plungers, cranks, signs, mirrors. (Gates
-  -- are drawn whatever state.showCollisionDebug says: that debug view
-  -- only shows a gate's collision rectangle, not its bars.)
+  -- Rope rocks, gates, levers, plungers, cranks, signs, mirrors.
   WorldObjects.draw("props")
 
-  -- Debug: transparent red over every cell that's BOTH in the player's
-  -- current 3x3 active window AND geometrically inside the asteroid
-  -- belt ring (worldGen.cellIntersectsBelt) — lets you see at a glance
-  -- exactly which nearby cells worldGen.updateActiveCells should be
-  -- populating with belt planetoids right now. Toggle with 'A'.
-  if state.showBeltCellDebug and state.player then
-    local cellSize = worldGen.CELL_SIZE
-    local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
-    love.graphics.setColor(1, 0, 0, 0.35)
-    for dRow = -1, 1 do
-      for dCol = -1, 1 do
-        local col = playerCell.col + dCol
-        local row = playerCell.row + dRow
-        if worldGen.cellIntersectsBelt(col, row) then
-          love.graphics.rectangle("fill", col * cellSize, row * cellSize, cellSize, cellSize)
-        end
-      end
-    end
+  DebugDraw.beltCells()
+end
 
-    -- Bright blue grid over EVERY cell boundary in the current view, not
-    -- just the 3x3 -- lets you see at a glance how much more of the
-    -- world your camera is actually showing at low zoom than the fixed
-    -- 3x3 active-cell window covers, and lines up individual belt
-    -- planetoids against which cell they actually landed in. Only drawn
-    -- across the camera's own visible span (snapped outward to the
-    -- nearest cell lines), not the whole 20x20 world grid -- that span
-    -- itself grows at lower zoom, so more lines naturally appear the
-    -- further out you zoom.
-    local cam = state.camera or { x = 0, y = 0 }
-    local visW = state.visibleWidth or 0
-    local visH = state.visibleHeight or 0
-    local firstCol = math.floor(cam.x / cellSize)
-    local lastCol = math.floor((cam.x + visW) / cellSize) + 1
-    local firstRow = math.floor(cam.y / cellSize)
-    local lastRow = math.floor((cam.y + visH) / cellSize) + 1
-
-    love.graphics.setColor(0.2, 0.6, 1, 0.9)
-    love.graphics.setLineWidth(2)
-    for col = firstCol, lastCol do
-      local x = col * cellSize
-      love.graphics.line(x, firstRow * cellSize, x, (lastRow + 1) * cellSize)
-    end
-    for row = firstRow, lastRow do
-      local y = row * cellSize
-      love.graphics.line(firstCol * cellSize, y, (lastCol + 1) * cellSize, y)
-    end
-    love.graphics.setLineWidth(1)
-
-    love.graphics.setColor(1, 1, 1, 1)
-  end
-
+-- Enemies, NPCs, the player, and what stands in front of him.
+local function drawActors()
   WorldObjects.draw("enemies")
 
   -- The belt outposts' missiles, in flight (see lua/world/MissileOutpost.lua).
   MissileOutpost.drawMissiles()
 
   -- Robot butler, fisherman, coins, fire bars, beams. Beams are drawn
-  -- BEFORE the player (just below), so he renders in front of one he's
-  -- standing at — his own silhouette glow (Player:drawBeamGlow) is what
-  -- signals "near a beam".
+  -- before the player, so he stands in front of one he's at.
   WorldObjects.draw("actors")
 
   -- Portals and their shot streaks: over the surfaces they're on,
@@ -1202,146 +761,27 @@ function love.draw()
   -- Water and spray, over him, so he looks like he's in it when swimming.
   WaterSystem.draw()
 
-  -- Debug: the player's own actual collision shape (toggle with 'C',
-  -- state.showCollisionDebug — same flag/key the TiledTerrain wall/shape
-  -- debug view above already uses). A vertical CAPSULE, not a plain
-  -- circle — see CollisionSystem:handlePlayerWallCollisions and
-  -- Player.lua's own headReach for why: the bottom circle sits right at
-  -- player.pos (exactly what every other system — ground distance,
-  -- water, enemies — already treats as "the player"), and the top
-  -- circle is offset up by however far his actual visual head reaches,
-  -- minus this circle's own radius (since the circle itself already
-  -- contributes that much reach). Drawn in magenta so it's visually
-  -- distinct from the red/blue/green wall-shape debug lines above.
-  if state.showCollisionDebug then
-    local r = state.player.radius
-    -- Same onWallClimb exemption CollisionSystem:handlePlayerWallCollisions
-    -- itself uses — see that file's own comment on why the head capsule
-    -- collapses to a plain circle there (it doesn't rotate with the
-    -- surface, so it otherwise pokes into the ceiling right at a
-    -- wall-climb shape's own ceilingLeft/ceilingRight seam).
-    local onWallClimb = state.player.onSurface and state.player.currentPlanet and state.player.currentPlanet.isWallClimb
-    local headReach = (not state.player.isBall and not onWallClimb) and (state.player.headReach or 0) or 0
-    local topY = state.player.pos.y - math.max(0, headReach - r)
-    local bottomY = state.player.pos.y
-    local px = state.player.pos.x
+  DebugDraw.collisionShapes()
+end
 
-    love.graphics.setLineWidth(3)
-    love.graphics.setColor(1, 0.2, 1, 1)
-    love.graphics.circle("line", px, bottomY, r)
-    love.graphics.circle("line", px, topY, r)
-    if topY < bottomY then
-      love.graphics.line(px - r, topY, px - r, bottomY)
-      love.graphics.line(px + r, topY, px + r, bottomY)
-    end
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setLineWidth(1)
-  end
-
-  -- Debug: Spikey's own solid collision boundary (same 'C' toggle as
-  -- every other debug view here) — see
-  -- CollisionSystem:handlePlayerSpikeyCollisions's own sweptCircleEntryT
-  -- for the actual solid-stop logic this circle represents:
-  -- spikey.radius + player.radius + SURFACE_TOLERANCE, i.e. where the
-  -- player's OWN collision circle first touches the spikey's, not just
-  -- its bare radius. Drawn in orange to read as "danger boundary,"
-  -- distinct from the blue ordinary-wall / magenta player-capsule debug
-  -- lines elsewhere.
-  if state.showCollisionDebug and state.player and state.spikeys then
-    love.graphics.setLineWidth(3)
-    love.graphics.setColor(1, 0.55, 0, 1)
-    for _, sp in ipairs(state.spikeys) do
-      if utils.isOnScreen(sp.pos.x, sp.pos.y, sp.radius + state.player.radius, 20) then
-        love.graphics.circle("line", sp.pos.x, sp.pos.y, sp.radius + state.player.radius + constants.SURFACE_TOLERANCE)
-      end
-    end
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setLineWidth(1)
-  end
-
-  -- Debug: each Ooomba's contact circle (same 'C' toggle) — see
-  -- CollisionSystem:handlePlayerOoombaCollisions: he's hit when his own
-  -- collision circle overlaps this one, unless he's stomping it from above.
-  -- Fireballs use the same circle. Drawn in cyan, distinct from the other
-  -- debug colors (orange Spikey, magenta player, yellow dome).
-  if state.showCollisionDebug and state.ooombas then
-    love.graphics.setLineWidth(3)
-    love.graphics.setColor(0.2, 0.9, 1, 1)
-    for _, o in ipairs(state.ooombas) do
-      if utils.isOnScreen(o.pos.x, o.pos.y, o.hitRadius, 20) then
-        love.graphics.circle("line", o.pos.x, o.pos.y, o.hitRadius)
-      end
-    end
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setLineWidth(1)
-  end
-
-  -- Debug: SkyDomePlanetoid's own containment boundary (same 'C' toggle
-  -- as every other debug view here) — see
-  -- CollisionSystem:handlePlayerSkyDomeContainment's own comment for why
-  -- this is two separate pieces rather than one shape: the two vertical
-  -- side walls at the deck's own true left/right edges (floor to dome
-  -- top), plus the glass dome's own upper ellipse — only the half that
-  -- function actually enforces (it never applies below
-  -- dome:domeAnchorY()), so only that half is drawn here too, rather
-  -- than a full ellipse that would overstate what's actually solid.
-  -- Drawn in yellow, distinct from every other debug color already used
-  -- here (red/blue/green terrain, magenta player capsule, orange
-  -- Spikey).
-  if state.showCollisionDebug and state.skyDomePlanet then
-    local dome = state.skyDomePlanet
-    love.graphics.setLineWidth(3)
-    love.graphics.setColor(1, 1, 0.2, 1)
-
-    local deckY = dome:trueSurfaceY()
-    local domeTopY = dome:domeAnchorY() - dome.domeRadiusY
-    love.graphics.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x - dome.halfWidth, domeTopY)
-    love.graphics.line(dome.pos.x + dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, domeTopY)
-    love.graphics.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, deckY)
-
-    local cx, cy = dome.pos.x, dome:domeAnchorY()
-    local rx, ry = dome.domeRadiusX, dome.domeRadiusY
-    local segments = 72
-    local points = {}
-    for i = 0, segments do
-      local t = math.pi + (i / segments) * math.pi
-      points[#points + 1] = cx + math.cos(t) * rx
-      points[#points + 1] = cy + math.sin(t) * ry
-    end
-    love.graphics.line(points)
-
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setLineWidth(1)
-  end
-
-  -- Fish, then lava: after the player (not back with the other scenery
-  -- above) and before the water's top layer just below, so water and
-  -- lava cover whatever is in them — reading as submerged rather than
-  -- floating in front.
+-- Water, lava, effects and overlays, over the player.
+local function drawForeground()
+  -- Fish, then lava: after the player and before the water's top layer,
+  -- so water and lava cover whatever is in them.
   WorldObjects.draw("submerged")
 
-  -- Every planetoid's water layer — the water planets' included (see
-  -- WaterPlanet.lua) — and steam. Same reasoning as lava above: drawn
-  -- here, after the player and the fish, so the water renders on top of
-  -- them whenever they overlap, reading as submerged rather than
-  -- floating in front of it.
+  -- Every planetoid's water layer (the water planets' included — see
+  -- WaterPlanet.lua) and steam, over the player and the fish.
   WaterSystem.drawOceans()
 
-  -- Drawn after the water planet's own redraw above, so bubbles stay
-  -- visible on top of the translucent fill rather than getting muddied
-  -- underneath it (see Player:drawBubbles's own comment).
+  -- Bubbles on top of the water's translucent fill.
   state.player:drawBubbles()
-
-  if state.fish then
-    for _, fish in ipairs(state.fish) do
-      fish:drawBubbles()
-    end
+  for _, fish in ipairs(state.fish or NONE) do
+    fish:drawBubbles()
   end
 
-  -- Drawn HERE, on top of the just-drawn player, only while the
-  -- opening-cutscene door is still closed/opening — see the matching
-  -- comment up by drawBody() above for the other half of this z-order
-  -- swap.
+  -- The shelter door, over him while it's still closed or opening (see
+  -- drawBackground).
   if state.spaceShelter and not state.spaceShelter.playerInFront then
     state.spaceShelter:drawDoor()
   end
@@ -1358,17 +798,17 @@ function love.draw()
 
   VatsOverlay.draw()
   LockOutline.draw()
+end
 
-  love.graphics.pop()
-
+-- Screen-space UI: minimap, blaster bar, dialogue, HUD text, pause menu.
+local function drawInterface()
   -- A cannon shot's speed lines, streaking past the screen's edges (see
   -- Cannon.drawSpeedLines) — over the world, under everything else.
   Cannon.drawSpeedLines(state.player)
 
   VatsCursor.drawReticle()
 
-  -- Title screen: just the scene and its own prompt — no minimap, no
-  -- HUD text.
+  -- Title screen: just the scene and its own prompt.
   if state.titleScreen then
     TitleScreen.draw()
     return
@@ -1379,63 +819,46 @@ function love.draw()
   end
 
   -- Blaster selector, lower-left (see lua/ui/WeaponBar.lua). Hidden
-  -- while a conversation textbox is up (state.dialogueActive), so the
-  -- box has the bottom of the screen to itself.
+  -- while a conversation textbox is up, so the box has the bottom of the
+  -- screen to itself.
   if not state.dialogueActive then
     WeaponBar.draw()
   end
 
-  -- Conversation textboxes — after the minimap, so the box covers it
-  -- rather than the other way round.
+  -- Conversation textboxes — after the minimap, so the box covers it.
   WorldObjects.drawDialogues()
 
-  -- Recording a trailer clip (P - see lua/systems/ClipRecorder.lua):
-  -- none of the top-left HUD/debug text goes into the video.
+  -- Kept out of recorded trailer clips (P - see lua/systems/ClipRecorder.lua).
   if not ClipRecorder.isRecording() then
-    local cell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
-
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print(string.format("Level %d - Score: %d", state.level, state.score), 20, 20)
-    love.graphics.print(string.format("FPS: %.1f", state.fps or 0), 20, 40)
-    love.graphics.print(string.format("Zoom: %.1fx (+/-)", state.zoom), 20, 60)
-    love.graphics.print(string.format("Cell: (%d, %d)", cell.col, cell.row), 20, 80)
-    love.graphics.print(string.format("Planetoids: %d  Coins: %d  Asteroids: %d  FireBars: %d",
-      #state.planetoids,
-      state.coins and #state.coins or 0,
-      state.asteroids and #state.asteroids or 0,
-      state.fireBars and #state.fireBars or 0
-    ), 20, 100)
-    love.graphics.print(string.format("Rubinium: %d  Asteroidium: %d", state.elements.rubinium, state.elements.asteroidium), 20, 120)
-    love.graphics.print(string.format("Mode: %s (Tab / D-pad left-right to switch)   P: record clip", WeaponModes.label()), 20, 140)
-    if state.portalMode then
-      love.graphics.print("Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump", 20, 160)
-    elseif state.waterMode then
-      love.graphics.print(string.format("Left-click / R2: spray water (%d / %d), Space to jump (or swim)",
-        math.floor(WaterSystem.totalWater() + 0.5), WaterSystem.waterCap()), 20, 160)
-    elseif state.recallMode then
-      love.graphics.print("Left-click / R2 on a planetoid: rewind it (again to stop), Space to jump", 20, 160)
-    elseif state.iceMode then
-      love.graphics.print("Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump", 20, 160)
-    elseif state.pullBeamMode then
-      love.graphics.print("Left-click / R2 on a planet to pull toward it, Space to jump, C to toggle collision debug", 20, 160)
-    else
-      love.graphics.print("Left-click / R2: fireball (L2: pull beam), Space to jump, C to toggle collision debug", 20, 160)
-    end
-    -- On or near a dirt planet: which way its gravity pulls (see
-    -- CrackedPlanetoid:cycleGravity).
-    do
-      local p = state.player.currentPlanet or state.player.lastInfluencePlanet
-      if p and p.cycleGravity then
-        love.graphics.print(string.format("Gravity: %s (G to change)   Spin: %s (N clockwise, M counter-clockwise)",
-          p.GRAVITY_LABELS[p.gravityMode] or p.gravityMode, p.SPIN_LABELS[p.spinDir] or "Off"), 20, 180)
-      end
-    end
+    Hud.draw()
   end
 
   PauseMenu.draw()
 
   -- The black fade-in out of the title screen, over everything.
   TitleScreen.draw()
+end
+
+function love.draw()
+  Planetoid.beginFrame()
+  state.starfield:draw(state.camera, state.visibleWidth, state.visibleHeight)
+
+  love.graphics.push()
+  love.graphics.scale(state.zoom, state.zoom)
+  -- Snapped to whole screen pixels, so the pixel art doesn't shimmer as
+  -- the camera moves. state.camera itself stays exact.
+  local zoom = state.zoom
+  love.graphics.translate(-math.floor(state.camera.x * zoom + 0.5) / zoom,
+                          -math.floor(state.camera.y * zoom + 0.5) / zoom)
+
+  drawBackground()
+  drawTerrain()
+  drawActors()
+  drawForeground()
+
+  love.graphics.pop()
+
+  drawInterface()
 end
 
 -- Screen shake (see lua/effects/CameraShake.lua): the camera nudged by

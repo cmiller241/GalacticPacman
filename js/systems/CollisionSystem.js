@@ -187,9 +187,9 @@ class CollisionSystem {
 
     // Immovable and rewinding bodies never take part in a pair below, so
     // they're left out of the grid entirely — and out of the cell size.
-    // (The sky dome, radius ~4000, used to set the cells 8000 across:
-    // wider than the whole streamed 3x3 of world cells, so every body
-    // landed in the same few buckets and every pair got checked.)
+    // (The sky dome, radius ~4000, would otherwise make the cells 8000
+    // across: wider than the whole streamed 3x3 of world cells, so every
+    // body would land in the same few buckets and every pair be checked.)
     const takesPart = (e) => !(e.isImmovable || e.recalling);
 
     let maxRadius = 0;
@@ -251,8 +251,8 @@ class CollisionSystem {
               const v1t = tx * v1x + ty * v1y, v2t = tx * v2x + ty * v2y;
               const newV1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass;
               const newV2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass;
-              // (Fresh velocity vectors, as before, in case anything holds
-              // on to the old ones.)
+              // (Fresh velocity vectors, in case anything holds on to
+              // the previous ones.)
               p1.vel = new Vector2(nx * newV1n + tx * v1t, ny * newV1n + ty * v1t);
               p2.vel = new Vector2(nx * newV2n + tx * v2t, ny * newV2n + ty * v2t);
             }

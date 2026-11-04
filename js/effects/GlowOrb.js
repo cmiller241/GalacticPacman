@@ -2,9 +2,8 @@
 //
 // Shared GPU-shaded "glowing metallic orb" renderer for small, fixed
 // landmark planetoids/objects (Sphere.js, Spikey.js) — a real per-pixel
-// shader: a pseudo-3D sphere normal (same technique WaterPlanet.js's own
-// shading uses, and for the same reason — a flat in-plane "direction
-// from center" pinches to a point right at dist=0), a sun-relative
+// shader: a pseudo-3D sphere normal (a flat in-plane "direction from
+// center" pinches to a point right at dist=0), a sun-relative
 // dark/light gradient, a bright rim on the lit edge, and a soft outer
 // glow fading out past the body's own true radius. Affordable as a live
 // shader specifically because there are only ever a handful of these on
@@ -54,7 +53,7 @@ function getShader() {
       float nz = sqrt(max(0.0, 1.0 - nxy * nxy));
       vec3 normal = vec3(inPlaneDir * nxy, nz);
 
-      // Mild positive Z on the light direction (same as WaterPlanet.js)
+      // Mild positive Z on the light direction
       // so the lit hemisphere covers a visible cap, not a razor crescent.
       vec3 sunDir3 = normalize(vec3(sunDir, 0.5));
       float facing = dot(normal, sunDir3);
@@ -141,7 +140,7 @@ GlowOrb.draw = function (x, y, radius, colors, options) {
   sh.send('colorGlow', colors.glow);
 
   // Same "sun sits at the exact center of the scene" convention
-  // Planetoid.js/WaterPlanet.js already use.
+  // Planetoid.js already uses.
   const sunX = (state.sceneWidth ?? 0) / 2, sunY = (state.sceneHeight ?? 0) / 2;
   let sdx = sunX - x, sdy = sunY - y;
   let sd = Math.sqrt(sdx * sdx + sdy * sdy);

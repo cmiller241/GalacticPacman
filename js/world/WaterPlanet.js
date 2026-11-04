@@ -2,10 +2,9 @@
 //
 // A water planet is an ordinary planetoid with a layer of water round
 // it, the same as the water spraying builds on any planetoid — see
-// WaterPlanet.new below. (The Lua version still carries the old
-// shader-drawn wavy water body this replaced, unused; it isn't ported.)
+// WaterPlanet.new below. WaterSystem simulates and draws the water (see
+// js/systems/water/).
 
-import state from '../state.js';
 import Vector2 from '../vector2.js';
 import Planetoid from './Planetoid.js';
 import WaterSystem from '../systems/WaterSystem.js';
@@ -16,21 +15,11 @@ const COLOR_SHALLOW = [0.30, 0.66, 0.85];
 
 // Hard core: a perfectly ordinary solid Planetoid nested at the water
 // body's own center, sized as a fraction of the water body's radius.
-// Gives gravity a real, physical place to stop — a falling player used
-// to overshoot back and forth across the exact center point every frame.
+// Gives gravity a real, physical place to stop: radial gravity toward a
+// single point has no rest state there, so a falling player would
+// overshoot back and forth across the center every frame.
 const CORE_FRACTION = 1 / 8;
 const CORE_COLOR = [0.42, 0.30, 0.20]; // brown
-
-// Shared wave clock (kept for anything still reading it; advanced once
-// per frame from main.js).
-let sharedTime = 0;
-
-WaterPlanet.updateSharedClock = function () {
-  const timeScale = state.timeScale ?? 1;
-  sharedTime += (1 / 60) * timeScale;
-};
-
-WaterPlanet.sharedTime = () => sharedTime;
 
 // x, y: world position of the planet's center. radius: how far out its
 // water reaches.

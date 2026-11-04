@@ -1,9 +1,8 @@
 -- lua/ui/DialogueBox.lua
 --
 -- Shared textbox rendering/pagination for every NPC-style dialogue in
--- the game (RobotButler.lua, Fisherman.lua, Sign.lua) — previously
--- three separate copies of the exact same box layout math, font, and
--- word-wrap/pagination logic. Each caller still owns its OWN dialogue
+-- the game (RobotButler.lua, Fisherman.lua, Sign.lua): the box layout,
+-- font, and word-wrap/pagination. Each caller owns its OWN dialogue
 -- STATE (dialogueActive, dialoguePages/dialoguePageIndex, any
 -- message-list/script bookkeeping, timers, etc.) and its own
 -- tryInteract/update logic — this module only knows how to lay out and

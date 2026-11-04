@@ -190,7 +190,7 @@ local function drawPullIndicator()
   local pulse = (math.sin(time * 6) + 1) / 2   -- ~0..1 breathing
 
   -- Out of the blaster's own muzzle (the hole at the end of his arm),
-  -- same as a fireball — it used to start back at his shoulder.
+  -- same as a fireball.
   local originX, originY = player:getMuzzlePosition()
   local dx = target.pos.x - originX
   local dy = target.pos.y - originY

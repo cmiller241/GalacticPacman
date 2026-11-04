@@ -84,11 +84,9 @@ function Fisherman.new(x, groundY)
   -- How far main.lua's own on-screen cull check (utils.isOnScreen)
   -- needs to reach past his own compact body — the fishing line (see
   -- :draw's own line block) hangs roughly lineImage height * BODY_SCALE
-  -- world units below him, which used to go uncounted entirely (that
-  -- check only ever looked at halfWidth/halfHeight, the BODY's own tiny
-  -- size): standing near the hook itself, far from his actual body
-  -- position, the whole rig — hook included — would simply vanish
-  -- rather than draw. +100 is just slack for the attach point's own
+  -- world units below him. Counting only the body's own small size, the
+  -- whole rig (hook included) would vanish while the camera was near the
+  -- hook but away from him. +100 is just slack for the attach point's own
   -- offset and the idle sway swinging the line a little off-vertical.
   local lineReach = (images and images.line) and (images.line:getHeight() * BODY_SCALE) or 0
   self.drawBoundRadius = self.halfHeight + lineReach + 100
@@ -125,13 +123,9 @@ Fisherman.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactabl
 -- place that actually decides whether he's close enough to talk.
 --
 -- A press while the dialogue is ALREADY active closes it immediately,
--- rather than (what this used to do) just resetting dialogueTimer back
--- to full again — state.dialogueActive (main.lua computes it fresh each
--- frame from robotButler.dialogueActive or fisherman.dialogueActive)
--- freezes the player's own movement for as long as this is true, so
--- that old behavior meant pressing Enter/Circle while talking to him
--- never actually let go — it just re-extended the freeze another 4
--- seconds every time, forever, with no way to dismiss it on purpose.
+-- rather than resetting dialogueTimer: state.dialogueActive freezes the
+-- player while it's up, so a reset would only extend the freeze another
+-- 4 seconds per press, with no way to dismiss it on purpose.
 function Fisherman:tryInteract(player)
   if self.dialogueActive then
     self.dialogueActive = false

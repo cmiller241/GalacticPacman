@@ -399,12 +399,9 @@ function Planetoid:drawEclipseShadow()
 
   -- The sun's own visible glow (see Sun.lua's corona layer, drawn out to
   -- roughly self.radius*2.1 — about 4100 units at its actual configured
-  -- radius of 1920) reaches much farther than this used to account for.
-  -- At 1400, only planetoids nearly touching the sun's own core disc
-  -- ever got a shadow at all; widened to cover the full corona so
-  -- anything visibly sitting in the sun's outer glow gets one too,
-  -- fading out toward the edge of that glow via `proximity` below same
-  -- as before.
+  -- radius of 1920), so this covers the full corona: anything visibly
+  -- sitting in the sun's outer glow gets a shadow, fading out toward the
+  -- edge of that glow via `proximity` below.
   local maxShadowDist = 4000
   local proximity = 1 - math.min(dist / maxShadowDist, 1)
   if proximity < 0.05 then return end
