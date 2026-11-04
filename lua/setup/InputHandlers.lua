@@ -77,6 +77,7 @@ local WeaponModes = require("lua.systems.WeaponModes")
 local Recall = require("lua.systems.Recall")
 local WorldObjects = require("lua.systems.WorldObjects")
 local ClipRecorder = require("lua.systems.ClipRecorder")
+local Profiler = require("lua.debug.Profiler")
 
 local ZOOM_WHEEL_STEP = 0.08  -- per scroll "click", same as the original
 
@@ -161,6 +162,10 @@ local function attachInputHandlers()
   function love.keypressed(loveKey, scancode, isrepeat)
     local key = toJsStyleKey(loveKey)
     state.lastKeyboardMouseInputTime = love.timer.getTime()
+
+    -- F3: the frame-time profiler (see lua/debug/Profiler.lua). Works
+    -- everywhere, like F11 below.
+    if key == 'f3' and not isrepeat then Profiler.toggle() end
 
     -- F11: borderless fullscreen <-> maximized window. Works everywhere,
     -- even on the title screen and in the pause menu.

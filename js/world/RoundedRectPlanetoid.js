@@ -123,6 +123,15 @@ class RoundedRectPlanetoid {
     };
   }
 
+  // True when a circle at (x, y) reaching this far can't touch the planet:
+  // this.radius is the half-diagonal, which encloses it at any rotation.
+  // The collision passes skip their surface search for such pairs.
+  isFartherThan(x, y, reach) {
+    const dx = x - this.pos.x, dy = y - this.pos.y;
+    const r = this.radius + reach;
+    return dx * dx + dy * dy > r * r;
+  }
+
   distanceToSurface(worldX, worldY) {
     return this.nearestSurfacePoint(worldX, worldY).distance;
   }

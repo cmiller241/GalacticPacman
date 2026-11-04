@@ -138,14 +138,23 @@ class FireBar {
     this.flameTime = Math.random() * 100;
   }
 
+  // Every fireball's { x, y, radius }, both arms. The same list and
+  // objects are refilled on every call (it's asked several times a
+  // frame), so callers read it straight away and don't keep it.
   getFireballPositions() {
-    const positions = [];
+    let positions = this.fireballPositions;
+    if (!positions) {
+      positions = [];
+      for (let k = 0; k < this.numFireballs * 2; k++) positions.push({ x: 0, y: 0, radius: 0 });
+      this.fireballPositions = positions;
+    }
     const dirX = Math.cos(this.angle);
     const dirY = Math.sin(this.angle);
     for (let i = 1; i <= this.numFireballs; i++) {
       const dist = (i / this.numFireballs) * this.barLength;
-      positions.push({ x: this.pos.x + dirX * dist, y: this.pos.y + dirY * dist, radius: this.fireballRadius });
-      positions.push({ x: this.pos.x - dirX * dist, y: this.pos.y - dirY * dist, radius: this.fireballRadius });
+      const out = positions[2 * i - 2], back = positions[2 * i - 1];
+      out.x = this.pos.x + dirX * dist; out.y = this.pos.y + dirY * dist; out.radius = this.fireballRadius;
+      back.x = this.pos.x - dirX * dist; back.y = this.pos.y - dirY * dist; back.radius = this.fireballRadius;
     }
     return positions;
   }

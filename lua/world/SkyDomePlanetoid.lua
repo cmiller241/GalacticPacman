@@ -10,6 +10,7 @@
 -- ellipse center. Dome shell is visual + shield only.
 
 local state = require("lua.state")
+local utils = require("lua.utils")
 local Vector2 = require("lua.vector2")
 local constants = require("lua.constants")
 local PlanetSurface = require("lua.world.PlanetSurface")
@@ -1141,6 +1142,7 @@ function SkyDomePlanetoid:drawForcefield(glass, cx, cy, rx, ry, opts)
 end
 
 function SkyDomePlanetoid:drawForegroundGlass()
+  if not self:isNearScreen() then return end
   local zoom = state.zoom or 1
   local zoomMin = state.zoomMin or 0.5
   local zoomRef = self.domeForegroundZoomReference
@@ -1220,7 +1222,32 @@ function SkyDomePlanetoid:drawForegroundGlass()
   love.graphics.setColor(1, 1, 1, 1)
 end
 
+-- A circle round the glass and the hull: both are half-ellipses centred
+-- on (pos.x, domeAnchorY), so nothing of either lies further out than
+-- the biggest of their radii.
+function SkyDomePlanetoid:shellRadius()
+  return math.max(self.domeRadiusX, self.domeRadiusY, self.halfWidth, self.baseRadiusY)
+end
+
+-- True when a circle at (x, y) reaching this far can't touch the glass
+-- or the hull (CollisionSystem:handleImmovableCollisions skips its
+-- ellipse search then). Not named isFartherThan on purpose: the other
+-- collision passes treat the deck as a line running on past the dome.
+function SkyDomePlanetoid:isBeyondShell(x, y, reach)
+  local dx, dy = x - self.pos.x, y - self:domeAnchorY()
+  local r = self:shellRadius() + reach
+  return dx * dx + dy * dy > r * r
+end
+
+-- Whether any of it (glass, base, glow) could be on screen. Its drawing
+-- rebuilds big outline polygons and fills a large area, so it's skipped
+-- when he's far away (out in the belt, say).
+function SkyDomePlanetoid:isNearScreen()
+  return utils.isOnScreen(self.pos.x, self:domeAnchorY(), self:shellRadius(), 400)
+end
+
 function SkyDomePlanetoid:draw()
+  if not self:isNearScreen() then return end
   self:drawDome()
   self:drawMetalBase()
   self:drawGrassCap()

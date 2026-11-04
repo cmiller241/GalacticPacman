@@ -18,6 +18,7 @@ import WeaponModes from '../systems/WeaponModes.js';
 import Recall from '../systems/Recall.js';
 import WorldObjects from '../systems/WorldObjects.js';
 import TouchControls from '../ui/TouchControls.js';
+import Profiler from '../debug/Profiler.js';
 
 const KEY_NAME_MAP = {
   up: 'ArrowUp',
@@ -119,6 +120,10 @@ function attachInputHandlers() {
   love.keypressed = function (loveKey, scancode, isrepeat) {
     const key = toJsStyleKey(loveKey);
     state.lastKeyboardMouseInputTime = love.timer.getTime();
+
+    // F3: the frame-time profiler (see js/debug/Profiler.js). Works
+    // everywhere, even on the title screen and in the pause menu.
+    if (key === 'f3' && !isrepeat) Profiler.toggle();
 
     // Title screen: Enter, Space or X starts the game; nothing else.
     if (state.titleScreen) {

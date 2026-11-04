@@ -53,6 +53,7 @@ import WeaponBar from './ui/WeaponBar.js';
 import TouchControls from './ui/TouchControls.js';
 import DebugDraw from './debug/DebugDraw.js';
 import Hud from './ui/Hud.js';
+import Profiler from './debug/Profiler.js';
 
 // =====================================================================
 // START POSITION (for testing)
@@ -483,7 +484,9 @@ function runWorldCollisions() {
 // Portals, water, projectiles, effects, the belt's orbit and the sun.
 function updateSystems(dt) {
   PortalGun.update(dt);
+  Profiler.start('water');
   WaterSystem.update(dt);
+  Profiler.stop('water');
   // The water blaster's hiss while he sprays (see js/AudioManager.js).
   if (state.audioManager) {
     state.audioManager.updateSpray(WaterSystem.isSpraying(),
@@ -492,7 +495,9 @@ function updateSystems(dt) {
 
   // Fireballs and ice bolts: moving, through portals, and everything they
   // can hit (see js/systems/Projectiles.js).
+  Profiler.start('projectiles');
   Projectiles.update(collisionSystem, collidablePlanetoids);
+  Profiler.stop('projectiles');
 
   // Explosions, wall-jump contact rings and debris particles.
   WorldObjects.update('effects', dt);
@@ -518,7 +523,8 @@ function updateStreaming(dt) {
   }
 }
 
-love.update = function (dt) {
+// One frame of the game (love.update below times it as a whole).
+function updateGame(dt) {
   if (dt > 0) state.fps = (state.fps ?? 0) * 0.9 + (1 / dt) * 0.1;
 
   // Polled even while paused: it's what drives the pause menu.
@@ -533,21 +539,38 @@ love.update = function (dt) {
   if (state.audioManager) state.audioManager.updateMusic(musicForPlayer(), dt);
 
   updateTimeScale(dt);
+  Profiler.start('world');
   updateWorld(dt);
+  Profiler.stop('world');
 
   // A left click since last frame (see InputHandlers.js) fires once he's
   // moved, and is dropped if he can't fire this frame. R2 fires for as
   // long as it's held.
   const mouseFire = state.mouseFirePending;
   state.mouseFirePending = false;
+  Profiler.start('player');
   updatePlayer(state.player, !!(state.gamepadFireHeld || mouseFire));
+  Profiler.stop('player');
 
+  Profiler.start('collisions');
   runWorldCollisions();
+  Profiler.stop('collisions');
+  Profiler.start('systems');
   updateSystems(dt);
+  Profiler.stop('systems');
+  Profiler.start('streaming');
   updateStreaming(dt);
+  Profiler.stop('streaming');
 
   // Zoom and camera position for this frame (see js/systems/Camera.js).
   Camera.update(dt);
+}
+
+// (Timing for the F3 profiler — see js/debug/Profiler.js.)
+love.update = function (dt) {
+  Profiler.start('update');
+  updateGame(dt);
+  Profiler.stop('update');
 };
 
 // =====================================================================
@@ -738,14 +761,24 @@ function drawFrame() {
   g.translate(-Math.floor(state.camera.x * zoom + 0.5) / zoom,
     -Math.floor(state.camera.y * zoom + 0.5) / zoom);
 
+  Profiler.start('background');
   drawBackground();
+  Profiler.stop('background');
+  Profiler.start('terrain');
   drawTerrain();
+  Profiler.stop('terrain');
+  Profiler.start('actors');
   drawActors();
+  Profiler.stop('actors');
+  Profiler.start('foreground');
   drawForeground();
+  Profiler.stop('foreground');
 
   g.pop();
 
+  Profiler.start('interface');
   drawInterface();
+  Profiler.stop('interface');
 }
 
 // Screen shake: the camera nudged for the draw only, then put back, so
@@ -759,11 +792,16 @@ love.draw = function () {
     shakenCamera.y = camera.y + sy / zoom;
     state.camera = shakenCamera;
   }
+  Profiler.start('draw');
   try {
     drawFrame();
   } finally {
     state.camera = camera;
   }
+  Profiler.stop('draw');
+  // F3's timings, over everything.
+  Profiler.draw();
+  Profiler.endFrame();
 };
 
 // Start: preload every image and sound, then run love.load and the loop.

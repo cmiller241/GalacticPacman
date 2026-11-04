@@ -934,6 +934,15 @@ function CrackedPlanetoid:nearestSurfacePoint(worldX, worldY)
   }
 end
 
+-- True when a circle at (x, y) reaching this far can't touch the planet:
+-- nothing solid lies at or beyond self.radius (see solidAtLocal). The
+-- collision passes skip their surface search for such pairs.
+function CrackedPlanetoid:isFartherThan(x, y, reach)
+  local dx, dy = x - self.pos.x, y - self.pos.y
+  local r = self.radius + reach
+  return dx * dx + dy * dy > r * r
+end
+
 -- 0 inside the dirt. Gravity asks this of every planet for every falling
 -- thing, every frame, so anything well clear of the planet gets a cheap
 -- answer from its center instead (anything further than

@@ -30,7 +30,8 @@ function CollisionSystem:handleImmovableCollisions(immovables, movables)
       -- nowhere near this body is skipped before its per-segment search —
       -- see TerrainShape:isFartherThan.)
       if not mv.isImmovable and not mv.recalling
-         and not (im.isFartherThan and im:isFartherThan(mv.pos.x, mv.pos.y, mv.radius)) then
+         and not (im.isFartherThan and im:isFartherThan(mv.pos.x, mv.pos.y, mv.radius))
+         and not (im.isBeyondShell and im:isBeyondShell(mv.pos.x, mv.pos.y, mv.radius)) then
         local normal, targetPos
         local domeContact = nil
 
@@ -80,19 +81,24 @@ function CollisionSystem:handleImmovableCollisions(immovables, movables)
 end
 
 function CollisionSystem:handlePlayerFireBarCollisions(player, fireBars)
+  local px, py = player.pos.x, player.pos.y
   for _, bar in ipairs(fireBars) do
-    local blockDist = player.pos:subtract(bar.pos):length()
+    local bx, by = px - bar.pos.x, py - bar.pos.y
+    local blockDist = math.sqrt(bx * bx + by * by)
     if blockDist <= bar.blockRadius + player.radius + constants.SURFACE_TOLERANCE then
       player:startDeath()
       return
     end
-    for _, f in ipairs(bar:getFireballPositions()) do
-      local dx = player.pos.x - f.x
-      local dy = player.pos.y - f.y
-      local dist = math.sqrt(dx * dx + dy * dy)
-      if dist <= f.radius + player.radius + constants.SURFACE_TOLERANCE then
-        player:startDeath()
-        return
+    -- (Out of reach of the whole spinning bar, no fireball can touch him.)
+    if blockDist <= bar.barLength + bar.fireballRadius + player.radius + constants.SURFACE_TOLERANCE then
+      for _, f in ipairs(bar:getFireballPositions()) do
+        local dx = px - f.x
+        local dy = py - f.y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist <= f.radius + player.radius + constants.SURFACE_TOLERANCE then
+          player:startDeath()
+          return
+        end
       end
     end
   end

@@ -11,6 +11,7 @@
 import love from '../love/index.js';
 import lua from '../love/lua.js';
 import state from '../state.js';
+import utils from '../utils.js';
 import Vector2 from '../vector2.js';
 import constants from '../constants.js';
 import PlanetSurface from './PlanetSurface.js';
@@ -1010,6 +1011,7 @@ class SkyDomePlanetoid {
   }
 
   drawForegroundGlass() {
+    if (!this.isNearScreen()) return;
     const zoom = state.zoom ?? 1;
     const zoomMin = state.zoomMin ?? 0.5;
     const zoomRef = this.domeForegroundZoomReference;
@@ -1076,7 +1078,32 @@ class SkyDomePlanetoid {
     love.graphics.setColor(1, 1, 1, 1);
   }
 
+  // A circle round the glass and the hull: both are half-ellipses centred
+  // on (pos.x, domeAnchorY), so nothing of either lies further out than
+  // the biggest of their radii.
+  shellRadius() {
+    return Math.max(this.domeRadiusX, this.domeRadiusY, this.halfWidth, this.baseRadiusY);
+  }
+
+  // True when a circle at (x, y) reaching this far can't touch the glass
+  // or the hull (CollisionSystem.handleImmovableCollisions skips its
+  // ellipse search then). Not named isFartherThan on purpose: the other
+  // collision passes treat the deck as a line running on past the dome.
+  isBeyondShell(x, y, reach) {
+    const dx = x - this.pos.x, dy = y - this.domeAnchorY();
+    const r = this.shellRadius() + reach;
+    return dx * dx + dy * dy > r * r;
+  }
+
+  // Whether any of it (glass, base, glow) could be on screen. Its drawing
+  // fills a large area, so it's skipped when he's far away (out in the
+  // belt, say).
+  isNearScreen() {
+    return utils.isOnScreen(this.pos.x, this.domeAnchorY(), this.shellRadius(), 400);
+  }
+
   draw() {
+    if (!this.isNearScreen()) return;
     this.drawDome();
     this.drawMetalBase();
     this.drawGrassCap();

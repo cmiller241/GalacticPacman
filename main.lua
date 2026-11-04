@@ -47,6 +47,7 @@ local WeaponModes = require("lua.systems.WeaponModes")
 local WeaponBar = require("lua.ui.WeaponBar")
 local DebugDraw = require("lua.debug.DebugDraw")
 local Hud = require("lua.ui.Hud")
+local Profiler = require("lua.debug.Profiler")
 
 -- =====================================================================
 -- START POSITION (for testing)
@@ -551,7 +552,9 @@ local function updateSystems(dt)
   -- the shot streaks fade (see lua/systems/PortalGun.lua).
   PortalGun.update(dt)
   -- Spraying, droplets, and water flowing/pooling/evaporating.
+  Profiler.start("water")
   WaterSystem.update(dt)
+  Profiler.stop("water")
   -- The water blaster's hiss while he sprays (see lua/AudioManager.lua).
   if state.audioManager then
     state.audioManager:updateSpray(WaterSystem.isSpraying(),
@@ -560,7 +563,9 @@ local function updateSystems(dt)
 
   -- Fireballs and ice bolts: moving, through portals, and everything they
   -- can hit (see lua/systems/Projectiles.lua).
+  Profiler.start("projectiles")
   Projectiles.update(collisionSystem, collidablePlanetoids)
+  Profiler.stop("projectiles")
 
   -- Explosions, wall-jump contact rings and debris particles.
   WorldObjects.update("effects", dt)
@@ -588,7 +593,8 @@ local function updateStreaming(dt)
   end
 end
 
-function love.update(dt)
+-- One frame of the game (love.update below times it as a whole).
+local function updateGame(dt)
   if dt > 0 then
     state.fps = (state.fps or 0) * 0.9 + (1 / dt) * 0.1
   end
@@ -605,21 +611,38 @@ function love.update(dt)
   if state.audioManager then state.audioManager:updateMusic(musicForPlayer(), dt) end
 
   updateTimeScale(dt)
+  Profiler.start("world")
   updateWorld(dt)
+  Profiler.stop("world")
 
   -- A left click since last frame (see InputHandlers.lua) fires once he's
   -- moved, and is dropped if he can't fire this frame. R2 fires for as
   -- long as it's held.
   local mouseFire = state.mouseFirePending
   state.mouseFirePending = false
+  Profiler.start("player")
   updatePlayer(state.player, state.gamepadFireHeld or mouseFire)
+  Profiler.stop("player")
 
+  Profiler.start("collisions")
   runWorldCollisions()
+  Profiler.stop("collisions")
+  Profiler.start("systems")
   updateSystems(dt)
+  Profiler.stop("systems")
+  Profiler.start("streaming")
   updateStreaming(dt)
+  Profiler.stop("streaming")
 
   -- Zoom and camera position for this frame (see lua/systems/Camera.lua).
   Camera.update(dt)
+end
+
+-- (Timing for the F3 profiler — see lua/debug/Profiler.lua.)
+function love.update(dt)
+  Profiler.start("update")
+  updateGame(dt)
+  Profiler.stop("update")
 end
 
 -- =====================================================================
@@ -839,7 +862,8 @@ local function drawInterface()
   TitleScreen.draw()
 end
 
-function love.draw()
+-- One frame's picture (love.draw below times it, and adds the profiler).
+local function drawGame()
   Planetoid.beginFrame()
   state.starfield:draw(state.camera, state.visibleWidth, state.visibleHeight)
 
@@ -851,14 +875,33 @@ function love.draw()
   love.graphics.translate(-math.floor(state.camera.x * zoom + 0.5) / zoom,
                           -math.floor(state.camera.y * zoom + 0.5) / zoom)
 
+  Profiler.start("background")
   drawBackground()
+  Profiler.stop("background")
+  Profiler.start("terrain")
   drawTerrain()
+  Profiler.stop("terrain")
+  Profiler.start("actors")
   drawActors()
+  Profiler.stop("actors")
+  Profiler.start("foreground")
   drawForeground()
+  Profiler.stop("foreground")
 
   love.graphics.pop()
 
+  Profiler.start("interface")
   drawInterface()
+  Profiler.stop("interface")
+end
+
+function love.draw()
+  Profiler.start("draw")
+  drawGame()
+  Profiler.stop("draw")
+  -- F3's timings, kept out of recorded trailer clips.
+  if not ClipRecorder.isRecording() then Profiler.draw() end
+  Profiler.endFrame()
 end
 
 -- Screen shake (see lua/effects/CameraShake.lua): the camera nudged by

@@ -34,7 +34,10 @@ local MAX_LIGHTS = 32    -- fireballs per planet, at most (must match the shader
 
 ----------------------------------------------------------------------
 
-local lights = {}  -- this frame's fireballs: { x, y, intensity }
+-- This frame's fireballs, { x, y, intensity } each: the first lightCount
+-- entries. The tables (and near's, in drawOnto) are reused frame to frame.
+local lights, lightCount = {}, 0
+local near = {}
 
 local shader = nil
 local function getShader()
@@ -98,13 +101,16 @@ end
 
 -- Gathers this frame's fireballs. Call once per frame, before drawOnto.
 function FireBarGlow.prepare()
-  lights = {}
+  lightCount = 0
   local now = love.timer.getTime()
   for _, bar in ipairs(state.fireBars or {}) do
     if utils.isOnScreen(bar.pos.x, bar.pos.y, bar.barLength + REACH, 50) then
       for i, f in ipairs(bar:getFireballPositions()) do
         local flicker = 1 + FLICKER * math.sin(now * 23 + i * 1.7)
-        lights[#lights + 1] = { f.x, f.y, INTENSITY * flicker }
+        lightCount = lightCount + 1
+        local l = lights[lightCount]
+        if not l then l = {}; lights[lightCount] = l end
+        l[1], l[2], l[3] = f.x, f.y, INTENSITY * flicker
       end
     end
   end
@@ -114,21 +120,25 @@ end
 -- round planets (anything built on Planetoid.new) — the sky dome, rounded
 -- rect and Tiled shapes aren't balls.
 function FireBarGlow.drawOnto(planet)
-  if #lights == 0 or getmetatable(planet) ~= Planetoid then return end
+  if lightCount == 0 or getmetatable(planet) ~= Planetoid then return end
   local px, py, radius = planet.pos.x, planet.pos.y, planet.radius
   local reachSq = (radius + REACH) * (radius + REACH)
-  local near = {}
-  for _, l in ipairs(lights) do
+  local nearCount = 0
+  for i = 1, lightCount do
+    local l = lights[i]
     local dx, dy = l[1] - px, l[2] - py
-    if dx * dx + dy * dy < reachSq and #near < MAX_LIGHTS then
-      near[#near + 1] = { dx, dy, l[3] }
+    if dx * dx + dy * dy < reachSq and nearCount < MAX_LIGHTS then
+      nearCount = nearCount + 1
+      local n = near[nearCount]
+      if not n then n = {}; near[nearCount] = n end
+      n[1], n[2], n[3] = dx, dy, l[3]
     end
   end
-  if #near == 0 then return end
+  if nearCount == 0 then return end
 
   local s = getShader()
-  s:send("lights", unpack(near))
-  s:send("count", #near)
+  s:send("lights", unpack(near, 1, nearCount))
+  s:send("count", nearCount)
   s:send("radius", radius)
   love.graphics.push("all")
   love.graphics.setShader(s)

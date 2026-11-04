@@ -90,22 +90,23 @@ function FireBar.new(x, y, options)
   return self
 end
 
+-- Every fireball's { x, y, radius }, both arms. The same list and tables
+-- are refilled on every call (it's asked several times a frame), so
+-- callers read it straight away and don't keep it.
 function FireBar:getFireballPositions()
-  local positions = {}
+  local positions = self.fireballPositions
+  if not positions then
+    positions = {}
+    for k = 1, self.numFireballs * 2 do positions[k] = { x = 0, y = 0, radius = 0 } end
+    self.fireballPositions = positions
+  end
   local dirX = math.cos(self.angle)
   local dirY = math.sin(self.angle)
   for i = 1, self.numFireballs do
     local dist = (i / self.numFireballs) * self.barLength
-    positions[#positions + 1] = {
-      x = self.pos.x + dirX * dist,
-      y = self.pos.y + dirY * dist,
-      radius = self.fireballRadius,
-    }
-    positions[#positions + 1] = {
-      x = self.pos.x - dirX * dist,
-      y = self.pos.y - dirY * dist,
-      radius = self.fireballRadius,
-    }
+    local out, back = positions[2 * i - 1], positions[2 * i]
+    out.x, out.y, out.radius = self.pos.x + dirX * dist, self.pos.y + dirY * dist, self.fireballRadius
+    back.x, back.y, back.radius = self.pos.x - dirX * dist, self.pos.y - dirY * dist, self.fireballRadius
   end
   return positions
 end

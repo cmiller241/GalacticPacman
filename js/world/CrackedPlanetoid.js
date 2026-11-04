@@ -982,6 +982,15 @@ class CrackedPlanetoid {
     return { point: new Vector2(this.pos.x + qx, this.pos.y + qy), normal: new Vector2(nx, ny), distance: d };
   }
 
+  // True when a circle at (x, y) reaching this far can't touch the planet:
+  // nothing solid lies at or beyond this.radius (see solidAtLocal). The
+  // collision passes skip their surface search for such pairs.
+  isFartherThan(x, y, reach) {
+    const dx = x - this.pos.x, dy = y - this.pos.y;
+    const r = this.radius + reach;
+    return dx * dx + dy * dy > r * r;
+  }
+
   // 0 inside the dirt. Gravity asks this of every planet for every falling
   // thing, every frame, so anything well clear of the planet gets a cheap
   // answer from its center instead (anything further than

@@ -148,6 +148,15 @@ function RoundedRectPlanetoid:nearestSurfacePoint(worldX, worldY)
   }
 end
 
+-- True when a circle at (x, y) reaching this far can't touch the planet:
+-- self.radius is the half-diagonal, which encloses it at any rotation.
+-- The collision passes skip their surface search for such pairs.
+function RoundedRectPlanetoid:isFartherThan(x, y, reach)
+  local dx, dy = x - self.pos.x, y - self.pos.y
+  local r = self.radius + reach
+  return dx * dx + dy * dy > r * r
+end
+
 function RoundedRectPlanetoid:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
 end

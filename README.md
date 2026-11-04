@@ -51,6 +51,11 @@ The same layout in `lua/` and `js/`:
 - `setup/StartPositions`: the named start positions and the T teleport list.
 - `debug/DebugDraw`: the debug overlays (C collision shapes, A belt cells,
   R gravity rings).
+- `debug/Profiler`: F3 shows how long each step of a frame takes (CPU time,
+  average and worst over the last half second), plus draw calls, memory
+  and garbage made per frame. Each step in `main` is
+  wrapped in a `Profiler.start`/`Profiler.stop` pair; add a pair to time
+  something new. Off, it costs nothing measurable.
 - `ui/Hud`: the text readout in the top-left corner.
 - `entities/Player` plus `entities/player/`: the player is split by job.
   `Player` has his state, update, ball mode, teleport, death and respawn;

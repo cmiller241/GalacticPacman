@@ -61,6 +61,8 @@ class CollisionSystem {
         // A terrain shape nowhere near this body: skipped before its
         // per-segment search (see TerrainShape.isFartherThan).
         if (im.isFartherThan && im.isFartherThan(mv.pos.x, mv.pos.y, mv.radius)) continue;
+        // (Likewise the sky dome's glass and hull: see SkyDomePlanetoid.isBeyondShell.)
+        if (im.isBeyondShell && im.isBeyondShell(mv.pos.x, mv.pos.y, mv.radius)) continue;
         let normal = null, targetPos = null;
         let domeContact = null;
 
@@ -105,14 +107,18 @@ class CollisionSystem {
   }
 
   handlePlayerFireBarCollisions(player, fireBars) {
+    const px = player.pos.x, py = player.pos.y;
     for (const bar of fireBars) {
-      const blockDist = player.pos.subtract(bar.pos).length();
+      const bx = px - bar.pos.x, by = py - bar.pos.y;
+      const blockDist = Math.sqrt(bx * bx + by * by);
       if (blockDist <= bar.blockRadius + player.radius + constants.SURFACE_TOLERANCE) {
         player.startDeath();
         return;
       }
+      // (Out of reach of the whole spinning bar, no fireball can touch him.)
+      if (blockDist > bar.barLength + bar.fireballRadius + player.radius + constants.SURFACE_TOLERANCE) continue;
       for (const f of bar.getFireballPositions()) {
-        const dx = player.pos.x - f.x, dy = player.pos.y - f.y;
+        const dx = px - f.x, dy = py - f.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist <= f.radius + player.radius + constants.SURFACE_TOLERANCE) {
           player.startDeath();

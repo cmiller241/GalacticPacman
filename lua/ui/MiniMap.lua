@@ -81,11 +81,10 @@ end
 -- Where a world point lands on the minimap, within the window round the
 -- player (see draw) — which may be off the minimap altogether, if it's
 -- outside the window.
+-- (Two numbers, not a table: it runs for every dot, every frame.)
 function Minimap:worldToMapPoint(worldX, worldY, x0, y0)
-  return {
-    x = x0 + (worldX - self.viewX) / self.viewSpan * self.size,
-    y = y0 + (worldY - self.viewY) / self.viewSpan * self.size,
-  }
+  return x0 + (worldX - self.viewX) / self.viewSpan * self.size,
+         y0 + (worldY - self.viewY) / self.viewSpan * self.size
 end
 
 -- A world distance, in minimap pixels.
@@ -155,43 +154,43 @@ function Minimap:draw()
   love.graphics.setColor(self.gridColor)
   love.graphics.setLineWidth(1)
   for col = math.ceil(self.viewX / cellSize), math.floor((self.viewX + self.viewSpan) / cellSize) do
-    local m = self:worldToMapPoint(col * cellSize, 0, x0, y0)
-    love.graphics.line(m.x, y0, m.x, y0 + self.size)
+    local mx = self:worldToMapPoint(col * cellSize, 0, x0, y0)
+    love.graphics.line(mx, y0, mx, y0 + self.size)
   end
   for row = math.ceil(self.viewY / cellSize), math.floor((self.viewY + self.viewSpan) / cellSize) do
-    local m = self:worldToMapPoint(0, row * cellSize, x0, y0)
-    love.graphics.line(x0, m.y, x0 + self.size, m.y)
+    local _, my = self:worldToMapPoint(0, row * cellSize, x0, y0)
+    love.graphics.line(x0, my, x0 + self.size, my)
   end
 
   -- The world's outer edge, if he's near enough for it to be in view.
   if state.sceneWidth and state.sceneWidth > 0 then
-    local a = self:worldToMapPoint(0, 0, x0, y0)
-    local b = self:worldToMapPoint(state.sceneWidth, state.sceneHeight, x0, y0)
+    local ax, ay = self:worldToMapPoint(0, 0, x0, y0)
+    local bx, by = self:worldToMapPoint(state.sceneWidth, state.sceneHeight, x0, y0)
     love.graphics.setColor(self.edgeColor)
     love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", a.x, a.y, b.x - a.x, b.y - a.y)
+    love.graphics.rectangle("line", ax, ay, bx - ax, by - ay)
   end
 
   love.graphics.setColor(self.beltDotColor)
   for _, d in ipairs(self._beltDots) do
-    local m = self:worldToMapPoint(d.x, d.y, x0, y0)
-    love.graphics.circle("fill", m.x, m.y, 1.15)
+    local mx, my = self:worldToMapPoint(d.x, d.y, x0, y0)
+    love.graphics.circle("fill", mx, my, 1.15)
   end
 
   if state.sun and state.sun.pos then
-    local sunMap = self:worldToMapPoint(state.sun.pos.x, state.sun.pos.y, x0, y0)
+    local sunX, sunY = self:worldToMapPoint(state.sun.pos.x, state.sun.pos.y, x0, y0)
     local sunR = 6
     if state.sun.radius then
       sunR = math.max(4, self:worldToMapLength(state.sun.radius))
       sunR = math.min(sunR, self.size * 0.08)
     end
-    self:drawGlowDot(sunMap.x, sunMap.y, sunR, self.sunColor, self.sunGlowColor)
+    self:drawGlowDot(sunX, sunY, sunR, self.sunColor, self.sunGlowColor)
   end
 
   for _, planet in ipairs(self:getSpecialPlanets()) do
     if planet and planet.pos then
-      local p = self:worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0)
-      self:drawGlowDot(p.x, p.y, self.specialRadius, self.specialColor, self.specialGlowColor)
+      local px, py = self:worldToMapPoint(planet.pos.x, planet.pos.y, x0, y0)
+      self:drawGlowDot(px, py, self.specialRadius, self.specialColor, self.specialGlowColor)
     end
   end
 
@@ -207,41 +206,41 @@ function Minimap:draw()
     -- (A closed track's last corner joins back up with its first.)
     for i = 1, cannon.closed and #route or #route - 1 do
       local nextPoint = route[i % #route + 1]
-      local p = self:worldToMapPoint(route[i][1], route[i][2], x0, y0)
-      local q = self:worldToMapPoint(nextPoint[1], nextPoint[2], x0, y0)
-      local dx, dy = q.x - p.x, q.y - p.y
+      local px, py = self:worldToMapPoint(route[i][1], route[i][2], x0, y0)
+      local qx, qy = self:worldToMapPoint(nextPoint[1], nextPoint[2], x0, y0)
+      local dx, dy = qx - px, qy - py
       local len = math.sqrt(dx * dx + dy * dy)
       if len > 0 then
         for d = 0, len - dash, dash * 2 do
-          love.graphics.line(p.x + dx / len * d, p.y + dy / len * d,
-            p.x + dx / len * (d + dash), p.y + dy / len * (d + dash))
+          love.graphics.line(px + dx / len * d, py + dy / len * d,
+            px + dx / len * (d + dash), py + dy / len * (d + dash))
         end
       end
     end
     for _, rail in ipairs(cannon.rails) do
       if (rail.loops or 0) > 0 then
-        local c = self:worldToMapPoint(rail.cx, rail.cy, x0, y0)
+        local cx, cy = self:worldToMapPoint(rail.cx, rail.cy, x0, y0)
         local r = math.max(2.5, self:worldToMapLength(rail.radius))
         love.graphics.setColor(self.cannonColor)
-        love.graphics.circle("line", c.x, c.y, r)
+        love.graphics.circle("line", cx, cy, r)
       end
     end
     for _, b in ipairs(cannon.bumpers) do
-      local m = self:worldToMapPoint(b.x, b.y, x0, y0)
+      local mx, my = self:worldToMapPoint(b.x, b.y, x0, y0)
       love.graphics.setColor(1, 0.3, 0.35, 1)
-      love.graphics.circle("fill", m.x, m.y, 2)
+      love.graphics.circle("fill", mx, my, 2)
     end
   end
   for _, cannon in ipairs(state.cannons or {}) do
     if cannon.planet then
-      local a = self:worldToMapPoint(cannon.planet.pos.x, cannon.planet.pos.y, x0, y0)
-      self:drawGlowDot(a.x, a.y, self.specialRadius, self.cannonColor, self.cannonGlowColor)
+      local ax, ay = self:worldToMapPoint(cannon.planet.pos.x, cannon.planet.pos.y, x0, y0)
+      self:drawGlowDot(ax, ay, self.specialRadius, self.cannonColor, self.cannonGlowColor)
     end
   end
 
   if state.player and state.player.pos then
-    local playerMap = self:worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0)
-    self:drawGlowDot(playerMap.x, playerMap.y, self.playerRadius, self.playerColor, self.playerGlowColor)
+    local px, py = self:worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0)
+    self:drawGlowDot(px, py, self.playerRadius, self.playerColor, self.playerGlowColor)
   end
 
   love.graphics.pop()
