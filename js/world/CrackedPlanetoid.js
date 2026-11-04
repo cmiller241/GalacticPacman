@@ -501,6 +501,72 @@ function fanVertices(count, radiusOf, texSize, color) {
   return vertices;
 }
 
+// ---------------------------------------------------------------------
+// Redrawing only what's changed
+// ---------------------------------------------------------------------
+//
+// A full bake of a big planet takes ~100 ms (thousands of clods, edges
+// and tiles): a stutter on every hit. So after the first one, bake()
+// compares the planet with what the last bake drew (rememberBake) and
+// redraws only a box round the difference (changedArea): cleared, then
+// everything that touches it drawn again in the usual order, clipped to
+// it. The pixels come out the same as a full bake's.
+
+// Room round a clod's or crack's box for the lines drawn along its edges.
+const BOX_MARGIN = 4;
+
+// A box [minX, minY, maxX, maxY] in the planet's own frame, grown to take
+// in (x, y) (a new one when box is null).
+function growBox(box, x, y) {
+  if (!box) return [x, y, x, y];
+  if (x < box[0]) box[0] = x;
+  if (y < box[1]) box[1] = y;
+  if (x > box[2]) box[2] = x;
+  if (y > box[3]) box[3] = y;
+  return box;
+}
+
+function padBox(box, by) {
+  box[0] -= by; box[1] -= by; box[2] += by; box[3] += by;
+  return box;
+}
+
+const boxesTouch = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+
+// A clod's slice of its ring, as a box (worked out once: the rings never
+// move or change shape).
+function clodBox(ring, j) {
+  ring.boxes = ring.boxes ?? [];
+  let box = ring.boxes[j];
+  if (box) return box;
+  box = null;
+  const [a0, a1] = clodAngles(ring, j);
+  for (let s = 0; s <= 2; s++) {
+    const a = a0 + (a1 - a0) * s / 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    box = growBox(box, ca * ring.inner, sa * ring.inner);
+    box = growBox(box, ca * ring.outer, sa * ring.outer);
+  }
+  box = padBox(box, BOX_MARGIN);
+  ring.boxes[j] = box;
+  return box;
+}
+
+function crackBox(crack) {
+  if (crack.box) return crack.box;
+  let box = null;
+  for (let p = 0; p + 1 < crack.points.length; p += 2) box = growBox(box, crack.points[p], crack.points[p + 1]);
+  crack.box = padBox(box ?? [0, 0, 0, 0], crack.width + BOX_MARGIN);
+  return crack.box;
+}
+
+// One fan vertex (see fanVertices): the k-th point round, radius r.
+function fanVertex(k, count, r, texSize) {
+  const a = k / count * TWO_PI;
+  const x = Math.cos(a) * r, y = Math.sin(a) * r;
+  return [x, y, 0.5 + x / texSize, 0.5 + y / texSize];
+}
+
 // One ring slice (from radius rIn to rOut, angle a0 to a1) filled, as a
 // strip of four-sided pieces short enough to look curved.
 function fillSector(rIn, rOut, a0, a1) {
@@ -1778,15 +1844,95 @@ class CrackedPlanetoid {
     return mesh;
   }
 
+  // What this bake drew, for the next one to compare with: each clod
+  // (clods are replaced or removed when hit, never edited), the outline,
+  // and how many core cracks there are.
+  rememberBake() {
+    const clods = this.rings.map((ring) => {
+      const row = [];
+      for (let j = 0; j < ring.count; j++) row.push(ring.clods[j] ?? null);
+      return row;
+    });
+    this.baked = { clods, silhouette: this.silhouette.slice(0, this.silhouetteSamples), cracks: this.coreCracks.length };
+  }
+
+  // What's different from the last bake: a box round every clod added or
+  // taken away, every new crack, and every stretch of outline that moved
+  // (out to the edge of its halo), and the list of outline samples that
+  // moved. null when nothing has.
+  changedArea() {
+    const baked = this.baked;
+    let area = null;
+    const take = (box) => { area = growBox(area, box[0], box[1]); area = growBox(area, box[2], box[3]); };
+    this.rings.forEach((ring, i) => {
+      const row = baked.clods[i];
+      for (let j = 0; j < ring.count; j++) {
+        if ((ring.clods[j] ?? null) !== row[j]) take(clodBox(ring, j));
+      }
+    });
+    for (let n = baked.cracks; n < this.coreCracks.length; n++) take(crackBox(this.coreCracks[n]));
+
+    // A moved sample changes the outline's (and each halo layer's) two
+    // edges either side of it: between it and its neighbours, anywhere
+    // from the nearer outline, old or new, to the farther one plus the
+    // halo's reach.
+    const moved = [];
+    const n = this.silhouetteSamples, old = baked.silhouette, now = this.silhouette;
+    const reach = this.bodyCanvasPadding;
+    for (let k = 0; k < n; k++) {
+      if (now[k] === old[k]) continue;
+      moved.push(k);
+      for (let d = -1; d <= 1; d++) {
+        const s = (k + d + n) % n;
+        const a = s / n * TWO_PI;
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const rIn = Math.min(now[s], old[s]), rOut = Math.max(now[s], old[s]) + reach;
+        area = growBox(area, ca * rIn, sa * rIn);
+        area = growBox(area, ca * rOut, sa * rOut);
+      }
+    }
+    if (!area) return null;
+    return { area: padBox(area, BOX_MARGIN), moved };
+  }
+
+  // A fan mesh following the outline (radiusOf(sample)), kept like
+  // setMesh's. With moved (a list of outline samples), only those
+  // samples' points are updated.
+  outlineMesh(field, index, radiusOf, texSize, color, moved) {
+    const holder = index === null ? this : this[field];
+    const mesh = holder && holder[index === null ? field : index];
+    const count = this.silhouetteSamples;
+    if (!(mesh && moved)) return this.setMesh(field, index, fanVertices(count, radiusOf, texSize, color));
+    for (const s of moved) {
+      const r = radiusOf(s);
+      // (Vertex 0 is the centre; sample s is point s round, and the first
+      // sample is also the last point, closing the fan.)
+      let [x, y, u, v] = fanVertex(s, count, r, texSize);
+      mesh.setVertex(s + 1, x, y, u, v, color[0], color[1], color[2], 1);
+      if (s === 0) {
+        [x, y, u, v] = fanVertex(count, count, r, texSize);
+        mesh.setVertex(count + 1, x, y, u, v, color[0], color[1], color[2], 1);
+      }
+    }
+    return mesh;
+  }
+
   // Bakes the planet into its own canvas: the soft blue halo (the same
   // layered glow Planetoid.js bakes, but following the dirt's outline),
   // the cracked core, the dark back wall of any caves, and every clod
-  // still there. Redone after every hit.
+  // still there. After the first time, only what's changed is redrawn
+  // (see above).
   bake() {
     if (!state.planetTexture) return;
     const r = this.radius;
     const padding = this.bodyCanvasPadding;
     const size = Math.ceil((r + padding) * 2 * BAKE_SCALE);
+    let area = null, moved = null;
+    if (this.bodyCanvas && this.baked) {
+      const changed = this.changedArea();
+      if (!changed) { this.needsBake = false; return; }
+      ({ area, moved } = changed);
+    }
     if (!this.bodyCanvas) {
       this.bodyCanvas = love.graphics.newCanvas(size, size);
       this.bodyCanvas.setFilter('linear', 'linear');
@@ -1795,18 +1941,28 @@ class CrackedPlanetoid {
     const white = [1, 1, 1];
     const c = this.color;
     const g = love.graphics;
+    // Whether a piece (by its box) needs drawing this time.
+    const touches = (box) => area === null || boxesTouch(box, area);
 
     g.push('all');
     g.origin();
     g.setCanvas({ 0: this.bodyCanvas, stencil: true });
+    if (area) {
+      // (In canvas pixels. The clear below, and everything after, stay inside it.)
+      const o = (r + padding) * BAKE_SCALE, w = this.bodyCanvas.getWidth();
+      const x0 = Math.max(0, Math.floor(area[0] * BAKE_SCALE + o));
+      const y0 = Math.max(0, Math.floor(area[1] * BAKE_SCALE + o));
+      const x1 = Math.min(w, Math.ceil(area[2] * BAKE_SCALE + o));
+      const y1 = Math.min(w, Math.ceil(area[3] * BAKE_SCALE + o));
+      g.setScissor(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0));
+    }
     g.clear(0, 0, 0, 0);
     g.setBlendMode('alpha');
     g.translate((r + padding) * BAKE_SCALE, (r + padding) * BAKE_SCALE);
     g.scale(BAKE_SCALE, BAKE_SCALE);
 
     // The outline, as a fan: everything inside it is dirt or dug-out cave.
-    const outline = this.setMesh('backWallMesh', null,
-      fanVertices(this.silhouetteSamples, (k) => this.silhouette[k], texSize, white));
+    const outline = this.outlineMesh('backWallMesh', null, (k) => this.silhouette[k], texSize, white, moved);
 
     // Halo, outside the outline only (not glowing up the inside of a cave).
     g.stencil(() => g.draw(outline), 'replace', 1);
@@ -1816,8 +1972,7 @@ class CrackedPlanetoid {
       const t = i / GLOW_LAYERS;
       const falloff = (1 - t) * (1 - t);
       const grow = padding * t;
-      const mesh = this.setMesh('glowMeshes', i,
-        fanVertices(this.silhouetteSamples, (k) => this.silhouette[k] + grow, texSize, white));
+      const mesh = this.outlineMesh('glowMeshes', i, (k) => this.silhouette[k] + grow, texSize, white, moved);
       g.setColor(sc[0], sc[1], sc[2], sc[3] * falloff * 0.85);
       g.draw(mesh);
     }
@@ -1829,7 +1984,8 @@ class CrackedPlanetoid {
 
     // The core: the shared rocky texture, tinted dark and hot, with
     // glowing cracks through it.
-    const core = this.setMesh('coreMesh', null, fanVertices(96, () => this.coreRadius, texSize, CORE_TINT));
+    // (The core never changes: built the first time only.)
+    const core = this.coreMesh ?? this.setMesh('coreMesh', null, fanVertices(96, () => this.coreRadius, texSize, CORE_TINT));
     core.setTexture(state.planetTexture);
     g.setColor(1, 1, 1, 1);
     g.draw(core);
@@ -1837,12 +1993,14 @@ class CrackedPlanetoid {
     g.setStencilTest('greater', 0);
     g.setLineJoin('bevel');
     for (const crack of this.coreCracks) {
+      if (!touches(crackBox(crack))) continue;
       g.setColor(CRACK_DARK[0], CRACK_DARK[1], CRACK_DARK[2], CRACK_DARK[3]);
       g.setLineWidth(crack.width + 2);
       g.line(crack.points);
     }
     g.setBlendMode('add');
     for (const crack of this.coreCracks) {
+      if (!touches(crackBox(crack))) continue;
       g.setColor(CRACK_GLOW[0], CRACK_GLOW[1], CRACK_GLOW[2], CRACK_GLOW[3]);
       g.setLineWidth(Math.max(1, crack.width * 0.55));
       g.line(crack.points);
@@ -1852,14 +2010,14 @@ class CrackedPlanetoid {
 
     // A Tiled map's tiles, each with its own art, and the obsidian and ice
     // blocks (on any cracked planet)...
-    this.drawTiles();
+    this.drawTiles(touches);
 
     // ...or the clods: dirt, a soft lighter lump in the middle, a few pebbles.
     for (const ring of (this.isTiled ? [] : this.rings)) {
       for (let j = 0; j < ring.count; j++) {
         const clod = ring.clods[j];
         // (Blocks aren't dirt: drawTiles drew them.)
-        if (!clod || clod.obsidian || clod.ice) continue;
+        if (!clod || clod.obsidian || clod.ice || !touches(clodBox(ring, j))) continue;
         const [a0, a1] = clodAngles(ring, j);
         const s = clod.shade;
         g.setColor(c[0] * s, c[1] * s, c[2] * s, 1);
@@ -1891,7 +2049,7 @@ class CrackedPlanetoid {
     this.rings.forEach((ring, i) => {
       for (let j = 0; j < ring.count; j++) {
         const clod = ring.clods[j];
-        if (!clod || clod.shape) continue;
+        if (!clod || clod.shape || !touches(clodBox(ring, j))) continue;
         const [a0, a1] = clodAngles(ring, j);
         const openAbove = (a) => !this.solidInRing(i + 1, a);
         const openBelow = (a) => !this.solidInRing(i - 1, a);
@@ -1919,14 +2077,16 @@ class CrackedPlanetoid {
     });
 
     g.pop();
+    this.rememberBake();
     this.needsBake = false;
   }
 
   // Every tile of a Tiled-map planet, as one mesh per tileset image: each
   // tile its own slice of its ring, bent round in a few pieces, with its
   // art from its tileset (its top edge on the ring's outside, mirrored if
-  // it's flipped in the map). Rebuilt with every bake.
-  drawTiles() {
+  // it's flipped in the map). Rebuilt with every bake: only the tiles
+  // touches(box) passes, when given (see bake).
+  drawTiles(touches) {
     const verticesByImage = new Map();
     for (const ring of this.rings) {
       for (let j = 0; j < ring.count; j++) {
@@ -1936,7 +2096,7 @@ class CrackedPlanetoid {
         // (On a planet that isn't a Tiled map, only the blocks are drawn here.)
         const ts = block || !this.isTiled ? null : tilesetForGid(this.tilesets, clod.gid);
         const image = block || (ts && ts.image);
-        if (!image) continue;
+        if (!image || (touches && !touches(clodBox(ring, j)))) continue;
         let vertices = verticesByImage.get(image);
         if (!vertices) { vertices = []; verticesByImage.set(image, vertices); }
         const add = (r, a, u, v) => vertices.push([Math.cos(a) * r, Math.sin(a) * r, u, v, 1, 1, 1, 1]);

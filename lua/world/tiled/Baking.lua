@@ -35,6 +35,13 @@ local SHADOW_OFFSET_Y = 30         -- ...and this far down from what casts it
 TiledTerrain.SHADOW_OFFSET_X, TiledTerrain.SHADOW_OFFSET_Y = SHADOW_OFFSET_X, SHADOW_OFFSET_Y
 local SHADOW_BLUR = 3              -- blur passes (at the shadow's reduced size)
 local SHADOW_DOWNSCALE = 8
+
+-- The canvas holds the tiles at their own pixel size (each source pixel one
+-- canvas pixel), drawn TILE_SCALE times bigger: the same picture as baking
+-- at world size, the pixel art drawn without smoothing, at a quarter of
+-- the memory. (The soft shadows and the ground darkening are worked out
+-- at that size too: too gentle for it to show.)
+local BAKE_SCALE = 1 / TILE_SCALE -- canvas pixels per world unit
 -- Each layer's tiles darkening toward the bottom of the map, over its
 -- bottom this-many rows (by name, any capitals; any other: none) — darkest
 -- (GROUND_SHADE_DARKNESS) right at the bottom edge, none at the top of
@@ -141,11 +148,11 @@ local function bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
     love.graphics.setShader()
     love.graphics.setCanvas(onto)
     love.graphics.setBlendMode("multiply", "premultiplied")
-    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE, SHADOW_DOWNSCALE)
+    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE * BAKE_SCALE, SHADOW_DOWNSCALE * BAKE_SCALE)
     love.graphics.setBlendMode("alpha")
   end
 
-  local canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE)
+  local canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE * BAKE_SCALE, height * TILE_WORLD_SIZE * BAKE_SCALE)
   love.graphics.push("all")
   love.graphics.origin()
   love.graphics.setCanvas(canvas)
@@ -155,12 +162,12 @@ local function bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
     local shadeRows = GROUND_SHADE_ROWS[string.lower(l.name or "")]
     if shadeRows and shadeRows > 0 then
       local shade = getGroundShadeShader()
-      shade:send("bottomY", height * TILE_WORLD_SIZE)
-      shade:send("fadeHeight", shadeRows * TILE_WORLD_SIZE)
+      shade:send("bottomY", height * TILE_WORLD_SIZE * BAKE_SCALE)
+      shade:send("fadeHeight", shadeRows * TILE_WORLD_SIZE * BAKE_SCALE)
       shade:send("darkness", GROUND_SHADE_DARKNESS)
       love.graphics.setShader(shade)
     end
-    drawLayerTiles(l, 1, 0, 0)
+    drawLayerTiles(l, BAKE_SCALE, 0, 0)
     love.graphics.setShader()
     if SHADOWED_LAYERS[string.lower(l.name or "")] then
       -- The shadow of the next layer in front (only the next: one further
@@ -177,5 +184,6 @@ end
 
 return {
   bakeLayers = bakeLayers,
+  CANVAS_SCALE = 1 / BAKE_SCALE, -- world units per canvas pixel (see Level:draw)
   api = TiledTerrain,
 }

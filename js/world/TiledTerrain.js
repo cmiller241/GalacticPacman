@@ -51,7 +51,7 @@ import {
 } from './tiled/TerrainShape.js';
 import { buildRampShapes } from './tiled/ClimbShapes.js';
 import { buildWallShapes, buildLavaTiles, Level, buildTunnelSolids } from './tiled/Level.js';
-import { api as BakingApi, bakeLayers } from './tiled/Baking.js';
+import { api as BakingApi, bakeLayers, CANVAS_SCALE } from './tiled/Baking.js';
 
 const TiledTerrain = {};
 
@@ -353,6 +353,7 @@ TiledTerrain.load = function (mapData, anchorX, anchorY) {
     mapWidth: width,
     mapHeight: height,
     canvas,
+    canvasScale: CANVAS_SCALE, // (drawn this many times bigger)
     anchorX,
     anchorY,
     // Bounding center/radius, for viewport culling (utils.isOnScreen).

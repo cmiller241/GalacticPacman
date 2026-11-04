@@ -126,7 +126,7 @@ CharacterShadows.drawOnto = function (level) {
   s.send('strength', STRENGTH);
   love.graphics.setShader(s);
   love.graphics.setColor(1, 1, 1, 1);
-  love.graphics.draw(level.canvas, level.anchorX, level.anchorY);
+  love.graphics.draw(level.canvas, level.anchorX, level.anchorY, 0, level.canvasScale, level.canvasScale);
   love.graphics.setShader();
 };
 

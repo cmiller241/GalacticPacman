@@ -1942,15 +1942,170 @@ local function radialLine(a, rIn, rOut)
   love.graphics.line(c * rIn, s * rIn, c * rOut, s * rOut)
 end
 
+----------------------------------------------------------------------
+-- Redrawing only what's changed
+----------------------------------------------------------------------
+--
+-- A full bake of a big planet takes ~100 ms (thousands of clods, edges
+-- and tiles): a stutter on every hit. So after the first one, :bake
+-- compares the planet with what the last bake drew (:rememberBake) and
+-- redraws only a box round the difference (:changedArea): cleared, then
+-- everything that touches it drawn again in the usual order, clipped to
+-- it. The pixels come out the same as a full bake's.
+
+-- Room round a clod's or crack's box for the lines drawn along its edges.
+local BOX_MARGIN = 4
+
+-- What this bake drew, for the next one to compare with: each clod
+-- (clods are replaced or removed when hit, never edited), the outline,
+-- and how many core cracks there are.
+function CrackedPlanetoid:rememberBake()
+  local clods = {}
+  for i, ring in ipairs(self.rings) do
+    local row = {}
+    for j = 1, ring.count do row[j] = ring.clods[j] or false end
+    clods[i] = row
+  end
+  local silhouette = {}
+  for k = 1, self.silhouetteSamples do silhouette[k] = self.silhouette[k] end
+  self.baked = { clods = clods, silhouette = silhouette, cracks = #self.coreCracks }
+end
+
+-- A box { minX, minY, maxX, maxY } in the planet's own frame, grown to
+-- take in (x, y) (a new one when box is nil).
+local function growBox(box, x, y)
+  if not box then return { x, y, x, y } end
+  if x < box[1] then box[1] = x end
+  if y < box[2] then box[2] = y end
+  if x > box[3] then box[3] = x end
+  if y > box[4] then box[4] = y end
+  return box
+end
+
+local function padBox(box, by)
+  box[1], box[2], box[3], box[4] = box[1] - by, box[2] - by, box[3] + by, box[4] + by
+  return box
+end
+
+local function boxesTouch(a, b)
+  return a[1] <= b[3] and a[3] >= b[1] and a[2] <= b[4] and a[4] >= b[2]
+end
+
+-- A clod's slice of its ring, as a box (worked out once: the rings never
+-- move or change shape).
+local function clodBox(ring, j)
+  ring.boxes = ring.boxes or {}
+  local box = ring.boxes[j]
+  if box then return box end
+  local a0, a1 = clodAngles(ring, j)
+  for s = 0, 2 do
+    local a = a0 + (a1 - a0) * s / 2
+    local ca, sa = math.cos(a), math.sin(a)
+    box = growBox(box, ca * ring.inner, sa * ring.inner)
+    box = growBox(box, ca * ring.outer, sa * ring.outer)
+  end
+  box = padBox(box, BOX_MARGIN)
+  ring.boxes[j] = box
+  return box
+end
+
+local function crackBox(crack)
+  if crack.box then return crack.box end
+  local box = nil
+  for p = 1, #crack.points - 1, 2 do box = growBox(box, crack.points[p], crack.points[p + 1]) end
+  crack.box = padBox(box or { 0, 0, 0, 0 }, crack.width + BOX_MARGIN)
+  return crack.box
+end
+
+-- What's different from the last bake: a box round every clod added or
+-- taken away, every new crack, and every stretch of outline that moved
+-- (out to the edge of its halo), and the list of outline samples that
+-- moved. nil when nothing has.
+function CrackedPlanetoid:changedArea()
+  local baked = self.baked
+  local area = nil
+  local function take(box)
+    area = growBox(area, box[1], box[2])
+    area = growBox(area, box[3], box[4])
+  end
+  for i, ring in ipairs(self.rings) do
+    local row = baked.clods[i]
+    for j = 1, ring.count do
+      if (ring.clods[j] or false) ~= row[j] then take(clodBox(ring, j)) end
+    end
+  end
+  for n = baked.cracks + 1, #self.coreCracks do take(crackBox(self.coreCracks[n])) end
+
+  -- A moved sample changes the outline's (and each halo layer's) two
+  -- edges either side of it: between it and its neighbours, anywhere
+  -- from the nearer outline, old or new, to the farther one plus the
+  -- halo's reach.
+  local moved = {}
+  local n, old, now = self.silhouetteSamples, baked.silhouette, self.silhouette
+  local reach = self.bodyCanvasPadding
+  for k = 1, n do
+    if now[k] ~= old[k] then
+      moved[#moved + 1] = k
+      for d = -1, 1 do
+        local s = (k - 1 + d) % n + 1
+        local a = (s - 1) / n * TWO_PI
+        local ca, sa = math.cos(a), math.sin(a)
+        local rIn, rOut = math.min(now[s], old[s]), math.max(now[s], old[s]) + reach
+        area = growBox(area, ca * rIn, sa * rIn)
+        area = growBox(area, ca * rOut, sa * rOut)
+      end
+    end
+  end
+  if not area then return nil end
+  return padBox(area, BOX_MARGIN), moved
+end
+
+-- One fan vertex (see fanVertices): the k-th point round, radius r.
+local function fanVertex(k, count, r, texSize)
+  local a = k / count * TWO_PI
+  local x, y = math.cos(a) * r, math.sin(a) * r
+  return x, y, 0.5 + x / texSize, 0.5 + y / texSize
+end
+
+-- A fan mesh following the outline (radiusOf(sample)), kept like
+-- :setMesh's. With moved (a list of outline samples), only those
+-- samples' points are updated.
+function CrackedPlanetoid:outlineMesh(field, index, radiusOf, texSize, color, moved)
+  local holder = index and self[field] or self
+  local mesh = holder and holder[index or field]
+  local count = self.silhouetteSamples
+  if not (mesh and moved) then
+    return self:setMesh(field, index, fanVertices(count, radiusOf, texSize, color))
+  end
+  for _, s in ipairs(moved) do
+    local r = radiusOf(s)
+    -- (Vertex 1 is the centre; sample s is point s - 1 round, and the
+    -- first sample is also the last point, closing the fan.)
+    local x, y, u, v = fanVertex(s - 1, count, r, texSize)
+    mesh:setVertex(s + 1, x, y, u, v, color[1], color[2], color[3], 1)
+    if s == 1 then
+      x, y, u, v = fanVertex(count, count, r, texSize)
+      mesh:setVertex(count + 2, x, y, u, v, color[1], color[2], color[3], 1)
+    end
+  end
+  return mesh
+end
+
 -- Bakes the planet into its own canvas: the soft blue halo (the same
 -- layered glow Planetoid.lua bakes, but following the dirt's outline),
 -- the cracked core, the dark back wall of any caves, and every clod
--- still there. Redone after every hit.
+-- still there. After the first time, only what's changed is redrawn
+-- (see above).
 function CrackedPlanetoid:bake()
   if not state.planetTexture then return end
   local r = self.radius
   local padding = self.bodyCanvasPadding
   local size = math.ceil((r + padding) * 2 * BAKE_SCALE)
+  local area, moved = nil, nil
+  if self.bodyCanvas and self.baked then
+    area, moved = self:changedArea()
+    if not area then self.needsBake = false; return end
+  end
   if not self.bodyCanvas then
     self.bodyCanvas = love.graphics.newCanvas(size, size)
     self.bodyCanvas:setFilter("linear", "linear")
@@ -1958,18 +2113,29 @@ function CrackedPlanetoid:bake()
   local texSize = r * 2 * 2.5
   local white = { 1, 1, 1 }
   local c = self.color
+  -- Whether a piece (by its box) needs drawing this time.
+  local function touches(box) return area == nil or boxesTouch(box, area) end
 
   love.graphics.push("all")
   love.graphics.origin()
   love.graphics.setCanvas({ self.bodyCanvas, stencil = true })
+  if area then
+    -- (In canvas pixels. The clear below, and everything after, stay inside it.)
+    local o, w = (r + padding) * BAKE_SCALE, self.bodyCanvas:getWidth()
+    local x0 = math.max(0, math.floor(area[1] * BAKE_SCALE + o))
+    local y0 = math.max(0, math.floor(area[2] * BAKE_SCALE + o))
+    local x1 = math.min(w, math.ceil(area[3] * BAKE_SCALE + o))
+    local y1 = math.min(w, math.ceil(area[4] * BAKE_SCALE + o))
+    love.graphics.setScissor(x0, y0, math.max(0, x1 - x0), math.max(0, y1 - y0))
+  end
   love.graphics.clear(0, 0, 0, 0)
   love.graphics.setBlendMode("alpha")
   love.graphics.translate((r + padding) * BAKE_SCALE, (r + padding) * BAKE_SCALE)
   love.graphics.scale(BAKE_SCALE, BAKE_SCALE)
 
   -- The outline, as a fan: everything inside it is dirt or dug-out cave.
-  local outline = self:setMesh("backWallMesh", nil,
-    fanVertices(self.silhouetteSamples, function(k) return self.silhouette[k] end, texSize, white))
+  local outline = self:outlineMesh("backWallMesh", nil,
+    function(k) return self.silhouette[k] end, texSize, white, moved)
 
   -- Halo, outside the outline only (not glowing up the inside of a cave).
   love.graphics.stencil(function() love.graphics.draw(outline) end, "replace", 1)
@@ -1979,8 +2145,8 @@ function CrackedPlanetoid:bake()
     local t = i / GLOW_LAYERS
     local falloff = (1 - t) * (1 - t)
     local grow = padding * t
-    local mesh = self:setMesh("glowMeshes", i,
-      fanVertices(self.silhouetteSamples, function(k) return self.silhouette[k] + grow end, texSize, white))
+    local mesh = self:outlineMesh("glowMeshes", i,
+      function(k) return self.silhouette[k] + grow end, texSize, white, moved)
     love.graphics.setColor(sc[1], sc[2], sc[3], sc[4] * falloff * 0.85)
     love.graphics.draw(mesh)
   end
@@ -1992,7 +2158,8 @@ function CrackedPlanetoid:bake()
 
   -- The core: the shared rocky texture, tinted dark and hot, with
   -- glowing cracks through it.
-  local core = self:setMesh("coreMesh", nil,
+  -- (The core never changes: built the first time only.)
+  local core = self.coreMesh or self:setMesh("coreMesh", nil,
     fanVertices(96, function() return self.coreRadius end, texSize, CORE_TINT))
   core:setTexture(state.planetTexture)
   love.graphics.setColor(1, 1, 1, 1)
@@ -2001,29 +2168,33 @@ function CrackedPlanetoid:bake()
   love.graphics.setStencilTest("greater", 0)
   love.graphics.setLineJoin("bevel")
   for _, crack in ipairs(self.coreCracks) do
-    love.graphics.setColor(CRACK_DARK)
-    love.graphics.setLineWidth(crack.width + 2)
-    love.graphics.line(crack.points)
+    if touches(crackBox(crack)) then
+      love.graphics.setColor(CRACK_DARK)
+      love.graphics.setLineWidth(crack.width + 2)
+      love.graphics.line(crack.points)
+    end
   end
   love.graphics.setBlendMode("add")
   for _, crack in ipairs(self.coreCracks) do
-    love.graphics.setColor(CRACK_GLOW)
-    love.graphics.setLineWidth(math.max(1, crack.width * 0.55))
-    love.graphics.line(crack.points)
+    if touches(crackBox(crack)) then
+      love.graphics.setColor(CRACK_GLOW)
+      love.graphics.setLineWidth(math.max(1, crack.width * 0.55))
+      love.graphics.line(crack.points)
+    end
   end
   love.graphics.setBlendMode("alpha")
   love.graphics.setStencilTest()
 
   -- A Tiled map's tiles, each with its own art, and the obsidian and ice
   -- blocks (on any cracked planet)...
-  self:drawTiles()
+  self:drawTiles(touches)
 
   -- ...or the clods: dirt, a soft lighter lump in the middle, a few pebbles.
   for _, ring in ipairs(self.isTiled and {} or self.rings) do
     for j = 1, ring.count do
       local clod = ring.clods[j]
       -- (Blocks aren't dirt: drawTiles drew them.)
-      if clod and not (clod.obsidian or clod.ice) then
+      if clod and not (clod.obsidian or clod.ice) and touches(clodBox(ring, j)) then
         local a0, a1 = clodAngles(ring, j)
         local s = clod.shade
         love.graphics.setColor(c[1] * s, c[2] * s, c[3] * s, 1)
@@ -2058,7 +2229,7 @@ function CrackedPlanetoid:bake()
   -- its open side is its diagonal, which its own art already edges.)
   for i, ring in ipairs(self.rings) do
     for j = 1, ring.count do
-      if ring.clods[j] and not ring.clods[j].shape then
+      if ring.clods[j] and not ring.clods[j].shape and touches(clodBox(ring, j)) then
         local a0, a1 = clodAngles(ring, j)
         local function openAbove(a) return not self:solidInRing(i + 1, a) end
         local function openBelow(a) return not self:solidInRing(i - 1, a) end
@@ -2087,13 +2258,15 @@ function CrackedPlanetoid:bake()
   end
 
   love.graphics.pop()
+  self:rememberBake()
   self.needsBake = false
 end
 
 -- Every tile of a Tiled-map planet, as one mesh per tileset image: each
 -- tile its own slice of its ring, bent round in a few pieces, with its
 -- art from its tileset (its top edge on the ring's outside, mirrored if
--- it's flipped in the map). Rebuilt with every bake.
+-- it's flipped in the map). Rebuilt with every bake: only the tiles
+-- touches(box) passes, when given (see :bake).
 local TILE_PIECES = 3
 -- The obsidian and ice blocks' art (see :setBlock), each loaded the first
 -- time one's drawn.
@@ -2108,7 +2281,7 @@ local function getBlockImage(clod)
   return blockImages[path]
 end
 
-function CrackedPlanetoid:drawTiles()
+function CrackedPlanetoid:drawTiles(touches)
   local verticesByImage, images = {}, {}
   for _, ring in ipairs(self.rings) do
     for j = 1, ring.count do
@@ -2117,7 +2290,7 @@ function CrackedPlanetoid:drawTiles()
       -- (On a planet that isn't a Tiled map, only the blocks are drawn here.)
       local ts = clod and not block and self.isTiled and tilesetForGid(self.tilesets, clod.gid)
       local image = block or (ts and ts.image)
-      if image then
+      if image and (not touches or touches(clodBox(ring, j))) then
         local vertices = verticesByImage[image]
         if not vertices then
           vertices = {}

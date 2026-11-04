@@ -568,6 +568,7 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
     mapWidth = width,
     mapHeight = height,
     canvas = canvas,
+    canvasScale = Baking.CANVAS_SCALE, -- (drawn this many times bigger)
     anchorX = anchorX,
     anchorY = anchorY,
     -- Bounding center/radius, same convention every other drawable in

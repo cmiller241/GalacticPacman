@@ -87,7 +87,7 @@ class Level {
   draw() {
     if (!this.canvas) return;
     love.graphics.setColor(1, 1, 1, 1);
-    love.graphics.draw(this.canvas, this.anchorX, this.anchorY);
+    love.graphics.draw(this.canvas, this.anchorX, this.anchorY, 0, this.canvasScale, this.canvasScale);
   }
 
   // --- Ball tunnels (see the section below the class) ---

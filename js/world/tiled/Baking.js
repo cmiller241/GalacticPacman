@@ -33,6 +33,15 @@ TiledTerrain.SHADOW_OFFSET_X = SHADOW_OFFSET_X;
 TiledTerrain.SHADOW_OFFSET_Y = SHADOW_OFFSET_Y;
 const SHADOW_BLUR = 3;        // blur passes (at the shadow's reduced size)
 const SHADOW_DOWNSCALE = 8;
+
+// The canvas holds the tiles at their own pixel size (each source pixel one
+// canvas pixel), drawn TILE_SCALE times bigger: the same picture as baking
+// at world size, the pixel art drawn without smoothing, at a quarter of
+// the memory. (The soft shadows and the ground darkening are worked out
+// at that size too: too gentle for it to show.)
+const BAKE_SCALE = 1 / TILE_SCALE; // canvas pixels per world unit
+// World units per canvas pixel (see Level.draw).
+const CANVAS_SCALE = 1 / BAKE_SCALE;
 // Each layer's tiles darkening toward the bottom of the map, over its
 // bottom this-many rows — darkest right at the bottom edge. The further
 // back the layer, the higher it reaches.
@@ -135,11 +144,11 @@ function bakeLayers(tileLayers, tilesets, tileProps, width, height, img) {
     love.graphics.setShader();
     love.graphics.setCanvas(onto);
     love.graphics.setBlendMode('multiply', 'premultiplied');
-    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE, SHADOW_DOWNSCALE);
+    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE * BAKE_SCALE, SHADOW_DOWNSCALE * BAKE_SCALE);
     love.graphics.setBlendMode('alpha');
   };
 
-  const canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE);
+  const canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE * BAKE_SCALE, height * TILE_WORLD_SIZE * BAKE_SCALE);
   love.graphics.push('all');
   love.graphics.origin();
   love.graphics.setCanvas(canvas);
@@ -150,12 +159,12 @@ function bakeLayers(tileLayers, tilesets, tileProps, width, height, img) {
     const shadeRows = GROUND_SHADE_ROWS[String(l.name ?? '').toLowerCase()];
     if (shadeRows && shadeRows > 0) {
       const shade = getGroundShadeShader();
-      shade.send('bottomY', height * TILE_WORLD_SIZE);
-      shade.send('fadeHeight', shadeRows * TILE_WORLD_SIZE);
+      shade.send('bottomY', height * TILE_WORLD_SIZE * BAKE_SCALE);
+      shade.send('fadeHeight', shadeRows * TILE_WORLD_SIZE * BAKE_SCALE);
       shade.send('darkness', GROUND_SHADE_DARKNESS);
       love.graphics.setShader(shade);
     }
-    drawLayerTiles(l, 1, 0, 0);
+    drawLayerTiles(l, BAKE_SCALE, 0, 0);
     love.graphics.setShader();
     if (SHADOWED_LAYERS[String(l.name ?? '').toLowerCase()]) {
       // The shadow of the next layer in front (only the next: one further
@@ -170,5 +179,5 @@ function bakeLayers(tileLayers, tilesets, tileProps, width, height, img) {
   return canvas;
 }
 
-export { bakeLayers };
+export { bakeLayers, CANVAS_SCALE };
 export { TiledTerrain as api };

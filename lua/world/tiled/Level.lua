@@ -95,7 +95,7 @@ Level.__index = Level
 function Level:draw()
   if not self.canvas then return end
   love.graphics.setColor(1, 1, 1, 1)
-  love.graphics.draw(self.canvas, self.anchorX, self.anchorY)
+  love.graphics.draw(self.canvas, self.anchorX, self.anchorY, 0, self.canvasScale, self.canvasScale)
 end
 
 ----------------------------------------------------------------------
