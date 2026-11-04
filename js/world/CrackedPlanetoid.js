@@ -1841,14 +1841,16 @@ class CrackedPlanetoid {
     g.setBlendMode('alpha');
     g.setStencilTest();
 
-    // A Tiled map's tiles, each with its own art...
-    if (this.isTiled) this.drawTiles();
+    // A Tiled map's tiles, each with its own art, and the obsidian and ice
+    // blocks (on any cracked planet)...
+    this.drawTiles();
 
     // ...or the clods: dirt, a soft lighter lump in the middle, a few pebbles.
     for (const ring of (this.isTiled ? [] : this.rings)) {
       for (let j = 0; j < ring.count; j++) {
         const clod = ring.clods[j];
-        if (!clod) continue;
+        // (Blocks aren't dirt: drawTiles drew them.)
+        if (!clod || clod.obsidian || clod.ice) continue;
         const [a0, a1] = clodAngles(ring, j);
         const s = clod.shade;
         g.setColor(c[0] * s, c[1] * s, c[2] * s, 1);
@@ -1922,7 +1924,8 @@ class CrackedPlanetoid {
         const clod = ring.clods[j];
         if (!clod) continue;
         const block = getBlockImage(clod);
-        const ts = block ? null : tilesetForGid(this.tilesets, clod.gid);
+        // (On a planet that isn't a Tiled map, only the blocks are drawn here.)
+        const ts = block || !this.isTiled ? null : tilesetForGid(this.tilesets, clod.gid);
         const image = block || (ts && ts.image);
         if (!image) continue;
         let vertices = verticesByImage.get(image);

@@ -264,16 +264,11 @@ end
 
 ----------------------------------------------------------------------
 -- Shared wave clock — ONE value read by every Lava tile's shader, not
--- a per-instance one. An earlier version gave each tile its own
--- self.time, seeded with a random starting offset so unrelated strips
--- elsewhere on the map wouldn't wave in lockstep — but after switching
--- to one instance per individual tile (see TiledTerrain.lua's
--- buildLavaTiles), that same per-instance randomness meant every pair
--- of ADJACENT tiles had a different random phase baked in too, so the
--- wave visibly jumped at every tile edge even though worldX itself was
--- genuinely continuous across them. A single shared clock removes that
--- — worldX (see the shader above) is what gives each tile a distinct
--- but continuous phase now, not time.
+-- a per-instance one. There's one instance per tile (see TiledTerrain's
+-- buildLavaTiles), so a separate clock per tile would give neighboring
+-- tiles different phases and the wave would jump at every tile edge.
+-- worldX (see the shader above) is what gives each tile a distinct but
+-- continuous phase.
 --
 -- Advanced explicitly once per frame via Lava.updateSharedClock()
 -- (called from main.lua, alongside but separate from each instance's

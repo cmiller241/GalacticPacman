@@ -106,9 +106,9 @@ end
 function CollisionSystem:handlePlayerWallCollisions(player, walls)
   if not walls then return end
 
-  -- Vertical CAPSULE instead of a bare circle: player.pos still anchors
-  -- the BOTTOM circle exactly as before (every other system — ground
-  -- distance, water, enemies — keeps treating that the same way), and
+  -- Vertical CAPSULE instead of a bare circle: player.pos anchors the
+  -- BOTTOM circle (what every other system — ground distance, water,
+  -- enemies — treats as "the player"), and
   -- segTopY is how much further UP the capsule's center segment
   -- extends, derived from Player.lua's own headReach (how tall he
   -- actually looks, helmet included) minus this circle's own radius,
@@ -117,7 +117,7 @@ function CollisionSystem:handlePlayerWallCollisions(player, walls)
   -- reached anywhere close to his actual head height, so a low ceiling
   -- tile could visibly clip through his helmet without ever registering
   -- a collision. headReach<=player.radius collapses segTopY back to
-  -- player.pos.y, i.e. exactly the old single-circle behavior.
+  -- player.pos.y, i.e. a plain circle.
   -- Zeroed out while morphed into a ball (see Player.lua's own
   -- isBall/drawBallMode) — a ball is drawn as a plain circle with
   -- nothing reaching up past its own radius, so the capsule collapses
@@ -134,9 +134,7 @@ function CollisionSystem:handlePlayerWallCollisions(player, walls)
   -- ceilingRight/ceilingLeft tile's own seam into the flat ceiling
   -- run, that fixed world-up extension pokes straight into the very
   -- ceiling tile being walked onto, registering a bogus collision that
-  -- blocked the transition outright — confirmed against a real
-  -- screenshot showing the (non-rotating) capsule sitting inside the
-  -- wall there. There's no equivalent "low ceiling bonks your upright
+  -- blocks the transition outright. There's no equivalent "low ceiling bonks your upright
   -- head" scenario during a wall-climb traversal anyway, so — same as
   -- ball mode — this just collapses back to a plain circle rather than
   -- attempting to rotate the capsule to match the surface (a much
@@ -229,9 +227,9 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
 
   -- Immovable and rewinding bodies never take part in a pair below, so
   -- they're left out of the grid entirely — and out of the cell size.
-  -- (The sky dome, radius ~4000, used to set the cells 8000 across:
-  -- wider than the whole streamed 3x3 of world cells, so every body
-  -- landed in the same few buckets and every pair got checked.)
+  -- (The sky dome, radius ~4000, would otherwise make the cells 8000
+  -- across: wider than the whole streamed 3x3 of world cells, so every
+  -- body would land in the same few buckets and every pair be checked.)
   local function takesPart(e)
     return not (e.isImmovable or e.recalling)
   end
@@ -301,8 +299,8 @@ function CollisionSystem:handleElasticCollisions(entities1, entities2, radiusPro
                   local v1t, v2t = tx * v1x + ty * v1y, tx * v2x + ty * v2y
                   local new_v1n = (v1n * (m1 - m2) + 2 * m2 * v2n) / totalMass
                   local new_v2n = (v2n * (m2 - m1) + 2 * m1 * v1n) / totalMass
-                  -- (Fresh velocity vectors, as before, in case anything
-                  -- holds on to the old ones.)
+                  -- (Fresh velocity vectors, in case anything holds on
+                  -- to the previous ones.)
                   p1.vel = Vector2.new(nx * new_v1n + tx * v1t, ny * new_v1n + ty * v1t)
                   p2.vel = Vector2.new(nx * new_v2n + tx * v2t, ny * new_v2n + ty * v2t)
                 end

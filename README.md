@@ -40,3 +40,30 @@ scanning `js/` for `'img/...'` and `'sounds/...'` string literals.
 
 Changes made in `lua/` don't carry over to `js/` on their own; each one has to
 be made in both places.
+
+## Where things are
+
+The same layout in `lua/` and `js/`:
+
+- `main.lua` / `js/main.js`: `love.load`, and `love.update` / `love.draw` as a
+  list of named steps in the order they run. `START_AT` at the top picks where
+  Bob starts, for testing.
+- `setup/StartPositions`: the named start positions and the T teleport list.
+- `debug/DebugDraw`: the debug overlays (C collision shapes, A belt cells,
+  R gravity rings).
+- `ui/Hud`: the text readout in the top-left corner.
+- `entities/Player` plus `entities/player/`: the player is split by job.
+  `Player` has his state, update, ball mode, teleport, death and respawn;
+  `Movement`, `Rendering` and `Targeting` hold the rest of his methods and are
+  copied onto `Player` when it loads. `Tuning` has the timings both use.
+- `systems/WaterSystem` plus `systems/water/`: spraying, droplets, portals and
+  the per-frame update are in `WaterSystem`; the parts are `Tuning` (every
+  number and color), `Shared` (the state the parts share, as `shared.<name>`),
+  `Oceans`, `LevelGrid`, `PlanetGrids`, `Effects`, `Obsidian`, `Ice` and
+  `Rendering`.
+- `world/TiledTerrain` plus `world/tiled/`: `TiledTerrain.load` puts together
+  `Tiles`, `TerrainShape`, `ClimbShapes`, `Level` and `Baking`.
+
+In those split modules, a part that adds functions to the main table
+(`WaterSystem.draw`, say) defines them on its own `api` table, and the main
+file copies them on, refusing duplicates.

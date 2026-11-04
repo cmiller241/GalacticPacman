@@ -1,16 +1,19 @@
 // js/main.js
 //
-// The game's entry point: love.load / love.update / love.draw (a port of
-// main.lua), run in the browser through the LÖVE-API shim in js/love/.
-// Bundled by esbuild into dist/bundle.js (npm run build), which
-// index.html loads.
+// The game's entry point (a port of main.lua), run in the browser through
+// the LÖVE-API shim in js/love/. Bundled by esbuild into dist/bundle.js
+// (npm run build), which index.html loads.
+//
+// love.load builds the world; love.update and love.draw run each frame as
+// a list of named steps, in order. Debug overlays are in js/debug/DebugDraw.js,
+// the HUD text in js/ui/Hud.js, and the start positions and teleport list
+// in js/setup/StartPositions.js.
 
 import love from './love/index.js';
 import assetList from './assetList.js';
 import state from './state.js';
 import constants from './constants.js';
 import Planetoid from './world/Planetoid.js';
-import Asteroid from './entities/Asteroid.js';
 import StompBurst from './effects/StompBurst.js';
 import TitleScreen from './ui/TitleScreen.js';
 import PauseMenu from './ui/PauseMenu.js';
@@ -23,6 +26,7 @@ import assetLoading from './setup/assetLoading.js';
 import inputHandlers from './setup/InputHandlers.js';
 import gamepadInput from './setup/GamePadInput.js';
 import worldGen from './setup/WorldGen.js';
+import StartPositions from './setup/StartPositions.js';
 import World from './levels/World.js';
 import WorldObjects from './systems/WorldObjects.js';
 import Projectiles from './systems/Projectiles.js';
@@ -32,7 +36,6 @@ import MiniMap from './ui/MiniMap.js';
 import BeltOrbit from './systems/BeltOrbitSystem.js';
 import utils from './utils.js';
 import LockOutline from './effects/LockOutline.js';
-import InfluenceRing from './effects/InfluenceRing.js';
 import VatsOverlay from './effects/VatsOverlay.js';
 import VatsCursor from './effects/VatsCursor.js';
 import PortalGun from './systems/PortalGun.js';
@@ -48,29 +51,8 @@ import GrassBlades from './effects/GrassBlades.js';
 import WeaponModes from './systems/WeaponModes.js';
 import WeaponBar from './ui/WeaponBar.js';
 import TouchControls from './ui/TouchControls.js';
-
-
-let collisionSystem;
-
-// Reused every frame rather than built fresh each time: the planetoids
-// the collision passes check (see collidablePlanetoids in love.update),
-// which of them are immovable, and the camera nudged by screen shake.
-const collidablePlanetoids = [], immovablePlanetoids = [];
-const shakenCamera = { x: 0, y: 0 };
-// An empty list for `state.cannons ?? NONE` and the like, when a world
-// list doesn't exist — instead of a new empty array every frame.
-const NONE = Object.freeze([]);
-
-const OOOMBA_STOMP_BOUNCE = 7;
-const INFLUENCE_RING_ALPHA_PULLING = 0.9;
-const INFLUENCE_RING_ALPHA_INSIDE = 0.5;
-const INFLUENCE_RING_ALPHA_NEAR = 0.35;
-const INFLUENCE_RING_ALPHA_FAR = 0.05;
-const INFLUENCE_RING_FADE_DISTANCE = 700;
-const VATS_TIME_SCALE = 0.05;
-const VATS_EASE_RATE = 0.12;
-const VATS_EASE_SNAP_THRESHOLD = 0.005;
-
+import DebugDraw from './debug/DebugDraw.js';
+import Hud from './ui/Hud.js';
 
 // =====================================================================
 // START POSITION (for testing)
@@ -92,167 +74,38 @@ const VATS_EASE_SNAP_THRESHOLD = 0.005;
 //                 (needs World.SHOW.expressway)
 //
 // If the planet you pick is switched off, he starts at the shelter and
-// the console says why. (Same switch as main.lua's.)
+// the console says why. T in game opens a list of the same places.
+// (Same switch as main.lua's.)
 const START_AT = 'shelter';
 const TILED_START_COLUMN = 5; // counting from 0, like Tiled
 
-// Each option sets state.respawnPoint (see Player.respawn). `expresswayEntry`
-// is { planet, cannon } when the expressway was built, else null.
-const START_POSITIONS = {
-  mining() {
-    const planet = state.miningPlanet;
-    if (!planet) return null;
-    // The planet drifts: followsPlanet keeps the point on top of it every
-    // frame (see love.update).
-    return {
-      x: planet.pos.x, y: planet.pos.y - planet.radius - constants.PLAYER_RADIUS,
-      planet, followsPlanet: true,
-    };
-  },
+let collisionSystem;
 
-  fisherman() {
-    const rect = state.roundedRectPlanet;
-    if (!rect) return null;
-    return {
-      x: rect.pos.x - rect.halfWidth * 0.4,
-      y: rect.pos.y - rect.halfHeight - constants.PLAYER_RADIUS - 20,
-    };
-  },
+// Reused every frame rather than built fresh each time: the planetoids
+// the collision passes check (see runWorldCollisions), which of them are
+// immovable, and the camera nudged by screen shake.
+const collidablePlanetoids = [], immovablePlanetoids = [];
+const shakenCamera = { x: 0, y: 0 };
+// An empty list for `state.cannons ?? NONE` and the like, when a world
+// list doesn't exist — instead of a new empty array every frame.
+const NONE = Object.freeze([]);
 
-  cracked() {
-    const planet = state.crackedPlanet;
-    if (!planet) return null;
-    return {
-      x: planet.pos.x,
-      y: planet.pos.y - planet.radius - constants.PLAYER_RADIUS - 20,
-    };
-  },
-
-  tiled() {
-    const planet = state.tiledPlanet;
-    if (!planet) return null;
-    const columns = planet.rings[0].count;
-    const angle = -Math.PI / 2 + (TILED_START_COLUMN + 0.5) / columns * 2 * Math.PI;
-    const dist = planet.radius + constants.PLAYER_RADIUS + 20;
-    return {
-      x: planet.pos.x + Math.cos(angle) * dist,
-      y: planet.pos.y + Math.sin(angle) * dist,
-    };
-  },
-
-  tunnel() {
-    // On the sky dome's ground, a few steps left of the ball tunnel's
-    // mouth in Level1 (map column 33, row 35), dropping onto the floor
-    // (row 36).
-    const level = state.tiledLevels ? state.tiledLevels[0] : null;
-    if (!level) return null;
-    const T = 64;
-    return {
-      x: level.anchorX + 27.5 * T,
-      y: level.anchorY + 36 * T - constants.PLAYER_RADIUS - 20,
-    };
-  },
-
-  pinball() {
-    if (!state.pinballPlanet) return null;
-    const portal = state.pinballPlanet.interior.getPortalPosition();
-    return { x: portal.x, y: portal.y, pinball: state.pinballPlanet.interior };
-  },
-
-  expressway(expresswayEntry) {
-    if (!expresswayEntry) return null;
-    // Standing a little round from the cannon, not in it.
-    const { planet, cannon } = expresswayEntry;
-    const standAngle = cannon.mountAngle - 0.45;
-    const standDist = planet.radius + constants.PLAYER_RADIUS;
-    return {
-      x: planet.pos.x + Math.cos(standAngle) * standDist,
-      y: planet.pos.y + Math.sin(standAngle) * standDist,
-      planet,
-    };
-  },
-};
-
-function applyStartPosition(expresswayEntry) {
-  if (START_AT === 'shelter') return;
-  const place = START_POSITIONS[START_AT];
-  const point = place ? place(expresswayEntry) : null;
-  if (!point) {
-    console.log(`main.js: START_AT = "${START_AT}" ${place ? 'but that planet is switched off' : "isn't a known start position"} - starting at the shelter instead.`);
-    return;
-  }
-  state.respawnPoint = point;
-  // He isn't waiting behind the shelter door, so skip its intro.
-  state.spaceShelter.playerInFront = true;
-  state.spaceShelter.introDone = true;
-}
+// Upward speed (world units per baseline frame) the player hops off a
+// freshly flattened Ooomba with — a small rebound, well under a jump.
+const OOOMBA_STOMP_BOUNCE = 7;
+// V.A.T.S. slow motion: the time scale it eases to, how fast (per
+// baseline frame), and how close counts as there.
+const VATS_TIME_SCALE = 0.05;
+const VATS_EASE_RATE = 0.12;
+const VATS_EASE_SNAP_THRESHOLD = 0.005;
+// Frame time is measured in 60fps frames, clamped to a 20fps floor so a
+// stall can't fling anything through geometry.
+const FPS_BASELINE = 60;
+const MAX_FRAME_DT = 0.05;
 
 // =====================================================================
-// DEBUG TELEPORT (T)
+// LOAD
 // =====================================================================
-// T pauses the game with a list of every start position above; picking
-// one puts him there straight away, the same as starting there would
-// (see PauseMenu.openList). It also becomes his respawn point, so dying
-// brings him back to it.
-const TELEPORT_PLACES = [
-  { key: 'shelter', label: 'SPACE SHELTER' },
-  { key: 'mining', label: 'MINING PLANET' },
-  { key: 'fisherman', label: "FISHERMAN'S PLANET" },
-  { key: 'cracked', label: 'CRACKED PLANET' },
-  { key: 'tiled', label: 'TILED PLANET' },
-  { key: 'tunnel', label: 'SKY DOME BALL TUNNEL' },
-  { key: 'pinball', label: 'PINBALL TABLE' },
-  { key: 'expressway', label: 'EXPRESSWAY' },
-];
-
-// Remembered by love.load for the teleport list: the shelter's own
-// respawn point (before START_AT changes it) and the expressway's entry.
-let shelterRespawnPoint = null, expresswayEntry = null;
-let lastTeleport = 0; // the list opens on whichever was picked last
-
-// Where `key` (a TELEPORT_PLACES key) would put him right now, or null
-// if that planet is switched off.
-function teleportPoint(key) {
-  if (key === 'shelter') return shelterRespawnPoint;
-  return START_POSITIONS[key](expresswayEntry) || null;
-}
-
-function teleportTo(key) {
-  const player = state.player, point = teleportPoint(key);
-  if (!player || !point) return;
-  state.respawnPoint = point;
-  // (Out of the shelter's intro, if it was still playing.)
-  if (state.spaceShelter) {
-    state.spaceShelter.playerInFront = true;
-    state.spaceShelter.introDone = true;
-  }
-  // Nothing from where he was comes with him.
-  player.clearPullTarget();
-  player.clearLockTarget();
-  state.vatsActive = false;
-  player.deathZoneRespawn = null; // (Player.respawn would go there instead)
-  player.respawn();
-  // The camera jumps with him, and the world round him is streamed in
-  // now rather than up to half a second later.
-  state.portalCameraGlide = null;
-  state.cannonZoomFlying = null;
-  state.cannonZoomReturn = null;
-  Camera.pointAtPlayer();
-  worldGen.updateActiveCells();
-  state.cellCheckTimer = 0;
-}
-
-function openTeleportList() {
-  const options = TELEPORT_PLACES.map((place) => ({
-    label: place.label,
-    enabled: teleportPoint(place.key) != null,
-  }));
-  PauseMenu.openList('TELEPORT', options, (index) => {
-    lastTeleport = index;
-    teleportTo(TELEPORT_PLACES[index].key);
-  }, lastTeleport);
-}
-
 // love.load runs once at startup, and again in full every time the pause
 // menu's EXIT TO TITLE is chosen (a fresh world each time).
 let hasLoadedOnce = false;
@@ -324,8 +177,7 @@ love.load = function () {
     inputHandlers.attachInputHandlers();
     // EXIT TO TITLE: run this whole function again.
     PauseMenu.onExitToTitle = () => love.load();
-    // T: the debug teleport list (see openTeleportList).
-    PauseMenu.onTeleportKey = openTeleportList;
+    PauseMenu.onTeleportKey = StartPositions.openTeleportList;
   }
 
   collisionSystem = CollisionSystem.new();
@@ -334,13 +186,15 @@ love.load = function () {
   // Every hand-placed landmark, the dome's Tiled interior and the
   // player (see js/levels/World.js).
   const world = World.build();
-  // (For the T teleport list.)
-  shelterRespawnPoint = state.respawnPoint;
-  expresswayEntry = world.expresswayEntry;
 
-  // Testing start spot (START_AT, top of this file), now that every
+  // The testing start spot (START_AT, top of this file), now that every
   // planet it could pick exists.
-  applyStartPosition(world.expresswayEntry);
+  StartPositions.init({
+    shelterRespawnPoint: state.respawnPoint,
+    expresswayEntry: world.expresswayEntry,
+    tiledStartColumn: TILED_START_COLUMN,
+  });
+  StartPositions.apply(START_AT);
 
   // Stream the 3x3 around the house (after the dome exists, so cells
   // steer clear of it).
@@ -358,21 +212,9 @@ love.load = function () {
   Camera.pointAtPlayer();
 };
 
-function updatePlanetoidsPhysics() {
-  for (const p of state.planetoids) {
-    if (p.recalling) {
-      // (Rewinding: Recall.update moves it.)
-    } else if (p.isImmovable) {
-      p.vel.x = 0; p.vel.y = 0;
-    } else {
-      p.pos.addScaled(p.vel, state.timeScale);
-      if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
-      if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
-      if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
-      if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
-    }
-  }
-}
+// =====================================================================
+// UPDATE
+// =====================================================================
 
 // Removes every element of `list` (back to front) that `test` picks.
 function removeWhere(list, test) {
@@ -409,15 +251,14 @@ function musicForPlayer() {
   return null;
 }
 
-love.update = function (dt) {
-  if (dt > 0) state.fps = (state.fps ?? 0) * 0.9 + (1 / dt) * 0.1;
-
-  gamepadInput.pollGamepad(dt);
-
-  // Paused: nothing below runs at all.
-  if (PauseMenu.isOpen()) return;
-
-  // The moment V.A.T.S. ends: unlock, and drop a pull nobody's holding.
+// V.A.T.S. (Triangle — see GamePadInput.js): while it's active he only
+// picks a pull target; walking, jumping and firing are refused. A pull
+// already under way carries on even with L2 released, which lets him chain
+// pulls without landing.
+//
+// The moment it ends: whatever was locked is unlocked, and a pull that
+// nobody is holding L2 (or the right mouse button) for is dropped.
+function handleVatsEnd() {
   if (state.vatsWasActive && !state.vatsActive && state.player) {
     state.player.clearLockTarget();
     if (state.player.pullTarget && !(state.gamepadPullHeld || love.mouse.isDown(1))) {
@@ -425,16 +266,12 @@ love.update = function (dt) {
     }
   }
   state.vatsWasActive = state.vatsActive;
+}
 
-  TitleScreen.update(dt);
-  VatsCursor.update(dt);
-
-  // Background music fades to suit where he is (see js/AudioManager.js).
-  if (state.audioManager) state.audioManager.updateMusic(musicForPlayer(), dt);
-
-  // This frame's time as "how many 60fps frames" (clamped to a 20fps floor).
-  const FPS_BASELINE = 60;
-  const MAX_FRAME_DT = 0.05;
+// Sets state.timeScale, which everything that moves multiplies its
+// per-frame movement by: this frame's length in 60fps frames, times the
+// V.A.T.S. slow-motion ease, times a cannon shot's hit-stop.
+function updateTimeScale(dt) {
   const frameNorm = Math.min(dt, MAX_FRAME_DT) * FPS_BASELINE;
 
   state.timeScaleTarget = state.vatsActive ? VATS_TIME_SCALE : 1;
@@ -445,161 +282,206 @@ love.update = function (dt) {
     state.vatsMultiplier += timeScaleDiff * Math.min(VATS_EASE_RATE * frameNorm, 1);
   }
 
-  state.timeScale = state.vatsMultiplier * frameNorm;
-  // (A cannon shot's hit-stop.)
-  state.timeScale *= Cannon.timeFactor();
+  state.timeScale = state.vatsMultiplier * frameNorm * Cannon.timeFactor();
+}
 
+// Drifting planetoids move and bounce off the edges of the world.
+function updatePlanetoidsPhysics() {
+  for (const p of state.planetoids) {
+    if (p.recalling) {
+      // (Rewinding: Recall.update moves it.)
+    } else if (p.isImmovable) {
+      p.vel.x = 0; p.vel.y = 0;
+    } else {
+      p.pos.addScaled(p.vel, state.timeScale);
+      if (p.pos.x - p.radius < 0) { p.pos.x = p.radius; p.vel.x = -p.vel.x; }
+      if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
+      if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
+      if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+    }
+  }
+}
+
+// Planetoids, and everything in the world's object lists. All of this runs
+// before the player moves, so he's carried along by whatever he's standing on.
+function updateWorld(dt) {
   updatePlanetoidsPhysics();
 
+  // Planetoids that turn on the spot (see CrystalPlanet.js).
   for (const p of state.planetoids) {
     if (p.updateRotation && !p.recalling) p.updateRotation(state.timeScale);
   }
 
-  // (TEMPORARY, with TEMP_START_ON_MINING_PLANET.)
+  // START_AT = 'mining': keeps the respawn point on top of the drifting planet.
   if (state.respawnPoint && state.respawnPoint.followsPlanet) {
     const point = state.respawnPoint, planet = state.respawnPoint.planet;
     point.x = planet.pos.x; point.y = planet.pos.y - planet.radius - constants.PLAYER_RADIUS;
   }
 
+  // Planetoids with their own movement (SphereMove's patrol path, so far).
   for (const p of state.planetoids) {
     if (p.update && !p.recalling) p.update();
   }
 
   Recall.update(dt);
 
-  // Everything in the world's object lists (rope rocks, asteroids, coins,
-  // Ooombas, fire bars, levers, fish, NPCs, ...) — before the player
-  // moves, so one standing on a rope rock is carried along. Order and
-  // details: js/systems/WorldObjects.js.
+  // Rope rocks, asteroids, coins, Ooombas, fire bars, levers, fish, NPCs,
+  // ... (order and details: js/systems/WorldObjects.js).
   WorldObjects.update('world', dt);
 
   // Player.js reads this to freeze him while any conversation is showing.
   state.dialogueActive = WorldObjects.anyDialogueActive();
+}
 
-  const player = state.player;
-  // A left click since last frame (see InputHandlers.js), fired below
-  // once he's moved; dropped if he can't fire this frame.
-  const mouseFire = state.mouseFirePending;
-  state.mouseFirePending = false;
+// Walking input. On the title screen its autopilot steers him. No steering
+// during the opening cutscene, inside the pinball table, in V.A.T.S., or in
+// or shot from a cannon.
+function movePlayer(player) {
+  if (state.titleScreen) {
+    player.move(TitleScreen.getKeys());
+    return;
+  }
+  const noSteering = state.introLocked || player.inPinball || state.vatsActive
+    || player.inCannon || player.cannonFlight;
+  // Standing, he can't walk or run into a gap lower than he is tall — a
+  // ball tunnel (see TiledTerrain.js's Level.headroomAt) — unless he's
+  // already somewhere that low.
+  const level = state.tiledLevels ? state.tiledLevels[0] : null;
+  const px = player.pos.x, py = player.pos.y, parc = player.surfaceArcPos;
+  const hadRoom = level && player.onSurface && !player.isBall && level.headroomAt(px, py, player.radius);
+  player.move(noSteering ? {} : state.keys);
+  if (hadRoom && player.onSurface && !player.isBall && !level.headroomAt(player.pos.x, player.pos.y, player.radius)) {
+    player.pos.x = px; player.pos.y = py; player.surfaceArcPos = parc;
+    player.isWalking = false;
+    player.groundMoveSpeedX = 0;
+  }
+}
+
+// Ooombas are lethal to touch unless landed on from above. Each one
+// squashed flat this frame is removed, with a burst on the ground under his
+// feet (or where it stood) and a small hop for him, along the Ooomba's own
+// up. Skipped on the title screen: he can't die before the game starts.
+function handleOoombaStomps(player) {
+  if (!(state.ooombas && state.ooombas.length > 0) || state.titleScreen) return;
+  const flattened = collisionSystem.handlePlayerOoombaCollisions(player, state.ooombas);
+  for (const o of flattened) {
+    const up = o.up;
+    const groundX = o.pos.x - up.x * o.halfHeight, groundY = o.pos.y - up.y * o.halfHeight;
+    if (o.squashPressed) {
+      // The point on the ground directly beneath him.
+      const sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x;
+      StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up);
+      if (!player.onSurface) {
+        const [groundVelX, groundVelY] = o.groundVelocity();
+        const rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y;
+        player.vel.x += up.x * (OOOMBA_STOMP_BOUNCE - rising);
+        player.vel.y += up.y * (OOOMBA_STOMP_BOUNCE - rising);
+        player.isGroundPounding = false;
+      }
+    } else {
+      StompBurst.spawn(groundX, groundY, up);
+    }
+    if (state.audioManager) state.audioManager.playGoombaStomp();
+    removeWhere(state.ooombas, (x) => x === o);
+  }
+}
+
+// The player for one frame: moving, gravity (or whatever replaces it),
+// cannons, portals, firing, and his collisions with the world. `fire` is
+// true when he should shoot this frame.
+function updatePlayer(player, fire) {
+  // Going through a portal: he follows its path instead of everything below.
   if (player.portalTransit) {
     PortalGun.updateTransit(player, state.timeScale);
-  } else {
-    if (state.titleScreen) {
-      player.move(TitleScreen.getKeys());
-    } else {
-      const noSteering = state.introLocked || player.inPinball || state.vatsActive
-        || player.inCannon || player.cannonFlight;
-      // Standing, he can't walk or run into a gap lower than he is tall —
-      // a ball tunnel (see TiledTerrain.js's Level.headroomAt) — unless
-      // he's already somewhere that low.
-      const level = state.tiledLevels ? state.tiledLevels[0] : null;
-      const px = player.pos.x, py = player.pos.y, parc = player.surfaceArcPos;
-      const hadRoom = level && player.onSurface && !player.isBall && level.headroomAt(px, py, player.radius);
-      player.move(noSteering ? {} : state.keys);
-      if (hadRoom && player.onSurface && !player.isBall && !level.headroomAt(player.pos.x, player.pos.y, player.radius)) {
-        player.pos.x = px; player.pos.y = py; player.surfaceArcPos = parc;
-        player.isWalking = false;
-        player.groundMoveSpeedX = 0;
-      }
-    }
-
-    if (player.inPinball) {
-      const jumpHeld = !!(state.keys[' '] || state.gamepadJumpHeld);
-      player.inPinball.updateBall(player, state.timeScale, jumpHeld);
-    } else if (player.pullTarget) {
-      player.applyPullForce();
-    } else if (!(player.inCannon || player.cannonFlight)) {
-      state.gravitySystem.applyTo(player);
-    }
-
-    player.update();
-
-    for (const cannon of (state.cannons ?? NONE)) cannon.update(player, state.timeScale);
-    Cannon.updateFlight(player, state.timeScale);
-    for (const cannon of (state.cannons ?? NONE)) cannon.updateCoins(player, state.timeScale / 60);
-
-    PortalGun.tryEnter(player);
-
-    if (!player.inPinball && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
-
-    // Gamepad R2 held, or a left click: fire (shootFireball throttles itself).
-    if ((state.gamepadFireHeld || mouseFire) && player) {
-      if (state.iceMode) player.shootIceBolt(); else player.shootFireball();
-    }
-
-    player.touchingWall = null;
-    player.wallContactNormal = null;
-
-    if (state.tiledLevels) {
-      for (const level of state.tiledLevels) {
-        collisionSystem.handlePlayerWallCollisions(player, level.walls);
-        // Ball-tunnel pieces, and (standing, in the air) his head.
-        level.pushPlayer(player);
-      }
-    }
-    // Plungers: solid to him, loaded by pushing into them, fire him when
-    // he lets go (see js/world/Plunger.js).
-    for (const plunger of state.plungers ?? NONE) plunger.update(player, state.timeScale);
-
-    collisionSystem.handlePlayerSpikeyCollisions(player, state.spikeys);
-
-    // Ooombas: squashed flat ones go with a burst and a little hop.
-    if (state.ooombas && state.ooombas.length > 0 && !state.titleScreen) {
-      const flattened = collisionSystem.handlePlayerOoombaCollisions(player, state.ooombas);
-      for (const o of flattened) {
-        const up = o.up;
-        const groundX = o.pos.x - up.x * o.halfHeight, groundY = o.pos.y - up.y * o.halfHeight;
-        if (o.squashPressed) {
-          const sideways = (player.pos.x - o.pos.x) * -up.y + (player.pos.y - o.pos.y) * up.x;
-          StompBurst.spawn(groundX + -up.y * sideways, groundY + up.x * sideways, up);
-          if (!player.onSurface) {
-            const [groundVelX, groundVelY] = o.groundVelocity();
-            const rising = (player.vel.x - groundVelX) * up.x + (player.vel.y - groundVelY) * up.y;
-            player.vel.x += up.x * (OOOMBA_STOMP_BOUNCE - rising);
-            player.vel.y += up.y * (OOOMBA_STOMP_BOUNCE - rising);
-            player.isGroundPounding = false;
-          }
-        } else {
-          StompBurst.spawn(groundX, groundY, up);
-        }
-        if (state.audioManager) state.audioManager.playGoombaStomp();
-        removeWhere(state.ooombas, (x) => x === o);
-      }
-    }
-
-    collisionSystem.handlePlayerSkyDomeContainment(player, state.skyDomePlanet);
+    return;
   }
 
-  // Off-screen belt planetoids are left out of planetoid collisions.
+  movePlayer(player);
+
+  // Inside the pinball table its own ball physics replace gravity and
+  // planet collision. No gravity in a cannon or on a cannon shot either.
+  if (player.inPinball) {
+    const jumpHeld = !!(state.keys[' '] || state.gamepadJumpHeld);
+    player.inPinball.updateBall(player, state.timeScale, jumpHeld);
+  } else if (player.pullTarget) {
+    player.applyPullForce();
+  } else if (!(player.inCannon || player.cannonFlight)) {
+    state.gravitySystem.applyTo(player);
+  }
+
+  player.update();
+
+  // Cannons swallowing, aiming and firing him, his flight once fired, and
+  // then the coins down their routes (see js/world/Cannon.js).
+  for (const cannon of (state.cannons ?? NONE)) cannon.update(player, state.timeScale);
+  Cannon.updateFlight(player, state.timeScale);
+  for (const cannon of (state.cannons ?? NONE)) cannon.updateCoins(player, state.timeScale / 60);
+
+  // Before collision, so landing on a floor portal doesn't stop his fall first.
+  PortalGun.tryEnter(player);
+
+  if (!player.inPinball && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
+
+  // shootFireball / shootIceBolt throttle the fire rate themselves.
+  if (fire) {
+    if (state.iceMode) player.shootIceBolt(); else player.shootFireball();
+  }
+
+  // Wall and Spikey collisions only ever set these, so they're cleared
+  // first to mean "touching this frame" (Player.jump's wall jump reads them).
+  player.touchingWall = null;
+  player.wallContactNormal = null;
+
+  for (const level of (state.tiledLevels ?? NONE)) {
+    collisionSystem.handlePlayerWallCollisions(player, level.walls);
+    // Ball-tunnel pieces, and (standing, in the air) his head.
+    level.pushPlayer(player);
+  }
+  // Plungers: solid to him, loaded by pushing into them, fire him when he
+  // lets go (see js/world/Plunger.js).
+  for (const plunger of state.plungers ?? NONE) plunger.update(player, state.timeScale);
+
+  collisionSystem.handlePlayerSpikeyCollisions(player, state.spikeys);
+  handleOoombaStomps(player);
+  collisionSystem.handlePlayerSkyDomeContainment(player, state.skyDomePlanet);
+}
+
+// Collisions between everything that isn't the player, plus coin pickups.
+function runWorldCollisions() {
+  // Off-screen belt planetoids are left out of every planetoid collision
+  // pass: there can be hundreds, and bumping off screen has no payoff.
   collidablePlanetoids.length = 0;
   for (const p of state.planetoids) {
     if (!p.isBeltPlanetoid || utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50)) collidablePlanetoids.push(p);
   }
 
+  // Movable planetoids bounce off each other, and off the immovable ones'
+  // true surfaces.
   collisionSystem.handleElasticCollisions(collidablePlanetoids);
+  immovablePlanetoids.length = 0;
+  for (const p of collidablePlanetoids) if (p.isImmovable) immovablePlanetoids.push(p);
+  if (immovablePlanetoids.length > 0) collisionSystem.handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids);
 
-  {
-    immovablePlanetoids.length = 0;
-    for (const p of collidablePlanetoids) if (p.isImmovable) immovablePlanetoids.push(p);
-    if (immovablePlanetoids.length > 0) collisionSystem.handleImmovableCollisions(immovablePlanetoids, collidablePlanetoids);
-  }
-
+  // Fire bars are a hazard to him (not on the title screen) and solid to asteroids.
   if (state.fireBars && state.fireBars.length > 0) {
-    // (Not lethal on the title screen.)
-    if (!state.titleScreen) collisionSystem.handlePlayerFireBarCollisions(player, state.fireBars);
+    if (!state.titleScreen) collisionSystem.handlePlayerFireBarCollisions(state.player, state.fireBars);
     if (state.asteroids && state.asteroids.length > 0) {
       collisionSystem.handleImmovableCollisions(state.fireBars, state.asteroids);
     }
   }
 
+  // Asteroids bounce off each other, and break apart on hitting a planetoid.
   if (state.asteroids && state.asteroids.length > 0) {
     collisionSystem.handleElasticCollisions(state.asteroids);
     const toBreak = collisionSystem.handlePlanetAsteroidCollisions(collidablePlanetoids, state.asteroids);
     for (const [asteroid, planet] of toBreak) Breakage.breakAsteroid(asteroid, planet);
   }
 
-  if (state.coins) collisionSystem.handleCoinCollisions(player, state.coins);
+  if (state.coins) collisionSystem.handleCoinCollisions(state.player, state.coins);
+}
 
+// Portals, water, projectiles, effects, the belt's orbit and the sun.
+function updateSystems(dt) {
   PortalGun.update(dt);
   WaterSystem.update(dt);
   // The water blaster's hiss while he sprays (see js/AudioManager.js).
@@ -612,16 +494,17 @@ love.update = function (dt) {
   // can hit (see js/systems/Projectiles.js).
   Projectiles.update(collisionSystem, collidablePlanetoids);
 
-  // Explosions, wall-jump contact rings and debris particles: purely
-  // time-driven visuals (see js/systems/WorldObjects.js).
+  // Explosions, wall-jump contact rings and debris particles.
   WorldObjects.update('effects', dt);
 
   BeltOrbit.apply(state.planetoids);
 
   if (state.sun) state.sun.update();
+}
 
-  // World streaming and the belt's drip, every so many seconds (real
-  // time, not frames — so neither runs more often at a higher frame rate).
+// World streaming and the belt's drip, every so many seconds of real time
+// (so neither runs more often at a higher frame rate).
+function updateStreaming(dt) {
   state.cellCheckTimer = (state.cellCheckTimer ?? 0) + dt;
   if (state.cellCheckTimer >= worldGen.CELL_CHECK_SECONDS) {
     state.cellCheckTimer = 0;
@@ -633,23 +516,46 @@ love.update = function (dt) {
     state.beltSpawnTimer = 0;
     worldGen.updateBeltSpawning();
   }
+}
+
+love.update = function (dt) {
+  if (dt > 0) state.fps = (state.fps ?? 0) * 0.9 + (1 / dt) * 0.1;
+
+  // Polled even while paused: it's what drives the pause menu.
+  gamepadInput.pollGamepad(dt);
+  if (PauseMenu.isOpen()) return;
+
+  handleVatsEnd();
+  TitleScreen.update(dt);
+  VatsCursor.update(dt);
+
+  // Background music fades to suit where he is (see js/AudioManager.js).
+  if (state.audioManager) state.audioManager.updateMusic(musicForPlayer(), dt);
+
+  updateTimeScale(dt);
+  updateWorld(dt);
+
+  // A left click since last frame (see InputHandlers.js) fires once he's
+  // moved, and is dropped if he can't fire this frame. R2 fires for as
+  // long as it's held.
+  const mouseFire = state.mouseFirePending;
+  state.mouseFirePending = false;
+  updatePlayer(state.player, !!(state.gamepadFireHeld || mouseFire));
+
+  runWorldCollisions();
+  updateSystems(dt);
+  updateStreaming(dt);
 
   // Zoom and camera position for this frame (see js/systems/Camera.js).
   Camera.update(dt);
 };
 
-function drawFrame() {
-  const g = love.graphics;
-  Planetoid.beginFrame();
-  state.starfield.draw(state.camera, state.visibleWidth, state.visibleHeight);
+// =====================================================================
+// DRAW
+// =====================================================================
 
-  g.push();
-  g.scale(state.zoom, state.zoom);
-  // (Snapped to whole screen pixels, so pixel art doesn't shimmer.)
-  const zoom = state.zoom;
-  g.translate(-Math.floor(state.camera.x * zoom + 0.5) / zoom,
-    -Math.floor(state.camera.y * zoom + 0.5) / zoom);
-
+// Everything up to the planetoids: stars are drawn before this, in screen space.
+function drawBackground() {
   // Bob's and the Ooombas' shadow shapes for this frame (see
   // CharacterShadows.js) — up front, since the Space Shelter just below
   // takes them, as well as the level's tiles further down.
@@ -660,16 +566,15 @@ function drawFrame() {
     GrassBlades.draw(state.skyDomePlanet.grassBlades);
   }
 
-  // Between the dome's background and foreground hex layers; the door
-  // goes over the player once he's stepped out in front of it.
+  // Between the dome's background and foreground hex layers; the door goes
+  // over the player once he's stepped out in front of it (until then it's
+  // drawn after him — see drawForeground).
   if (state.spaceShelter) {
     const shelter = state.spaceShelter;
     shelter.drawBody();
     if (shelter.playerInFront) {
       shelter.drawDoor();
-      // His shadow on the shelter (and its doors), the same as on the
-      // level's tiles — only once he's stepped out in front of it, not
-      // while he's still inside behind the closed door.
+      // His shadow on the shelter and its doors, only once he's in front.
       CharacterShadows.drawOntoSprite(() => {
         shelter.drawBody();
         shelter.drawDoor();
@@ -683,30 +588,14 @@ function drawFrame() {
   // see js/systems/WorldObjects.js.)
   WorldObjects.draw('backdrop');
 
-  // Influence rings ('R'), brightest for whatever's pulling him.
-  if (state.showInfluenceRings) {
-    const player = state.player;
-    const pulling = (player.onSurface && player.currentPlanet)
-      || (state.gravitySystem && state.gravitySystem.findDominantPlanet(player.pos));
-    for (const p of state.planetoids) {
-      if (p.influenceRadius && !p.isRoundedRect && utils.isOnScreen(p.pos.x, p.pos.y, p.influenceRadius, 50)) {
-        const dx = player.pos.x - p.pos.x, dy = player.pos.y - p.pos.y;
-        const outside = Math.sqrt(dx * dx + dy * dy) - p.influenceRadius;
-        let alpha;
-        if (p === pulling) alpha = INFLUENCE_RING_ALPHA_PULLING;
-        else if (outside <= 0) alpha = INFLUENCE_RING_ALPHA_INSIDE;
-        else {
-          const t = Math.min(1, outside / INFLUENCE_RING_FADE_DISTANCE);
-          alpha = INFLUENCE_RING_ALPHA_NEAR + (INFLUENCE_RING_ALPHA_FAR - INFLUENCE_RING_ALPHA_NEAR) * t;
-        }
-        InfluenceRing.draw(p.pos.x, p.pos.y, p.influenceRadius, alpha);
-      }
-    }
-  }
+  DebugDraw.influenceRings();
 
   // Prisms before the planetoids, so each planetoid covers its prisms' feet.
   WorldObjects.draw('planetFeet');
+}
 
+// Planetoids, cannons, hazards and the Tiled levels.
+function drawTerrain() {
   FireBarGlow.prepare();
   for (const p of state.planetoids) {
     // (The dome drew above; water planets draw after the player.)
@@ -740,61 +629,18 @@ function drawFrame() {
       CharacterShadows.drawOnto(level);
       TileGlow.drawOnto(level);
       GrassBlades.draw(level.grassBlades);
-      if (state.showCollisionDebug) {
-        g.setLineWidth(4);
-        g.setColor(1, 0, 0, 1);
-        for (const shape of level.shapes) {
-          if (shape.isWallClimb) continue;
-          for (const seg of shape.segments) g.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y);
-        }
-        g.setColor(0.2, 0.6, 1, 1);
-        for (const wall of (level.walls ?? NONE)) {
-          g.rectangle('line', wall.pos.x - wall.halfWidth, wall.pos.y - wall.halfHeight,
-            wall.halfWidth * 2, wall.halfHeight * 2);
-        }
-        g.setColor(0.2, 1, 0.2, 1);
-        for (const shape of level.shapes) {
-          if (!shape.isWallClimb) continue;
-          for (const seg of shape.segments) g.line(seg.a.x, seg.a.y, seg.b.x, seg.b.y);
-        }
-        g.setColor(1, 1, 1, 1);
-        g.setLineWidth(1);
-      }
+      DebugDraw.levelShapes(level);
     }
   }
 
   // Rope rocks, gates, levers, cranks, signs, mirrors.
   WorldObjects.draw('props');
 
-  // Debug ('A'): belt cells in the 3x3, and the cell grid across the view.
-  if (state.showBeltCellDebug && state.player) {
-    const cellSize = worldGen.CELL_SIZE;
-    const playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y);
-    g.setColor(1, 0, 0, 0.35);
-    for (let dRow = -1; dRow <= 1; dRow++) {
-      for (let dCol = -1; dCol <= 1; dCol++) {
-        const col = playerCell.col + dCol, row = playerCell.row + dRow;
-        if (worldGen.cellIntersectsBelt(col, row)) g.rectangle('fill', col * cellSize, row * cellSize, cellSize, cellSize);
-      }
-    }
-    const cam = state.camera ?? { x: 0, y: 0 };
-    const visW = state.visibleWidth ?? 0, visH = state.visibleHeight ?? 0;
-    const firstCol = Math.floor(cam.x / cellSize), lastCol = Math.floor((cam.x + visW) / cellSize) + 1;
-    const firstRow = Math.floor(cam.y / cellSize), lastRow = Math.floor((cam.y + visH) / cellSize) + 1;
-    g.setColor(0.2, 0.6, 1, 0.9);
-    g.setLineWidth(2);
-    for (let col = firstCol; col <= lastCol; col++) {
-      const x = col * cellSize;
-      g.line(x, firstRow * cellSize, x, (lastRow + 1) * cellSize);
-    }
-    for (let row = firstRow; row <= lastRow; row++) {
-      const y = row * cellSize;
-      g.line(firstCol * cellSize, y, (lastCol + 1) * cellSize, y);
-    }
-    g.setLineWidth(1);
-    g.setColor(1, 1, 1, 1);
-  }
+  DebugDraw.beltCells();
+}
 
+// Enemies, NPCs, the player, and what stands in front of him.
+function drawActors() {
   WorldObjects.draw('enemies');
 
   MissileOutpost.drawMissiles();
@@ -815,75 +661,11 @@ function drawFrame() {
 
   WaterSystem.draw();
 
-  // Debug ('C'): the player's collision capsule.
-  if (state.showCollisionDebug) {
-    const p = state.player;
-    const r = p.radius;
-    const onWallClimb = p.onSurface && p.currentPlanet && p.currentPlanet.isWallClimb;
-    const headReach = (!p.isBall && !onWallClimb) ? (p.headReach ?? 0) : 0;
-    const topY = p.pos.y - Math.max(0, headReach - r);
-    const bottomY = p.pos.y;
-    const px = p.pos.x;
-    g.setLineWidth(3);
-    g.setColor(1, 0.2, 1, 1);
-    g.circle('line', px, bottomY, r);
-    g.circle('line', px, topY, r);
-    if (topY < bottomY) {
-      g.line(px - r, topY, px - r, bottomY);
-      g.line(px + r, topY, px + r, bottomY);
-    }
-    g.setColor(1, 1, 1, 1);
-    g.setLineWidth(1);
-  }
+  DebugDraw.collisionShapes();
+}
 
-  // Debug ('C'): Spikeys' solid boundaries.
-  if (state.showCollisionDebug && state.player && state.spikeys) {
-    g.setLineWidth(3);
-    g.setColor(1, 0.55, 0, 1);
-    for (const sp of state.spikeys) {
-      if (utils.isOnScreen(sp.pos.x, sp.pos.y, sp.radius + state.player.radius, 20)) {
-        g.circle('line', sp.pos.x, sp.pos.y, sp.radius + state.player.radius + constants.SURFACE_TOLERANCE);
-      }
-    }
-    g.setColor(1, 1, 1, 1);
-    g.setLineWidth(1);
-  }
-
-  // Debug ('C'): each Ooomba's contact circle — he's hit when his own circle
-  // overlaps it, unless he's stomping from above (fireballs use it too). Cyan.
-  if (state.showCollisionDebug && state.ooombas) {
-    g.setLineWidth(3);
-    g.setColor(0.2, 0.9, 1, 1);
-    for (const o of state.ooombas) {
-      if (utils.isOnScreen(o.pos.x, o.pos.y, o.hitRadius, 20)) g.circle('line', o.pos.x, o.pos.y, o.hitRadius);
-    }
-    g.setColor(1, 1, 1, 1);
-    g.setLineWidth(1);
-  }
-
-  // Debug ('C'): the sky dome's containment boundary.
-  if (state.showCollisionDebug && state.skyDomePlanet) {
-    const dome = state.skyDomePlanet;
-    g.setLineWidth(3);
-    g.setColor(1, 1, 0.2, 1);
-    const deckY = dome.trueSurfaceY();
-    const domeTopY = dome.domeAnchorY() - dome.domeRadiusY;
-    g.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x - dome.halfWidth, domeTopY);
-    g.line(dome.pos.x + dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, domeTopY);
-    g.line(dome.pos.x - dome.halfWidth, deckY, dome.pos.x + dome.halfWidth, deckY);
-    const cx = dome.pos.x, cy = dome.domeAnchorY();
-    const rx = dome.domeRadiusX, ry = dome.domeRadiusY;
-    const segments = 72;
-    const points = [];
-    for (let i = 0; i <= segments; i++) {
-      const t = Math.PI + (i / segments) * Math.PI;
-      points.push(cx + Math.cos(t) * rx, cy + Math.sin(t) * ry);
-    }
-    g.line(points);
-    g.setColor(1, 1, 1, 1);
-    g.setLineWidth(1);
-  }
-
+// Water, lava, effects and overlays, over the player.
+function drawForeground() {
   // Fish, then lava: after the player and before the water's top layer,
   // so water and lava cover whatever is in them.
   WorldObjects.draw('submerged');
@@ -893,6 +675,7 @@ function drawFrame() {
   state.player.drawBubbles();
   if (state.fish) for (const fish of state.fish) fish.drawBubbles();
 
+  // The shelter door, over him while it's still closed or opening.
   if (state.spaceShelter && !state.spaceShelter.playerInFront) state.spaceShelter.drawDoor();
 
   PullBeam.draw();
@@ -905,9 +688,11 @@ function drawFrame() {
 
   VatsOverlay.draw();
   LockOutline.draw();
+}
 
-  g.pop();
-
+// Screen-space UI: minimap, blaster bar, dialogue, HUD text, pause menu,
+// touch controls.
+function drawInterface() {
   Cannon.drawSpeedLines(state.player);
 
   VatsCursor.drawReticle();
@@ -928,41 +713,7 @@ function drawFrame() {
   // Conversation textboxes — after the minimap, so the box covers it.
   WorldObjects.drawDialogues();
 
-  const cell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y);
-
-  g.setColor(1, 1, 1, 1);
-  g.print(`Level ${state.level} - Score: ${state.score}`, 20, 20);
-  g.print(`FPS: ${(state.fps ?? 0).toFixed(1)}`, 20, 40);
-  // (The rest is keyboard/mouse help and debug readouts — not shown
-  // with the touch controls, which are their own guide.)
-  if (!state.touchControlsVisible) {
-    g.print(`Zoom: ${state.zoom.toFixed(1)}x (+/-)`, 20, 60);
-    g.print(`Cell: (${cell.col}, ${cell.row})`, 20, 80);
-    g.print(`Planetoids: ${state.planetoids.length}  Coins: ${state.coins ? state.coins.length : 0}  Asteroids: ${state.asteroids ? state.asteroids.length : 0}  FireBars: ${state.fireBars ? state.fireBars.length : 0}`, 20, 100);
-    g.print(`Rubinium: ${state.elements.rubinium}  Asteroidium: ${state.elements.asteroidium}`, 20, 120);
-    g.print(`Mode: ${WeaponModes.label()} (Tab / D-pad left-right to switch)`, 20, 140);
-    if (state.portalMode) {
-      g.print('Left-click / L2: red portal, Right-click / R2: blue portal, Space to jump', 20, 160);
-    } else if (state.waterMode) {
-      g.print(`Left-click / R2: spray water (${Math.floor(WaterSystem.totalWater() + 0.5)} / ${WaterSystem.waterCap()}), Space to jump (or swim)`, 20, 160);
-    } else if (state.recallMode) {
-      g.print('Left-click / R2 on a planetoid: rewind it (again to stop), Space to jump', 20, 160);
-    } else if (state.iceMode) {
-      g.print('Left-click / R2: ice bolt (freezes water, cools lava, freezes Ooombas), Space to jump', 20, 160);
-    } else if (state.pullBeamMode) {
-      g.print('Left-click / R2 on a planet to pull toward it, Space to jump, C to toggle collision debug', 20, 160);
-    } else {
-      g.print('Left-click / R2: fireball (L2: pull beam), Space to jump, C to toggle collision debug', 20, 160);
-    }
-    // On or near a dirt planet: which way its gravity pulls (see
-    // CrackedPlanetoid.cycleGravity).
-    {
-      const p = state.player.currentPlanet ?? state.player.lastInfluencePlanet;
-      if (p && p.cycleGravity) {
-        g.print(`Gravity: ${p.GRAVITY_LABELS[p.gravityMode] ?? p.gravityMode} (G to change)   Spin: ${p.SPIN_LABELS[p.spinDir] ?? 'Off'} (N clockwise, M counter-clockwise)`, 20, 180);
-      }
-    }
-  }
+  Hud.draw();
 
   PauseMenu.draw();
 
@@ -973,6 +724,28 @@ function drawFrame() {
 
   // The black fade-in out of the title screen, over everything.
   TitleScreen.draw();
+}
+
+function drawFrame() {
+  const g = love.graphics;
+  Planetoid.beginFrame();
+  state.starfield.draw(state.camera, state.visibleWidth, state.visibleHeight);
+
+  g.push();
+  g.scale(state.zoom, state.zoom);
+  // (Snapped to whole screen pixels, so pixel art doesn't shimmer.)
+  const zoom = state.zoom;
+  g.translate(-Math.floor(state.camera.x * zoom + 0.5) / zoom,
+    -Math.floor(state.camera.y * zoom + 0.5) / zoom);
+
+  drawBackground();
+  drawTerrain();
+  drawActors();
+  drawForeground();
+
+  g.pop();
+
+  drawInterface();
 }
 
 // Screen shake: the camera nudged for the draw only, then put back, so

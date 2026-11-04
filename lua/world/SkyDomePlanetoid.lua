@@ -508,8 +508,7 @@ function SkyDomePlanetoid.new(x, y, options)
   -- falling back to constants.JUMP_STRENGTH, same pattern as
   -- gravityStrength. Applies on every Tiled tile's own TerrainShape too
   -- (not just the dome's bare deck — see main.lua's own propagation of
-  -- this value). 12 is 15 (the previously-confirmed STANDING jump
-  -- height) reduced ~20%, per explicit request. Running jumps still go
+  -- this value). 12 is a standing jump of 15 reduced ~20%. Running jumps still go
   -- higher on top of this via Player.lua's own runJumpMultiplier, and
   -- further via the separate horizontal groundMoveSpeedX carry.
   self.jumpStrength = options.jumpStrength or 12
@@ -833,9 +832,9 @@ function SkyDomePlanetoid:createOffscreen()
 
   -- A single quad covering the dome's full box (domeRadiusX*2 x
   -- domeRadiusY), expressed in the tile's own repeat units — built
-  -- once here and never touched again: unlike the old rebuilt-every-
-  -- frame canvas, nothing about this quad's own geometry depends on
-  -- scroll (that's applied in the shader instead, see getBulgeShader),
+  -- once here and never touched again: nothing about this quad's own
+  -- geometry depends on scroll (that's applied in the shader instead,
+  -- see getBulgeShader),
   -- and the dome's size never changes after construction.
   self.fgQuad = love.graphics.newQuad(
     0, 0, self.domeRadiusX * 2, self.domeRadiusY,

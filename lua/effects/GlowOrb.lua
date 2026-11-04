@@ -1,12 +1,9 @@
 -- lua/effects/GlowOrb.lua
 --
 -- Shared GPU-shaded "glowing metallic orb" renderer for small, fixed
--- landmark planetoids/objects (Sphere.lua, Spikey.lua) — replaces the
--- flat stencil-clipped shadow/highlight circles those two used to draw
--- by hand with a real per-pixel shader: a pseudo-3D sphere normal (same
--- technique WaterPlanet.lua's own shading uses, and for the same
--- reason — a flat in-plane "direction from center" pinches to a point
--- right at dist=0), a sun-relative dark/light gradient, a bright rim on
+-- landmark planetoids/objects (Sphere.lua, Spikey.lua) — a per-pixel
+-- shader: a pseudo-3D sphere normal (a flat in-plane "direction from
+-- center" pinches to a point right at dist=0), a sun-relative dark/light gradient, a bright rim on
 -- the lit edge, and a soft outer glow fading out past the body's own
 -- true radius. Affordable as a live shader specifically because there
 -- are only ever a handful of these on screen — nothing like the
@@ -45,9 +42,8 @@ local function getShader()
       vec2 local = (screen_coords - originScreen) / zoom - vec2(boxHalf, boxHalf);
       float dist = length(local);
 
-      // Pseudo-3D sphere normal — see WaterPlanet.lua's own comment on
-      // why this (not a flat "direction from center") is what avoids a
-      // pinwheel/pinch artifact right at the exact center: scaling the
+      // Pseudo-3D sphere normal — this (not a flat "direction from
+      // center") is what avoids a pinwheel/pinch artifact right at the exact center: scaling the
       // in-plane component by (dist/radius), which shrinks smoothly to
       // 0 at dist=0, gives a single well-defined normal (0,0,1) there
       // instead of a direction that sweeps through every angle in an
@@ -57,7 +53,7 @@ local function getShader()
       float nz = sqrt(max(0.0, 1.0 - nxy * nxy));
       vec3 normal = vec3(inPlaneDir * nxy, nz);
 
-      // Mild positive Z on the light direction (same as WaterPlanet.lua)
+      // Mild positive Z on the light direction
       // so the lit hemisphere covers a visible cap, not a razor crescent.
       vec3 sunDir3 = normalize(vec3(sunDir, 0.5));
       float facing = dot(normal, sunDir3);
@@ -144,7 +140,7 @@ function GlowOrb.draw(x, y, radius, colors, options)
   sh:send("colorGlow", colors.glow)
 
   -- Same "sun sits at the exact center of the scene" convention
-  -- Planetoid.lua/WaterPlanet.lua already use.
+  -- Planetoid.lua already uses.
   local sunX, sunY = (state.sceneWidth or 0) / 2, (state.sceneHeight or 0) / 2
   local sdx, sdy = sunX - x, sunY - y
   local sd = math.sqrt(sdx * sdx + sdy * sdy)

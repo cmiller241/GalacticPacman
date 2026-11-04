@@ -2005,14 +2005,16 @@ function CrackedPlanetoid:bake()
   love.graphics.setBlendMode("alpha")
   love.graphics.setStencilTest()
 
-  -- A Tiled map's tiles, each with its own art...
-  if self.isTiled then self:drawTiles() end
+  -- A Tiled map's tiles, each with its own art, and the obsidian and ice
+  -- blocks (on any cracked planet)...
+  self:drawTiles()
 
   -- ...or the clods: dirt, a soft lighter lump in the middle, a few pebbles.
   for _, ring in ipairs(self.isTiled and {} or self.rings) do
     for j = 1, ring.count do
       local clod = ring.clods[j]
-      if clod then
+      -- (Blocks aren't dirt: drawTiles drew them.)
+      if clod and not (clod.obsidian or clod.ice) then
         local a0, a1 = clodAngles(ring, j)
         local s = clod.shade
         love.graphics.setColor(c[1] * s, c[2] * s, c[3] * s, 1)
@@ -2103,7 +2105,8 @@ function CrackedPlanetoid:drawTiles()
     for j = 1, ring.count do
       local clod = ring.clods[j]
       local block = clod and getBlockImage(clod)
-      local ts = clod and not block and tilesetForGid(self.tilesets, clod.gid)
+      -- (On a planet that isn't a Tiled map, only the blocks are drawn here.)
+      local ts = clod and not block and self.isTiled and tilesetForGid(self.tilesets, clod.gid)
       local image = block or (ts and ts.image)
       if image then
         local vertices = verticesByImage[image]
