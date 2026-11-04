@@ -54,9 +54,7 @@ local function loadAssets(onComplete)
   -- SkyDomePlanetoid's ground tile — 32x32, tiled pixel-perfectly
   -- across its body instead of the default rocky planetTexture (see
   -- SkyDomePlanetoid.drawBodyTexture).
-  -- JumpPlatform's tileset — replaces the old ground.png (now unused
-  -- entirely, since JumpPlatform's pillar mechanism was removed in
-  -- favor of this tileset's own bottom-row tiles covering that role).
+  -- The Tiled levels' tileset (see TiledTerrain.lua).
   state.platformTexture = love.graphics.newImage("img/platform.png")
 
   -- Goomba enemy — 64x32, two 32x32 tiles (standing, walking).
@@ -70,6 +68,16 @@ local function loadAssets(onComplete)
   -- Planetoid's own canvas already overrides the default for.
   state.oombaTexture = love.graphics.newImage("img/Ooomba.png")
   state.oombaTexture:setFilter("linear", "linear")
+  -- Its normal map: the same sheet, same layout, each pixel's surface
+  -- direction (OpenGL convention: red = right, green = up, blue = toward
+  -- the viewer) — lit by the sun in Ooomba:draw.
+  state.oombaNormalTexture = love.graphics.newImage("img/Ooomba_normal.png")
+  state.oombaNormalTexture:setFilter("linear", "linear")
+  -- ...and its ambient occlusion: how shaded each pixel is whatever the
+  -- light (white = open, darker = tucked in: under the lip, round the
+  -- teeth, where the eyes meet the body).
+  state.oombaAOTexture = love.graphics.newImage("img/Ooomba_ao.png")
+  state.oombaAOTexture:setFilter("linear", "linear")
 
   -- SkyDomePlanetoid's grass cap — a single 32x16 tile, drawn as a
   -- thin strip right at the flat top line, on top of the metal base
@@ -86,6 +94,107 @@ local function loadAssets(onComplete)
   -- SpaceShelter.lua's own drawDoor).
   state.spaceShelterDoorTexture = love.graphics.newImage("img/spaceshelter_door.png")
   state.spaceShelterDoorTexture:setFilter("linear", "linear")
+
+  -- Signpost (see lua/world/Sign.lua) — 40x48 pixel art, drawn at the
+  -- same 2x the terrain tiles use, so the "nearest" default is kept.
+  state.signTexture = love.graphics.newImage("img/sign.png")
+  -- The same signpost without the grass at its foot, for planting on a
+  -- bare planetoid (see main.lua's own belt-landing-planet sign).
+  state.signPlanetTexture = love.graphics.newImage("img/sign-planet.png")
+
+  -- Mining prism (see lua/world/Prism.lua) — 1000x3572 each, scaled
+  -- down a long way at draw time, so "linear" with mipmaps.
+  --
+  -- The file holds several pictures of the same prism side by side:
+  -- whole on the left, then more and more broken (what a cluster turns
+  -- into as it's shot — see Prism.DAMAGE_HITS, which has one entry per
+  -- broken picture). Each starts MINING_FRAME_WIDTH pixels after the
+  -- one before, and is cut out into an image of its own here rather
+  -- than drawn as a piece of the one sheet: Prism.lua's shader reads heavily blurred copies of
+  -- its image (small mipmaps) to find a prism's edges, and on a shared
+  -- sheet those would blur one picture into the other.
+  local MINING_FRAME_WIDTH = 1000
+  local miningSheet = love.image.newImageData("img/mining.png")
+  local function miningFrame(index)
+    local frame = love.image.newImageData(MINING_FRAME_WIDTH, miningSheet:getHeight())
+    frame:paste(miningSheet, 0, 0, index * MINING_FRAME_WIDTH, 0, MINING_FRAME_WIDTH, miningSheet:getHeight())
+    local image = love.graphics.newImage(frame, { mipmaps = true })
+    image:setFilter("linear", "linear")
+    return image
+  end
+  local MINING_DAMAGED_FRAMES = 2
+  state.miningTexture = miningFrame(0)
+  state.miningDamagedTextures = {}
+  for i = 1, MINING_DAMAGED_FRAMES do
+    state.miningDamagedTextures[i] = miningFrame(i)
+  end
+
+  -- Inline button icons — pixel art, 12px tall, drawn at 2x, "nearest"
+  -- default kept (all but CIRCLE — see just below the loop). Keyed by the UPPERCASE name a dialogue string uses
+  -- between double asterisks (e.g. "Hold **R2** to fire" — see
+  -- lua/ui/DialogueBox.lua); each is img/prompt_<lowercase name>.png.
+  -- Adding a button is just adding its name here and its PNG in img/.
+  state.buttonIcons = {}
+  for _, name in ipairs({
+    "CIRCLE", "SQUARE", "TRIANGLE", "CROSS",
+    "L1", "L2", "R1", "R2",
+    "UP", "DOWN", "LEFT", "RIGHT",
+    "ENTER",
+  }) do
+    state.buttonIcons[name] = love.graphics.newImage("img/prompt_" .. name:lower() .. ".png")
+  end
+  state.buttonIcons.X = state.buttonIcons.CROSS -- **X** and **CROSS** are the same button
+
+  -- The Circle button is the one exception to "pixel art": a 12px ring
+  -- inside a 12px disc was unreadable, so it's a smooth 96x96 image
+  -- instead, scaled DOWN to the same drawn height as the rest (see
+  -- ICON_HEIGHT in InteractPrompt.lua/DialogueBox.lua) — which needs
+  -- "linear" filtering and mipmaps to stay smooth at that size.
+  state.buttonIcons.CIRCLE = love.graphics.newImage("img/prompt_circle.png", { mipmaps = true })
+  state.buttonIcons.CIRCLE:setFilter("linear", "linear")
+
+  -- Title-screen logo (see lua/ui/TitleScreen.lua) — 1973x341, scaled
+  -- down to a fraction of the window's width at draw time, so "linear"
+  -- with mipmaps rather than the pixel-art "nearest" default.
+  state.titleLogoTexture = love.graphics.newImage("img/title.png", { mipmaps = true })
+  state.titleLogoTexture:setFilter("linear", "linear")
+
+  -- The interact button for the "Press [button] to ..." prompts (see
+  -- lua/ui/InteractPrompt.lua), per input device.
+  state.promptIcons = {
+    gamepad = state.buttonIcons.CIRCLE,
+    keyboard = state.buttonIcons.ENTER,
+  }
+
+  -- Robot butler NPC (patrols beside the shelter) — 4000x1200, four
+  -- 1000x1200 walking frames in a single row (see RobotButler.lua's own
+  -- FRAME_COUNT). High-res source art scaled DOWN substantially, not a
+  -- pixel-art sheet — "linear" filtering reads better here than the
+  -- game's pixel-art "nearest" default, same reasoning as the
+  -- Ooomba/shelter textures above.
+  state.robotTexture = love.graphics.newImage("img/Robot2.png")
+  state.robotTexture:setFilter("linear", "linear")
+
+  -- Dialogue box background (RobotButler.lua's own :drawDialogue) —
+  -- 1410x227. Scaled to fit the window at draw time, same "linear over
+  -- the game's pixel-art nearest default" reasoning as the textures
+  -- above — an arbitrary runtime scale (window-width-dependent) is
+  -- exactly the case nearest-neighbor looks worst in.
+  state.textboxTexture = love.graphics.newImage("img/textbox.png")
+  state.textboxTexture:setFilter("linear", "linear")
+
+  -- Fisherman NPC rig (see Fisherman.lua) — four paperdoll-style parts
+  -- authored/positioned with paperdoll-fisherman.html, same "linear"
+  -- filtering as the other high-res-scaled-down NPC art above.
+  state.fishermanImages = {
+    body = love.graphics.newImage("img/Fisherman-Body.png"),
+    arms = love.graphics.newImage("img/Fisherman-Arms.png"),
+    head = love.graphics.newImage("img/Fisherman-Head.png"),
+    line = love.graphics.newImage("img/Fisherman-Line.png"),
+  }
+  for _, img in pairs(state.fishermanImages) do
+    img:setFilter("linear", "linear")
+  end
 
   for key, src in pairs(CHARACTER_IMAGE_SOURCES) do
     state.characterImages[key] = love.graphics.newImage(src)

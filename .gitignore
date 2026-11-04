@@ -1,0 +1,33 @@
+# Recorded trailer clips (P in game — see lua/systems/ClipRecorder.lua)
+clips/
+
+# --- Web build (js/) ---
+# Installed packages: `npm install` recreates them from package.json /
+# package-lock.json (those two ARE committed).
+node_modules/
+# The bundled web game: `npm run build` recreates it from js/.
+dist/
+
+# --- LÖVE build (lua/) ---
+# Packaged releases and staging (.love, .zip, exe folders).
+build/
+
+# --- Staging ---
+# Source MIDI files being worked on (the game's own tracks are in sounds/music/).
+/music/
+
+# --- Clip Studio Paint source files ---
+# (The exported PNGs the game uses are still committed.)
+*.clip
+*.cmc
+
+# --- Logs ---
+*.log
+npm-debug.log*
+
+# --- OS / editor clutter ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

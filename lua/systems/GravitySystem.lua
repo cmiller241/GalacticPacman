@@ -23,50 +23,62 @@ function GravitySystem.new(planetoids)
   return self
 end
 
+-- Hysteresis margin for the sticky hand-off below: a NEW candidate must
+-- beat the entity's CURRENT dominant planet by at least this much (as a
+-- fraction of the current one's own distance) to actually take over —
+-- see findDominantPlanet's own comment for why.
+local DOMINANT_SWITCH_MARGIN = 0.85
+
 -- For rect / sky-dome planets, "distance" is measured to the nearest
 -- SURFACE point (not the center). For SkyDome that surface is the grass
 -- deck. Circle planets still use center distance vs influenceRadius.
-function GravitySystem:findDominantPlanet(pos)
+--
+-- currentDominant (optional): the entity's own lastInfluencePlanet from
+-- the previous frame (applyTo passes this in; other callers that omit
+-- it just get the plain "always pick the single closest" behavior
+-- below, unchanged). Without this, two or more planetoids sitting at
+-- nearly equal distance from a drifting/idle entity — increasingly
+-- likely the longer a session runs, since the belt's own drip-spawner
+-- keeps adding more nearby planetoids over time — can trade the
+-- "closest" title back and forth from one frame to the next as either
+-- side drifts by a sub-pixel amount. Each swap flips which DIRECTION
+-- gravity pulls that frame, not just its size, and repeated swapping
+-- reads as the entity (and anything tracking its position, like the
+-- camera) visibly oscillating side to side — and worse later in a
+-- session, since degrading FPS as the belt gets more crowded hands each
+-- frame's kick a larger timeScale multiplier (see applyTo below), so
+-- the same underlying jitter produces bigger and bigger swings over
+-- time. Requiring a real margin before switching keeps the entity
+-- locked onto one source until another is genuinely, meaningfully
+-- closer, instead of chattering between near-equal candidates.
+function GravitySystem:findDominantPlanet(pos, currentDominant)
   local closest = nil
   local minDist = math.huge
+  local currentDist = nil
 
   for _, planet in ipairs(self.planetoids) do
-    local dist, withinRange
+    -- Each kind of planet decides its own reach (see
+    -- lua/world/PlanetSurface.lua): nil when pos is out of it.
+    local dist = planet:gravityDistance(pos.x, pos.y)
 
-    if planet.isOpenPath then
-      -- TiledTerrain ledges/hills are landing surfaces only, never their
-      -- own gravity source — otherwise a ledge would tug falling/jumping
-      -- players sideways toward it like a tiny planet (surface.point can
-      -- sit off to the side, not just below), instead of just standing
-      -- there while the dome's own straight-down gravity does the rest.
-      withinRange = false
-    elseif planet.isRoundedRect then
-      if planet.distanceToSurface then
-        dist = planet:distanceToSurface(pos.x, pos.y)
-      elseif planet.nearestSurfacePoint then
-        dist = planet:nearestSurfacePoint(pos.x, pos.y).distance
-      else
-        dist = pos:subtract(planet.pos):length()
+    if dist then
+      if dist < minDist then
+        minDist = dist
+        closest = planet
       end
-
-      if planet.isSkyDome then
-        -- Complete proximity test on its own — do NOT also require
-        -- dist < INFLUENCE_PADDING (that would re-impose a ~200-unit
-        -- cap and break high jumps inside a wide dome).
-        withinRange = planet.isWithinGravityWindow
-          and planet:isWithinGravityWindow(pos.x, pos.y)
-          or false
-      else
-        withinRange = dist < (constants.INFLUENCE_PADDING or 200)
+      if planet == currentDominant then
+        currentDist = dist
       end
-    else
-      dist = pos:subtract(planet.pos):length()
-      withinRange = dist < (planet.influenceRadius or (planet.radius + (constants.INFLUENCE_PADDING or 200)))
     end
+  end
 
-    if withinRange and dist < minDist then
-      minDist = dist
-      closest = planet
+  -- Sticky hand-off (see this function's own header comment): only
+  -- actually switch away from the current dominant planet — if it's
+  -- still in range at all — when the new closest one beats it by a
+  -- real margin, not just a sliver.
+  if currentDominant and currentDist and closest ~= currentDominant then
+    if minDist > currentDist * DOMINANT_SWITCH_MARGIN then
+      return currentDominant
     end
   end
 
@@ -76,28 +88,15 @@ end
 function GravitySystem:applyTo(entity)
   if entity.onSurface then return end
 
-  local dominant = self:findDominantPlanet(entity.pos)
+  local dominant = self:findDominantPlanet(entity.pos, entity.lastInfluencePlanet)
   if not dominant then return end
 
   entity.lastInfluencePlanet = dominant
 
-  local dir
-  if dominant.isRoundedRect and dominant.nearestSurfacePoint then
-    local surface = dominant:nearestSurfacePoint(entity.pos.x, entity.pos.y)
-    -- Toward the deck point while airborne; once nearly on it, use
-    -- "down" along the surface normal (SkyDome normal is (0,-1), so
-    -- -normal is (0,1) — traditional platform gravity).
-    if surface.distance > 1e-6 then
-      dir = Vector2.new(
-        surface.point.x - entity.pos.x,
-        surface.point.y - entity.pos.y
-      ):normalize()
-    else
-      dir = surface.normal:clone():multiply(-1)
-    end
-  else
-    dir = dominant.pos:subtract(entity.pos):normalize()
-  end
+  -- Toward a round planet's center, toward a flat surface's nearest
+  -- point, or however a cracked planet's switchable gravity points (see
+  -- lua/world/PlanetSurface.lua).
+  local dir = dominant:gravityDirAt(entity.pos.x, entity.pos.y)
 
   -- Per-planet override (e.g. SkyDomePlanetoid's own stronger,
   -- less-floaty gravityStrength) takes priority over the per-entity /
@@ -111,7 +110,7 @@ function GravitySystem:applyTo(entity)
       or 3)
   end
 
-  entity.vel:add(dir:multiply(grav * (state.timeScale or 1)))
+  entity.vel:addScaled(dir, grav * (state.timeScale or 1)) -- (no throwaway vector, unlike dir:multiply)
 end
 
 return GravitySystem

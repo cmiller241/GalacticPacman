@@ -38,7 +38,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
-local Lava = require("lua.world.Lava")
+local PlanetSurface = require("lua.world.PlanetSurface")
 
 local TiledTerrain = {}
 
@@ -47,7 +47,7 @@ local TiledTerrain = {}
 ----------------------------------------------------------------------
 
 local TILE_SOURCE_SIZE = 32  -- px, matches tiled/Grass Tiles.tsx
-local TILE_SCALE = 2         -- same 2x convention JumpPlatform.lua already uses
+local TILE_SCALE = 2         -- each source pixel drawn 2x2
 local TILE_WORLD_SIZE = TILE_SOURCE_SIZE * TILE_SCALE  -- 64 world units/tile
 
 -- Fallback only — used if the embedded tileset def doesn't carry its own
@@ -154,6 +154,27 @@ local function classifyGid(tileProps, gid)
     -- "not isTopRole" treatment as rampRight/rampLeft: never enters
     -- the ordinary per-column scan.
     if slope == "ceilingLeft" or slope == "ceilingRight" then return slope end
+    -- crestRight/crestLeft and archRight/archLeft: the CONVEX counterpart
+    -- of rampRight/rampLeft and ceilingLeft/ceilingRight — a flat TOP
+    -- curving down into a wall (crest), and that wall curving further
+    -- into an underside/ceiling belly (arch), like walking over and
+    -- around the outside of a rounded block instead of through the
+    -- inside of a tube. Same "not isTopRole" treatment — see
+    -- buildConvexClimbShape.
+    if slope == "crestRight" or slope == "crestLeft" then return slope end
+    if slope == "archRight" or slope == "archLeft" then return slope end
+    -- Ball-tunnel pieces (see CrackedPlanetoid.lua's SHAPED_TILES):
+    --   * an *Inner corner is the tunnel's wall and ceiling (or floor) at
+    --     a bend: a "wall" — solid, with a walkable top — so the curve
+    --     he rolls round (buildRampClimbShape) runs up its face and over
+    --     it like any other wall. (Its rounded corner is only art: a
+    --     square corner is what that path goes round.)
+    --   * an *Outer1/2/3 arc is the outside of a bend round a crest or
+    --     arch: mostly open tunnel, solid only out past its curve — so
+    --     no top here (it'd be an invisible ledge in the middle of the
+    --     tunnel); it's solid in its exact shape (see buildTunnelSolids).
+    if slope and slope:find("Inner$") then return "wall" end
+    if slope and slope:find("Outer%d$") then return "fill" end
     return "flat"
   end
   return "fill"
@@ -225,18 +246,71 @@ local function projectOntoSegment(seg, worldX, worldY)
 end
 
 function TerrainShape:nearestSurfacePoint(worldX, worldY)
-  local best = nil
+  -- (The best so far kept in locals: one result table at the end, not
+  -- one for every closer segment found on the way.)
+  local bestDist, bestX, bestY, bestNormal = nil, 0, 0, nil
   for _, seg in ipairs(self.segments) do
     local _, px, py, dist = projectOntoSegment(seg, worldX, worldY)
-    if not best or dist < best.distance then
-      best = { point = Vector2.new(px, py), normal = seg.normal, distance = dist }
+    if not bestDist or dist < bestDist then
+      bestDist, bestX, bestY, bestNormal = dist, px, py, seg.normal
     end
   end
-  return best
+  if not bestDist then return nil end
+  return { point = Vector2.new(bestX, bestY), normal = bestNormal, distance = bestDist }
+end
+
+-- True when (x, y) is certainly more than `reach` from every point of
+-- this shape's segments — a cheap test to skip the per-segment work.
+-- Uses boundX/boundY/boundRadius (see refreshBounds), which always
+-- enclose every segment, unlike pos/radius, which a merged wall-climb
+-- shape keeps from before its merge.
+function TerrainShape:isFartherThan(x, y, reach)
+  local dx, dy = x - self.boundX, y - self.boundY
+  local r = self.boundRadius + reach
+  return dx * dx + dy * dy > r * r
+end
+
+-- A circle round every segment end (and so every point of every
+-- segment). Called whenever the segments change.
+function TerrainShape:refreshBounds()
+  local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+  for _, seg in ipairs(self.segments) do
+    minX = math.min(minX, seg.a.x, seg.b.x); maxX = math.max(maxX, seg.a.x, seg.b.x)
+    minY = math.min(minY, seg.a.y, seg.b.y); maxY = math.max(maxY, seg.a.y, seg.b.y)
+  end
+  local cx, cy = (minX + maxX) / 2, (minY + maxY) / 2
+  local rSq = 0
+  for _, seg in ipairs(self.segments) do
+    for _, p in ipairs({ seg.a, seg.b }) do
+      local dx, dy = p.x - cx, p.y - cy
+      rSq = math.max(rSq, dx * dx + dy * dy)
+    end
+  end
+  self.boundX, self.boundY, self.boundRadius = cx, cy, math.sqrt(rSq)
 end
 
 function TerrainShape:distanceToSurface(worldX, worldY)
   return self:nearestSurfacePoint(worldX, worldY).distance
+end
+
+-- The planet surface interface (see lua/world/PlanetSurface.lua).
+-- forceUprightJump shapes (ordinary ground and slopes) keep him standing
+-- straight up, the way Mario doesn't tilt to a slope; ramp-climb shapes
+-- (forceUprightJump = false) turn him to their surface.
+function TerrainShape:upAt(worldX, worldY)
+  if self.forceUprightJump then return Vector2.new(0, -1) end
+  return PlanetSurface.upFromNormal(self, worldX, worldY)
+end
+
+TerrainShape.gravityDirAt = PlanetSurface.gravityTowardSurface
+
+-- Open-path shapes (all of them, so far) are landing surfaces only,
+-- never a gravity source of their own: a ledge would otherwise tug a
+-- falling player sideways toward it like a tiny planet, instead of the
+-- dome's straight-down gravity doing the rest.
+function TerrainShape:gravityDistance(worldX, worldY)
+  if self.isOpenPath then return nil end
+  return PlanetSurface.gravityDistanceFromSurface(self, worldX, worldY)
 end
 
 -- Landing check for open-path terrain: a segment only counts as a landing
@@ -252,6 +326,34 @@ end
 -- them, so nothing lands. Used only by CollisionSystem:tryLandOnPlanet;
 -- every other caller (orientation, gravity direction while airborne, etc.)
 -- still wants the always-clamped nearestSurfacePoint.
+-- Upright shapes (forceUprightJump — ordinary ground and slopes) keep
+-- him standing straight up, directly above the point he's on (see
+-- worldPointAtArcPosition). So the point that goes with a position near
+-- one is the one straight below (or above) it — not the nearest point,
+-- which on a slope is off to the uphill side: landing there, or working
+-- out his place along the shape from there, moved him up the slope
+-- every time he jumped and came back down.
+--
+-- Returns that point's y, its segment and how far along the segment it
+-- is (0..1): of the segments spanning x, the one whose height there is
+-- nearest y. nil if none spans x (past either end of the shape).
+local function pointStraightBelow(self, x, y)
+  local bestDist, bestY, bestSeg, bestT
+  for _, seg in ipairs(self.segments) do
+    local ax, bx = seg.a.x, seg.b.x
+    local dx = bx - ax
+    if not seg.isWallFace and math.abs(dx) > 1e-9 and x >= math.min(ax, bx) and x <= math.max(ax, bx) then
+      local t = (x - ax) / dx
+      local py = seg.a.y + (seg.b.y - seg.a.y) * t
+      local d = math.abs(y - py)
+      if not bestDist or d < bestDist then
+        bestDist, bestY, bestSeg, bestT = d, py, seg, t
+      end
+    end
+  end
+  return bestY, bestSeg, bestT
+end
+
 function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
   local best = nil
   for _, seg in ipairs(self.segments) do
@@ -272,7 +374,10 @@ function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
       local lenSq = dx * dx + dy * dy
       if lenSq > 1e-9 then
         local nx, ny = seg.normal.x, seg.normal.y
-        local prevSigned = (prevX - seg.a.x) * nx + (prevY - seg.a.y) * ny
+        -- (Where they were measured against where the surface was then —
+        -- the same thing, except for a moving one: see newMovingSurface.)
+        local pa, pn = seg.prevA or seg.a, seg.prevNormal or seg.normal
+        local prevSigned = (prevX - pa.x) * pn.x + (prevY - pa.y) * pn.y
         local curSigned = (curX - seg.a.x) * nx + (curY - seg.a.y) * ny
         if prevSigned >= 0 and curSigned <= prevSigned then
           local t = ((curX - seg.a.x) * dx + (curY - seg.a.y) * dy) / lenSq
@@ -286,6 +391,16 @@ function TerrainShape:findLandingCrossing(prevX, prevY, curX, curY)
           end
         end
       end
+    end
+  end
+  -- On an upright shape, the landing point is the one straight below
+  -- (see pointStraightBelow). Whether and when it's a landing at all is
+  -- left exactly as found above.
+  if best and self.forceUprightJump then
+    local py, seg = pointStraightBelow(self, curX, curY)
+    if py then
+      best.point.x, best.point.y = curX, py
+      best.normal = seg.normal
     end
   end
   return best
@@ -368,6 +483,19 @@ end
 -- WallShape) — that one fires legitimately while genuinely walking the
 -- wall face itself, and needs to keep resolving to it.
 function TerrainShape:arcPositionForWorldPoint(worldX, worldY, excludeWallFace)
+  -- An upright shape: the place straight below the point (see
+  -- pointStraightBelow), when there's one.
+  if self.forceUprightJump then
+    local _, seg, t = pointStraightBelow(self, worldX, worldY)
+    if seg then
+      local traveled = 0
+      for _, s in ipairs(self.segments) do
+        if s == seg then return traveled + t * seg.length end
+        traveled = traveled + s.length
+      end
+    end
+  end
+
   local traveled = 0
   local bestArc, bestDistSq = 0, math.huge
   for _, seg in ipairs(self.segments) do
@@ -532,6 +660,22 @@ end
 -- stayed false and the airborne wall-slide branch kept running instead,
 -- which read as the player gliding in place on top of the pillar rather
 -- than standing on it.
+-- A one-row height change only bridges into the SAME chain when it's an
+-- authored 45-degree slope tile (riseLeft/riseRight) on at least one side.
+-- Two "flat" (or "wall") tops that happen to sit one row apart — e.g. a
+-- raised curb tile beside a sunken lava-floor tile, with no ramp art
+-- between them — must NOT auto-connect: doing so used to splice in a
+-- sheer vertical segment (the flat tile's own edge at its row, immediately
+-- followed by the neighboring flat tile's edge one row off) that the
+-- ordinary red walkable path then treated as a climbable "side" of the
+-- curb. Real slopes are always explicitly tiled in this project (rampLeft/
+-- Right, riseLeft/Right, crestLeft/Right, archLeft/Right all get their own
+-- tile), so requiring an explicit rise tile to justify a delta of 1 here
+-- doesn't cost any intentional terrain.
+local function isRiseKind(kind)
+  return kind == "riseLeft" or kind == "riseRight"
+end
+
 local function buildVertexRuns(pointsByColumn, width)
   local runs = {}
   local openChains = {}
@@ -546,7 +690,8 @@ local function buildVertexRuns(pointsByColumn, width)
       for _, entry in ipairs(entries) do
         if not usedRow[entry.row] then
           local delta = math.abs(entry.row - last.row)
-          if delta <= 1 and (not bestDelta or delta < bestDelta) then
+          local connects = delta == 0 or (delta == 1 and (isRiseKind(last.kind) or isRiseKind(entry.kind)))
+          if connects and (not bestDelta or delta < bestDelta) then
             bestDelta = delta
             best = entry
           end
@@ -681,8 +826,42 @@ local function newShape(segments)
     end
   end
   self.radius = math.max(1, radius)
+  self:refreshBounds()
 
   return self
+end
+
+-- A walkable surface that moves — one straight segment from a to b,
+-- walked on (left to right, its open side up) like any other ledge, put
+-- wherever it is each frame with :moveTo. E.g. the top of a rock swinging
+-- on a rope (see lua/world/RopeRock.lua). Anyone standing on it rides
+-- along, since a stood-on surface's position is read fresh every frame.
+function TiledTerrain.newMovingSurface(ax, ay, bx, by)
+  local seg = { a = Vector2.new(ax, ay), b = Vector2.new(bx, by), length = 0 }
+  local shape = newShape({ seg })
+  shape:moveTo(ax, ay, bx, by)
+  return shape
+end
+
+function TerrainShape:moveTo(ax, ay, bx, by)
+  local seg = self.segments[1]
+  -- (Where it was a moment ago, for findLandingCrossing: a surface rising
+  -- into someone falling onto it would otherwise already be past where
+  -- they were last frame, and they'd fall straight through it.)
+  seg.prevA = seg.prevA or Vector2.new(0, 0)
+  seg.prevA.x, seg.prevA.y = seg.a.x, seg.a.y
+  seg.prevNormal = seg.normal or Vector2.new(0, -1)
+  seg.a.x, seg.a.y, seg.b.x, seg.b.y = ax, ay, bx, by
+  local dx, dy = bx - ax, by - ay
+  local len = math.max(1e-6, math.sqrt(dx * dx + dy * dy))
+  seg.length = len
+  seg.tangent = Vector2.new(dx / len, dy / len)
+  seg.normal = Vector2.new(dy / len, -dx / len) -- (the tangent turned -90 degrees: up, for a left-to-right one)
+  self.totalLength = len
+  self.pos.x, self.pos.y = (ax + bx) / 2, (ay + by) / 2
+  self.halfHeight = math.max(1, math.abs(dy) / 2)
+  self.radius = math.max(1, len / 2)
+  self.boundX, self.boundY, self.boundRadius = self.pos.x, self.pos.y, len / 2
 end
 
 ----------------------------------------------------------------------
@@ -757,6 +936,181 @@ local RAMP_ARC_SEGMENTS = 10 -- straight segments approximating the quarter-circ
 -- the ordinary column scan, no exposure check the way "wall" gets)
 -- would end up covered by TWO overlapping shapes, and the seam between
 -- them reads as a hop.
+-- Mirrors buildRampClimbShape's own "wall curving into a ceiling" cap
+-- (see that function's own capRole=="ceilingLeft"/"ceilingRight" branch,
+-- and buildConvexClimbShape's own arch-cap branch) turned upside down.
+-- Called when a ceiling-backing run STOPS and finds a ceilingLeft/
+-- ceilingRight tile one row below (see that run's own "belowGid" check)
+-- that isn't already owned by some other independently-anchored ramp
+-- shape. Previously the run just assumed one must exist elsewhere and
+-- set continuesAtKey hoping to find it via capOwnerByKey — fine for the
+-- classic "two ramps meet mid-ceiling" case, but wrong when what's
+-- actually there is a ceiling dipping down into a walled archway with no
+-- separate ramp anchoring it at all: nothing would ever own that key, and
+-- the path would just dead-end.
+--
+-- This instead treats that ceilingLeft/ceilingRight tile as a genuine END
+-- cap in its own right: curves DOWN off of it into a wall descending in
+-- the adjacent column (wallCol = capCol + dir — exactly the relationship
+-- buildRampClimbShape's own START cap uses, just discovered here instead
+-- of searched for), and if that wall bottoms out onto an archLeft/
+-- archRight tile, curves into that arch and starts a fresh underside run
+-- past it — continuing in the SAME direction the ceiling run was already
+-- traveling (this is a bridge continuing the same journey forward, unlike
+-- buildConvexClimbShape's own underside run, which doubles back under a
+-- single free-standing block since there's nothing beyond it to reach).
+--
+-- Returns nil if there's no wall-into-arch structure there at all (the
+-- ordinary two-ramps-meet-directly case, where the caller's own existing
+-- continuesAtKey fallback still applies unchanged) — or a table
+-- describing the new points to append plus enough bookkeeping for the
+-- caller to classify the new segments and know where to look for a
+-- further link onward (continuesAtKey, same meaning as everywhere else in
+-- this file).
+--
+-- startPoint: the run's own last point before it stopped — already
+-- sitting exactly on this cap tile's own near corner (see the caller).
+-- capRow/capCol: the ceilingLeft/ceilingRight tile's own grid position.
+-- capRole: its own slope string, deciding which side the wall descends on
+-- (mirrors how it decides which side a START cap's wall climbs up on).
+local function tryDescendCeilingCapToArch(layer, tileProps, width, height, anchorX, anchorY, capRow, capCol, capRole, startPoint)
+  local T = TILE_WORLD_SIZE
+  local dirCap = (capRole == "ceilingLeft" and 1) or (capRole == "ceilingRight" and -1)
+  if not dirCap then return nil end
+
+  local wallCol = capCol + dirCap
+  if wallCol < 0 or wallCol >= width then return nil end
+
+  -- Same edge convention buildRampClimbShape's own wallEdgeX uses: the
+  -- side of the wall column facing back toward the cap tile (and thus
+  -- the open ceiling territory the run just came from).
+  local wallEdgeX = anchorX + (dirCap > 0 and wallCol or (wallCol + 1)) * T
+
+  -- Scan DOWNWARD (mirrors buildRampClimbShape's own upward wall search)
+  -- for contiguous "wall"-role tiles starting one row below the cap.
+  -- Left at capRow (a zero-height wall) when none are found — same
+  -- "wall stack is entirely optional" tolerance buildConvexClimbShape's
+  -- own arch-cap check already has.
+  local wallBottomRow = capRow
+  do
+    local r = capRow + 1
+    while r < height do
+      local gid = layer.data[r * width + wallCol + 1]
+      if gid == 0 or classifyGid(tileProps, gid) ~= "wall" then break end
+      wallBottomRow = r
+      r = r + 1
+    end
+  end
+
+  local archRow = wallBottomRow + 1
+  local archCol = wallCol
+  if archRow >= height then return nil end
+  local archGid = layer.data[archRow * width + archCol + 1]
+  local archRole = archGid ~= 0 and classifyGid(tileProps, archGid) or "empty"
+  if archRole ~= "archLeft" and archRole ~= "archRight" then return nil end
+
+  local claimed = {}
+  local newPoints = {}
+
+  -- First arc: ceiling cap's own corner (startPoint, already sitting
+  -- exactly on it) curving down to the wall's own top tangent point.
+  -- Center sits directly below startPoint, one tile down — a fresh
+  -- derivation (this arc runs the opposite way from buildRampClimbShape's
+  -- own cap arc, ceiling into wall rather than wall into ceiling), but
+  -- confirmed against the tile corners it has to land on exactly the same
+  -- way that function's own header comment confirms its own arcs.
+  local center1 = Vector2.new(startPoint.x, anchorY + (capRow + 1) * T)
+  -- "Start" markers below all follow the same convention capArcStart/
+  -- ceilingRunStart use in buildRampClimbShape itself: the index of the
+  -- point BEFORE the new range begins (here, since startPoint lives in
+  -- the CALLER's own points array, not in newPoints, that's simply
+  -- newPoints' current length, with no adjustment) — not the first new
+  -- point's own index.
+  local arc1Start = #newPoints
+  for i = 1, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = -math.pi / 2 + dirCap * (math.pi / 2) * t
+    table.insert(newPoints, Vector2.new(center1.x + T * math.cos(theta), center1.y + T * math.sin(theta)))
+  end
+  local arc1End = #newPoints
+
+  -- Wall segment (may end up zero-length, when the arch cap sits
+  -- directly beneath the ceiling cap with no plain wall tile between —
+  -- harmless, the segment built from it later just has zero length).
+  for r = capRow + 1, wallBottomRow do
+    claimed[r * width + wallCol] = true
+  end
+  local wallSegIndex = #newPoints
+  table.insert(newPoints, Vector2.new(wallEdgeX, anchorY + (wallBottomRow + 1) * T))
+
+  -- Second arc: wall's own bottom tangent curving into the arch tile's
+  -- own underside tangent. NOT the same construction as the first arc:
+  -- arc1 enters with a HORIZONTAL tangent (the ceiling run), so its
+  -- center sits directly below the entry point (same x, offset in y).
+  -- This arc enters with a VERTICAL tangent instead (the wall segment
+  -- just above it), so the center has to be offset the OTHER way — same
+  -- y as the entry point, offset by T in x — or the "radius perpendicular
+  -- to tangent" relationship a circle needs doesn't hold at all.
+  --
+  -- It's also convex rather than concave: the wall material genuinely
+  -- fills the block sitting between the two walls at this row (confirmed
+  -- against the real tile data — both wall columns carry a "wall" tile at
+  -- the same row here), so the center sits ON the material side, at the
+  -- corner shared between this archLeft/archRight tile and its mirror
+  -- image on the far side of the notch, and the curve bulges AWAY from
+  -- it — hugging the visible grass edge instead of cutting a chord
+  -- straight through the middle of it.
+  local entry2 = newPoints[#newPoints]
+  local center2 = Vector2.new(entry2.x + dirCap * T, entry2.y)
+  local entryTheta2 = dirCap > 0 and math.pi or 0
+  local arc2Start = #newPoints
+  for i = 1, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = entryTheta2 - dirCap * (math.pi / 2) * t
+    table.insert(newPoints, Vector2.new(center2.x + T * math.cos(theta), center2.y + T * math.sin(theta)))
+  end
+  local arc2End = #newPoints
+  claimed[archRow * width + archCol] = true
+
+  -- Underside run: stops the instant it isn't "wall"-backed anymore
+  -- (exactly like every other absorption run in this file), checking for
+  -- a same-row archLeft/archRight partner to hand off to via
+  -- continuesAtKey the same way buildConvexClimbShape's own underside run
+  -- already does — that partner is normally the mirror-image descent of
+  -- whichever OTHER ceiling run is coming from the far side of this same
+  -- archway, landing on the immediately adjacent arch tile.
+  local runStart = #newPoints
+  local continuesAtKey = nil
+  local fc = archCol + dirCap
+  while fc >= 0 and fc < width do
+    local fgid = layer.data[archRow * width + fc + 1]
+    if fgid == 0 or classifyGid(tileProps, fgid) ~= "wall" then
+      if fgid ~= 0 then
+        local hitRole = classifyGid(tileProps, fgid)
+        if hitRole == "archLeft" or hitRole == "archRight" then
+          continuesAtKey = archRow * width + fc
+        end
+      end
+      break
+    end
+    claimed[archRow * width + fc] = true
+    local edgeCol = dirCap > 0 and (fc + 1) or fc
+    table.insert(newPoints, Vector2.new(anchorX + edgeCol * T, anchorY + (archRow + 1) * T))
+    fc = fc + dirCap
+  end
+  return {
+    points = newPoints,
+    center1 = center1, arc1Start = arc1Start, arc1End = arc1End,
+    wallSegIndex = wallSegIndex,
+    center2 = center2, arc2Start = arc2Start, arc2End = arc2End,
+    runStart = runStart,
+    claimed = claimed,
+    ownCapTileKey2 = archRow * width + archCol,
+    continuesAtKey = continuesAtKey,
+    dirCap = dirCap,
+  }
+end
+
 local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
   local T = TILE_WORLD_SIZE
   local x0 = anchorX + col * T
@@ -797,6 +1151,16 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   end
 
   local wallSegIndex = nil
+  -- Set only when this shape's own ceiling run dips down into a wall and
+  -- an archLeft/archRight cap (see tryDescendCeilingCapToArch below) —
+  -- the second, symmetric set of the same bookkeeping ceilingRunStart's
+  -- own cap arc gets, just one bend further along the path.
+  local descentCenter1, descentArc1Start, descentArc1End = nil, nil, nil
+  local descentWallSegIndex = nil
+  local descentCenter2, descentArc2Start, descentArc2End = nil, nil, nil
+  local descentRunStart = nil
+  local descentDirCap = nil
+  local secondaryCapTileKey = nil
   -- Set only when a ceilingLeft/ceilingRight cap is found below — a
   -- SECOND arc, with its own center, distinct from the base arc above.
   local capCenter, capArcStart, capArcEnd = nil, nil, nil
@@ -807,6 +1171,19 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   -- here to the end of the shape, PLUS the cap arc itself, are "the
   -- ceiling" for Player.lua's own isCeiling detach check below.
   local ceilingRunStart = nil
+  -- This shape's OWN cap tile position (row*width+col), set only when a
+  -- ceilingLeft/ceilingRight cap was actually built above. Exposed on
+  -- the finished shape so linkAndMergeWallClimbShapes (below) can look
+  -- up "which shape owns the cap tile at this grid position" when some
+  -- OTHER shape's ceiling run runs straight into it.
+  local ownCapTileKey = nil
+  -- Set only when this shape's OWN ceiling-backing absorption run (see
+  -- below) stops because it ran straight into ANOTHER wall-climb
+  -- shape's cap tile, rather than a genuine gap or unrelated feature —
+  -- i.e. two ramps authored to form one continuous loop, meeting
+  -- mid-ceiling (see linkAndMergeWallClimbShapes). Grid position
+  -- (row*width+col) of that OTHER shape's own cap tile.
+  local continuesAtKey = nil
 
   if wallTopRow then
     local wallEdgeX = dir > 0 and (anchorX + wallCol * T) or (anchorX + (wallCol + 1) * T)
@@ -870,7 +1247,11 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
           flatCol, flatRow = wallCol, leftRow
         end
 
-      elseif capRole == "ceilingLeft" or capRole == "ceilingRight" then
+      elseif capRole == (dir > 0 and "ceilingLeft" or "ceilingRight") then
+        -- (Only the cap that curves back over the ramp — ceilingLeft over
+        -- a rampRight, ceilingRight over a rampLeft — makes a loop. The
+        -- other way round, it's the far side of a ball tunnel turning
+        -- from a shaft into a passage, not a ceiling to run along.)
         -- Continues the wall PAST vertical into a ceiling, instead of
         -- stopping at a 45-degree slope. Unlike the base arc, this
         -- curve's center is NOT one of the cap tile's own four corners
@@ -886,6 +1267,7 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
         -- own corners — see the run absorption below, which starts
         -- from the far corner.
         claimedCells[capRow * width + capCol] = true
+        ownCapTileKey = capRow * width + capCol
         local ccx = wallEdgeX - dir * T
         local ccy = anchorY + wallTopRow * T
         capCenter = Vector2.new(ccx, ccy)
@@ -916,6 +1298,20 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
       end
     end
 
+    -- A ball tunnel's inner corner (an *Inner tile — a "wall", see
+    -- classifyGid) topping the stack, with open tunnel above it: the
+    -- walkway runs on across the corner's own top, onto the ground beside
+    -- it at that height (the tunnel turning from the shaft into a passage).
+    local runStartsOnStackTop = false
+    if absorbRole == "flat" and flatCol == wallCol and flatRow == wallTopRow - 1 and flatRow >= 0
+       and (layer.data[flatRow * width + wallCol + 1] or 0) == 0 then
+      local topProps = tileProps[layer.data[wallTopRow * width + wallCol + 1]]
+      if topProps and topProps.slope and topProps.slope:find("Inner$") then
+        flatRow = wallTopRow
+        runStartsOnStackTop = true
+      end
+    end
+
     -- Absorb the run that follows, all the way to its TRUE end (a gap,
     -- wall, or other feature) — not just a tile or two. This shape
     -- needs to BE the complete continuation for that stretch, so
@@ -933,9 +1329,98 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
       local rowEdge = (absorbRole == "wall") and (flatRow + 1) or flatRow
       if absorbRole == "wall" then ceilingRunStart = #points end
       local fc = flatCol
+      if runStartsOnStackTop then
+        -- (Across the corner's own top first — it's the stack's, already claimed.)
+        table.insert(points, Vector2.new(anchorX + (absorbDir > 0 and (fc + 1) or fc) * T, anchorY + flatRow * T))
+        fc = fc + absorbDir
+      end
       while fc >= 0 and fc < width do
         local fgid = layer.data[flatRow * width + fc + 1]
-        if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then break end
+        if fgid == 0 or classifyGid(tileProps, fgid) ~= absorbRole then
+          -- Ceiling backing (never the ordinary ground-level "flat" run)
+          -- stopping here because the tile directly BELOW this scan row
+          -- is another cap tile means this shape's own ceiling run has
+          -- reached exactly where a second wall-climb shape's cap
+          -- begins — the two were authored to meet here and continue as
+          -- one loop. Recording that cap's grid position lets
+          -- linkAndMergeWallClimbShapes stitch the two shapes into a
+          -- single continuous path afterward, once every shape in the
+          -- level exists to look up.
+          --
+          -- Checks BOTH cap families, not just this shape's own
+          -- (ceilingLeft/ceilingRight) — a flat ceiling run doesn't care
+          -- whether the wall on the far side of the cap it reaches goes
+          -- UP (another concave shape) or DOWN (a convex
+          -- buildConvexClimbShape one, archLeft/archRight): both
+          -- present the exact same "normal points down, now curve
+          -- toward a wall" orientation where a plain run reaches them,
+          -- so either is a valid splice point.
+          --
+          -- The two families sit on DIFFERENT rows relative to this
+          -- scan, though, and checking only one misses the other: a
+          -- concave cap (ceilingLeft/ceilingRight) sits ONE ROW BELOW
+          -- its own backing (this shape's own convention, hence
+          -- flatRow+1 below), but a convex cap (archLeft/archRight)
+          -- sits at the SAME row as its own backing (see
+          -- buildConvexClimbShape's own header comment) — so it shows
+          -- up as the tile THIS run just broke on (fgid itself), not a
+          -- neighbor row.
+          if absorbRole == "wall" then
+            if fgid ~= 0 then
+              local sameRowRole = classifyGid(tileProps, fgid)
+              if sameRowRole == "archLeft" or sameRowRole == "archRight" then
+                continuesAtKey = flatRow * width + fc
+              end
+            end
+            if not continuesAtKey then
+              local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
+              if belowGid and belowGid ~= 0 then
+                local belowRole = classifyGid(tileProps, belowGid)
+                if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
+                  -- Found a ceilingLeft/ceilingRight tile one row below —
+                  -- rather than just hoping some OTHER independently-
+                  -- anchored ramp shape already owns it (the only case
+                  -- this used to handle), first try treating IT as a
+                  -- genuine end cap of THIS shape: curving down into a
+                  -- wall and, if one's there, an archLeft/archRight cap
+                  -- beyond it (see tryDescendCeilingCapToArch's own header
+                  -- comment for why a ceiling can't otherwise dip into an
+                  -- archway without a separate crestLeft/crestRight tile
+                  -- to anchor it). Falls back to the old behavior
+                  -- (continuesAtKey pointing at this tile, hoping
+                  -- capOwnerByKey resolves it) when there's genuinely no
+                  -- wall/arch there — the ordinary two-ramps-meet-
+                  -- directly case this function has always supported.
+                  local descentCapRow = flatRow + 1
+                  local descent = tryDescendCeilingCapToArch(
+                    layer, tileProps, width, height, anchorX, anchorY,
+                    descentCapRow, fc, belowRole, points[#points])
+                  if descent then
+                    local baseIndex = #points
+                    for _, p in ipairs(descent.points) do
+                      table.insert(points, p)
+                    end
+                    descentCenter1 = descent.center1
+                    descentArc1Start = baseIndex + descent.arc1Start
+                    descentArc1End = baseIndex + descent.arc1End
+                    descentWallSegIndex = baseIndex + descent.wallSegIndex
+                    descentCenter2 = descent.center2
+                    descentArc2Start = baseIndex + descent.arc2Start
+                    descentArc2End = baseIndex + descent.arc2End
+                    descentRunStart = descent.runStart and (baseIndex + descent.runStart) or nil
+                    descentDirCap = descent.dirCap
+                    for key in pairs(descent.claimed) do claimedCells[key] = true end
+                    secondaryCapTileKey = descent.ownCapTileKey2
+                    continuesAtKey = descent.continuesAtKey
+                  else
+                    continuesAtKey = (flatRow + 1) * width + fc
+                  end
+                end
+              end
+            end
+          end
+          break
+        end
         claimedCells[flatRow * width + fc] = true
         local edgeCol = absorbDir > 0 and (fc + 1) or fc
         table.insert(points, Vector2.new(anchorX + edgeCol * T, anchorY + rowEdge * T))
@@ -951,12 +1436,36 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     local a, b = points[i], points[i + 1]
     local tangent = b:subtract(a):normalize()
     local normal
+    local isDescentArc1 = descentArc1Start and i >= descentArc1Start and i < descentArc1End
+    local isDescentArc2 = descentArc2Start and i >= descentArc2Start and i < descentArc2End
     if i <= arcSegmentCount then
       local mid = (a + b) * 0.5
       normal = center:subtract(mid):normalize()
     elseif capArcStart and i >= capArcStart and i < capArcEnd then
       local mid = (a + b) * 0.5
       normal = capCenter:subtract(mid):normalize()
+    elseif isDescentArc1 then
+      local mid = (a + b) * 0.5
+      normal = descentCenter1:subtract(mid):normalize()
+    elseif isDescentArc2 then
+      -- Convex, unlike every other arc in this file — see
+      -- tryDescendCeilingCapToArch's own comment on descentCenter2: the
+      -- center sits on the material side here, so the normal points AWAY
+      -- from it instead of toward it.
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(descentCenter2):normalize()
+    elseif i == descentWallSegIndex then
+      -- Away from the solid wall column: wallCol = capCol + descentDirCap
+      -- (see tryDescendCeilingCapToArch), so the material sits on the
+      -- descentDirCap side and the open-air/climbable normal points the
+      -- opposite way — the vertical-mirror counterpart of the ordinary
+      -- ascending wallSegIndex segment's own -dir normal.
+      normal = Vector2.new(-descentDirCap, 0)
+    elseif descentRunStart and i >= descentRunStart then
+      -- Underside run past the arch: material's above, open air's below,
+      -- regardless of which way the run travels (same reasoning
+      -- buildConvexClimbShape's own underside run uses).
+      normal = Vector2.new(0, 1)
     else
       normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
     end
@@ -965,19 +1474,46 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
     table.insert(segments, {
       a = a, b = b, tangent = tangent, normal = normal,
       length = b:subtract(a):length(),
-      isWallFace = (i == wallSegIndex),
+      isWallFace = (i == wallSegIndex) or (i == descentWallSegIndex),
       -- The ceiling cap arc (the ceilingLeft/ceilingRight tile itself)
       -- AND the flat run past it (the ceiling's own solid backing) —
       -- see Player.lua's own isCeiling check, which detaches on a stop
       -- OR a reversal here (unlike the wall face, which only detaches
       -- on a reversal — standing still on a WALL is fine, standing on
       -- open ceiling with nothing but a curve holding you up isn't).
-      isCeiling = isCapArc or isCeilingRun,
+      -- The descent arcs/run (dipping into an archway mid-shape) are the
+      -- same kind of "nothing but a curve holding you up" overhead
+      -- surface, so they're tagged isCeiling too.
+      isCeiling = isCapArc or isCeilingRun or isDescentArc1 or isDescentArc2
+        or (descentRunStart and i >= descentRunStart),
     })
   end
 
   local shape = newShape(segments)
   shape.forceUprightJump = false
+  -- See linkAndMergeWallClimbShapes below: ownCapTileKey lets another
+  -- shape's ceiling run find and merge into THIS one; continuesAtKey is
+  -- the reverse — set when THIS shape's own ceiling run ran into some
+  -- other shape's cap. ceilingRunStartSegment marks where this shape's
+  -- own absorbed ceiling backing begins (in segment-index terms, same
+  -- convention isCeilingRun above already uses) — the part that gets
+  -- discarded, not duplicated, when this shape is merged in as the
+  -- "other" side of a seam (its own backing run would just retrace
+  -- ground the first shape's run already covered from the far end).
+  shape.ownCapTileKey = ownCapTileKey
+  shape.continuesAtKey = continuesAtKey
+  shape.ceilingRunStartSegment = ceilingRunStart
+  -- Set only when this shape's own ceiling run dipped down into a wall
+  -- and an archLeft/archRight cap mid-shape (see
+  -- tryDescendCeilingCapToArch) — a second position this same shape can
+  -- be found by (linkAndMergeWallClimbShapes registers both), and a
+  -- marker telling mergeWallClimbShapes that this shape's own absorbed
+  -- run (everything from ceilingRunStartSegment onward) is genuinely new
+  -- geometry a merge partner needs to keep, not a redundant retrace of
+  -- ground the OTHER side of the merge already covered the way a plain
+  -- ceiling run meeting another ramp's cap directly would be.
+  shape.secondaryCapTileKey = secondaryCapTileKey
+  shape.hasDescent = secondaryCapTileKey ~= nil
   -- Marks this as a ramp-climb shape for every other system that needs
   -- to treat it differently from ordinary terrain: getArcSpeedMultiplier
   -- (no uphill penalty — this is meant to run at full speed), main.lua's
@@ -1001,6 +1537,369 @@ local function buildRampClimbShape(layer, tileProps, width, height, anchorX, anc
   return shape, claimedCells
 end
 
+----------------------------------------------------------------------
+-- Convex wall-climbs (crestRight/crestLeft + archRight/archLeft) — the
+-- outside-of-a-rounded-block counterpart to buildRampClimbShape's own
+-- inside-of-a-tube shapes above.
+----------------------------------------------------------------------
+
+-- Builds a convex wall-climb shape: a flat TOP curving DOWN into a wall
+-- (crestRight/crestLeft), optionally a straight run of that wall, then
+-- optionally a second curve into an underside/ceiling belly
+-- (archRight/archLeft) the player walks upside-down along — like
+-- walking over and around the OUTSIDE of a rounded block, rather than
+-- through the INSIDE of a tube the way buildRampClimbShape's own
+-- concave shapes work.
+--
+-- This mirrors buildRampClimbShape closely, but several things differ
+-- because that's genuinely how the actual authored tile art places
+-- these pieces — confirmed directly against tiled/Level1.lua's own
+-- crestRight/archLeft placement (row 38/39, same column), not guessed:
+--
+--   - The wall continues in the SAME column as the crest tile itself,
+--     not an adjacent one (concave's ramp wall sits in col+dir; this
+--     one is straight down in `col`).
+--   - The arch cap tile, if any, is ALSO in that same column, directly
+--     below wherever the wall stack ends — not offset sideways the way
+--     concave's ceiling cap is.
+--   - A wall stack is entirely OPTIONAL: the arch cap can sit directly
+--     beneath the crest tile with zero plain wall tiles between them
+--     (that's exactly how the level's own tiles are laid out), so the
+--     cap check can't be nested inside "only if a wall tile was found"
+--     the way concave's is — it always runs, using whichever row comes
+--     right after the wall search (found or not).
+--
+-- Every arc's normal points AWAY from its own center instead of toward
+-- it (buildRampClimbShape's concave arcs have center on the OPEN-air
+-- side; here center sits on the material side, and the player walks
+-- the outside of the curve) — that's the entire concave/convex
+-- difference in one sentence; everything else follows from it.
+--
+-- dir = 1 for crestRight (wall descends to the right of the flat top),
+-- dir = -1 for crestLeft (mirrored).
+local function buildConvexClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+  local T = TILE_WORLD_SIZE
+  local x0 = anchorX + col * T
+  local y0 = anchorY + row * T
+  local claimedCells = {}
+
+  -- Base arc, inscribed in the crest tile's own box: center on the
+  -- BOTTOM corner nearest the wall side (the corner a rounded-off sharp
+  -- corner would have pivoted around), sweeping from the flat-top
+  -- tangent point (normal straight up) to the wall tangent point
+  -- (normal straight out sideways) — a quarter turn either way
+  -- depending on dir.
+  local centerX = dir > 0 and x0 or (x0 + T)
+  local centerY = y0 + T
+  local center = Vector2.new(centerX, centerY)
+
+  local thetaLedge = -math.pi / 2
+  local thetaWall = dir > 0 and 0 or -math.pi
+
+  local points = {}
+  for i = 0, RAMP_ARC_SEGMENTS do
+    local t = i / RAMP_ARC_SEGMENTS
+    local theta = thetaLedge + (thetaWall - thetaLedge) * t
+    table.insert(points, Vector2.new(centerX + T * math.cos(theta), centerY + T * math.sin(theta)))
+  end
+  local arcSegmentCount = #points - 1
+
+  -- Wall stack: straight down the SAME column as the crest tile (see
+  -- this function's own header comment), starting one row below it.
+  -- Wholly optional — see below, the cap check runs either way.
+  local wallCol = col
+  local wallEdgeX = dir > 0 and (x0 + T) or x0
+  local wallBottomRow = nil
+  do
+    local r = row + 1
+    while r < height do
+      local gid = layer.data[r * width + wallCol + 1]
+      if gid == 0 or classifyGid(tileProps, gid) ~= "wall" then break end
+      wallBottomRow = r
+      claimedCells[r * width + wallCol] = true
+      r = r + 1
+    end
+  end
+
+  local wallSegIndex = nil
+  if wallBottomRow then
+    table.insert(points, Vector2.new(wallEdgeX, anchorY + (wallBottomRow + 1) * T))
+    wallSegIndex = #points - 1
+  end
+
+  -- Arch cap: directly below wherever the wall search stopped (right
+  -- after the last wall tile, or right after the crest tile itself if
+  -- there was no wall at all) — same column throughout.
+  local capRow = wallBottomRow and (wallBottomRow + 1) or (row + 1)
+  local capCol = col
+
+  local capCenter, capArcStart, capArcEnd = nil, nil, nil
+  local ceilingRunStart = nil
+  local ownCapTileKey = nil
+  local continuesAtKey = nil
+
+  if capRow < height then
+    local capGid = layer.data[capRow * width + capCol + 1]
+    local capRole = capGid ~= 0 and classifyGid(tileProps, capGid) or "empty"
+
+    if capRole == "archRight" or capRole == "archLeft" then
+      claimedCells[capRow * width + capCol] = true
+      ownCapTileKey = capRow * width + capCol
+
+      -- Second arc, its own center — continues sweeping in the SAME
+      -- angular direction the base arc was already sweeping, another
+      -- quarter turn past thetaWall, exactly like buildRampClimbShape's
+      -- own ceiling cap does. Lands, at its far end, on this arch
+      -- tile's own bottom corner.
+      local ccx = wallEdgeX - dir * T
+      local ccy = anchorY + capRow * T
+      capCenter = Vector2.new(ccx, ccy)
+      capArcStart = #points
+      for i = 1, RAMP_ARC_SEGMENTS do
+        local t = i / RAMP_ARC_SEGMENTS
+        local theta = thetaWall + (thetaWall - thetaLedge) * t
+        table.insert(points, Vector2.new(ccx + T * math.cos(theta), ccy + T * math.sin(theta)))
+      end
+      capArcEnd = #points
+
+      -- Underside backing: continues sideways AWAY from the crest's own
+      -- climb direction, same row the arch tile itself sits in (unlike
+      -- buildRampClimbShape's own ceiling run, which continues one row
+      -- ABOVE its cap — the arch cap's own arc ends at ITS OWN bottom
+      -- edge, not its top edge, so the matching backing row is the cap's
+      -- own row, not the row above it).
+      local flatRow = capRow
+      local flatCol = capCol - dir
+      local absorbDir = -dir
+      ceilingRunStart = #points
+
+      local fc = flatCol
+      while fc >= 0 and fc < width do
+        local fgid = layer.data[flatRow * width + fc + 1]
+        if fgid == 0 or classifyGid(tileProps, fgid) ~= "wall" then
+          -- Same idea as buildRampClimbShape's own continuesAtKey: if
+          -- this run stopped because it ran straight into ANOTHER
+          -- shape's own cap, record where, so linkAndMergeWallClimbShapes
+          -- can stitch the two together once every shape in the level
+          -- exists to look up. Checks BOTH cap families (see
+          -- buildRampClimbShape's own matching comment) — the neighbor
+          -- on the other end of this underside run might belong to
+          -- another convex piece (archLeft/archRight) or an ordinary
+          -- CONCAVE one (ceilingLeft/ceilingRight): both present the
+          -- same "normal points down" orientation this run is already
+          -- walking in, so either is a valid splice point.
+          --
+          -- The two families sit on DIFFERENT rows relative to this
+          -- scan, though: THIS shape's own convex cap sits at the SAME
+          -- row as its backing, so another convex cap shows up as the
+          -- tile this run just broke on (fgid itself) — but a concave
+          -- cap (ceilingLeft/ceilingRight) sits ONE ROW BELOW its own
+          -- backing (buildRampClimbShape's own convention), so it shows
+          -- up one row further down from here instead.
+          if fgid ~= 0 then
+            local hitRole = classifyGid(tileProps, fgid)
+            if hitRole == "archRight" or hitRole == "archLeft" then
+              continuesAtKey = flatRow * width + fc
+            end
+          end
+          if not continuesAtKey then
+            local belowGid = layer.data[(flatRow + 1) * width + fc + 1]
+            if belowGid and belowGid ~= 0 then
+              local belowRole = classifyGid(tileProps, belowGid)
+              if belowRole == "ceilingLeft" or belowRole == "ceilingRight" then
+                continuesAtKey = (flatRow + 1) * width + fc
+              end
+            end
+          end
+          break
+        end
+        claimedCells[flatRow * width + fc] = true
+        local edgeCol = absorbDir > 0 and (fc + 1) or fc
+        table.insert(points, Vector2.new(anchorX + edgeCol * T, anchorY + (flatRow + 1) * T))
+        fc = fc + absorbDir
+      end
+    end
+  end
+
+  if #points < 2 then return nil end
+
+  local segments = {}
+  for i = 1, #points - 1 do
+    local a, b = points[i], points[i + 1]
+    local tangent = b:subtract(a):normalize()
+    local normal
+    if i <= arcSegmentCount then
+      -- Convex: normal points AWAY from center (the material side),
+      -- not toward it — the one formula flip that makes this the
+      -- outside of a curve instead of the inside.
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(center):normalize()
+    elseif capArcStart and i >= capArcStart and i < capArcEnd then
+      local mid = (a + b) * 0.5
+      normal = mid:subtract(capCenter):normalize()
+    else
+      -- Straight segments (wall face, underside backing run): this
+      -- formula needs no convex/concave adjustment — it already gives
+      -- the correct outward normal for a wall descending on either
+      -- side, same as buildRampClimbShape's own straight segments use.
+      normal = Vector2.new(dir * tangent.y, -dir * tangent.x)
+    end
+    local isCapArc = capArcStart and i >= capArcStart and i < capArcEnd
+    local isCeilingRun = ceilingRunStart and i >= ceilingRunStart
+    table.insert(segments, {
+      a = a, b = b, tangent = tangent, normal = normal,
+      length = b:subtract(a):length(),
+      isWallFace = (i == wallSegIndex),
+      isCeiling = isCapArc or isCeilingRun,
+    })
+  end
+
+  local shape = newShape(segments)
+  shape.forceUprightJump = false
+  shape.ownCapTileKey = ownCapTileKey
+  shape.continuesAtKey = continuesAtKey
+  shape.ceilingRunStartSegment = ceilingRunStart
+  shape.isWallClimb = true
+  shape.controlsReversed = dir < 0
+  return shape, claimedCells
+end
+
+-- Two ramps authored to meet mid-ceiling (e.g. a rampRight climb capped
+-- with ceilingLeft, whose own ceiling run stops exactly where a rampLeft
+-- climb's ceilingRight cap begins — see buildRampClimbShape's own
+-- continuesAtKey/ownCapTileKey comments) are, up to this point, still two
+-- separate TerrainShape objects with a hard edge between them: reaching
+-- the end of one's own arc length is an ordinary isOpenPath boundary,
+-- which Player:move() falls off of. That's fine for a genuine dead end,
+-- but wrong here — the two were drawn as one continuous loop, and gravity
+-- can't carry a falling player INTO a ceiling the way it can a floor (see
+-- Player.lua's own move(), the isOpenPath edge-carry comment), so a player
+-- who reaches this particular kind of "edge" would just fall every time,
+-- regardless of direction, instead of continuing onto the second wall the
+-- art clearly promises.
+--
+-- Fixes that by literally splicing the two shapes into one before the
+-- player ever sees either: shapeA keeps its own segments as-is, and
+-- shapeB's own PRE-absorption segments (its base arc, wall, and cap arc —
+-- everything up to but not including its own ceiling backing run) are
+-- appended in REVERSE. Reversed, because shapeB's own arc length runs
+-- ground-to-ceiling, the opposite direction shapeA is arriving from.
+-- shapeB's own absorption run itself is deliberately dropped, not
+-- reversed-and-kept: both shapes' ceiling runs independently absorb
+-- toward each other's cap along the SAME backing row (that's how
+-- shapeA's own run found shapeB's cap tile to link to in the first
+-- place), so shapeB's run just retraces ground shapeA's own run already
+-- covered from the far end — appending it too would double back over the
+-- whole ceiling a second time instead of continuing through the wall.
+local function mergeWallClimbShapes(shapeA, shapeB)
+  -- shapeB.hasDescent means its own absorbed run doesn't just retrace
+  -- ground shapeA's own run already covered — partway through, it turned
+  -- a corner (dipped down into a wall and an archLeft/archRight cap, see
+  -- tryDescendCeilingCapToArch) and is now genuinely new geometry the
+  -- merge needs to keep, all the way to its own far end, not just up to
+  -- ceilingRunStartSegment.
+  local cut = shapeB.hasDescent and (#shapeB.segments + 1)
+    or shapeB.ceilingRunStartSegment or (#shapeB.segments + 1)
+  for i = cut - 1, 1, -1 do
+    local seg = shapeB.segments[i]
+    table.insert(shapeA.segments, {
+      a = seg.b,
+      b = seg.a,
+      tangent = seg.tangent:clone():multiply(-1),
+      normal = seg.normal,
+      length = seg.length,
+      isWallFace = seg.isWallFace,
+      isCeiling = seg.isCeiling,
+    })
+  end
+  shapeA.totalLength = 0
+  for _, seg in ipairs(shapeA.segments) do
+    shapeA.totalLength = shapeA.totalLength + seg.length
+  end
+  shapeA:refreshBounds()
+end
+
+-- Runs after every individual ramp-climb shape already exists (a shape's
+-- own continuesAtKey may point at a cap tile belonging to a shape built
+-- LATER in the raster scan, so this can't happen inline during that scan)
+-- — looks up, for each shape whose ceiling run ran into another shape's
+-- cap, that owning shape, and merges them (see mergeWallClimbShapes).
+-- Loops until a full pass makes no further merges, so a shape freshly
+-- extended by one merge is still eligible to be found (as either side)
+-- by another — genuinely exercised now by chains longer than a single
+-- pair (e.g. a wall/ceiling/wall climb, arched across to a second
+-- wall/ceiling/wall climb, all one continuous loop), which is also why
+-- shapeB's own continuesAtKey and cap-tile ownership both get carried
+-- forward onto shapeA below after each merge, not just discarded —
+-- earlier versions of this function only ever handled a single pair
+-- correctly.
+local function linkAndMergeWallClimbShapes(shapes)
+  local capOwnerByKey = {}
+  for _, shape in ipairs(shapes) do
+    if shape.ownCapTileKey then capOwnerByKey[shape.ownCapTileKey] = shape end
+    -- secondaryCapTileKey: this same shape's OWN dip into a wall+arch
+    -- (see tryDescendCeilingCapToArch) lands on a second tile position —
+    -- typically the immediately adjacent archLeft/archRight tile another
+    -- shape's own mirror-image dip lands on from the far side of the same
+    -- archway — findable the same way ownCapTileKey already is.
+    if shape.secondaryCapTileKey then capOwnerByKey[shape.secondaryCapTileKey] = shape end
+  end
+
+  local absorbed = {}
+  local mergedAny = true
+  while mergedAny do
+    mergedAny = false
+    for _, shapeA in ipairs(shapes) do
+      if not absorbed[shapeA] and shapeA.continuesAtKey then
+        local shapeB = capOwnerByKey[shapeA.continuesAtKey]
+        if shapeB and shapeB ~= shapeA and not absorbed[shapeB] then
+          mergeWallClimbShapes(shapeA, shapeB)
+          absorbed[shapeB] = true
+
+          -- Redirect anything that still thinks shapeB owns its own cap
+          -- tile to shapeA instead: shapeB's geometry now physically
+          -- lives inside shapeA (see mergeWallClimbShapes), so a THIRD
+          -- shape further down the path whose own continuesAtKey points
+          -- at that same tile position needs to resolve to whichever
+          -- shape is actually still there, not the now-absorbed one —
+          -- capOwnerByKey was only ever built once, up front, and never
+          -- updated as merges happen, so without this a chain longer
+          -- than two shapes could never find its way past the first
+          -- splice: it would look up shapeB, see it's already absorbed,
+          -- and give up rather than continuing on to shapeA.
+          if shapeB.ownCapTileKey then
+            capOwnerByKey[shapeB.ownCapTileKey] = shapeA
+          end
+          if shapeB.secondaryCapTileKey then
+            capOwnerByKey[shapeB.secondaryCapTileKey] = shapeA
+          end
+
+          -- Carry shapeB's own continuation forward instead of just
+          -- clearing shapeA's — shapeB may ITSELF have been mid-chain
+          -- (its own ceiling/underside run reaching into a THIRD
+          -- shape's cap, e.g. an arch bridging to another wall-climb
+          -- further along), and unconditionally clearing this after
+          -- absorbing shapeB silently dropped that on the floor,
+          -- capping every chain at a single pair no matter how many
+          -- more pieces the level actually drew. When shapeB had no
+          -- further continuation of its own, shapeB.continuesAtKey is
+          -- already nil, so this still ends the chain there exactly
+          -- like the old unconditional nil did.
+          shapeA.continuesAtKey = shapeB.continuesAtKey
+
+          mergedAny = true
+        end
+      end
+    end
+  end
+
+  local result = {}
+  for _, shape in ipairs(shapes) do
+    if not absorbed[shape] then table.insert(result, shape) end
+  end
+  return result
+end
+
 -- Returns shapes, claimedCells — claimedCells merges every individual
 -- shape's own claimed set (see buildRampClimbShape), for
 -- TiledTerrain.load to pass into computeTopPointsByColumn.
@@ -1013,8 +1912,15 @@ local function buildRampShapes(layer, tileProps, width, height, anchorX, anchorY
       if gid ~= 0 then
         local role = classifyGid(tileProps, gid)
         local dir = (role == "rampRight" and 1) or (role == "rampLeft" and -1) or nil
+        local convexDir = (role == "crestRight" and 1) or (role == "crestLeft" and -1) or nil
         if dir then
           local shape, shapeClaimed = buildRampClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, dir)
+          if shape then
+            table.insert(shapes, shape)
+            for key in pairs(shapeClaimed) do claimedCells[key] = true end
+          end
+        elseif convexDir then
+          local shape, shapeClaimed = buildConvexClimbShape(layer, tileProps, width, height, anchorX, anchorY, col, row, convexDir)
           if shape then
             table.insert(shapes, shape)
             for key in pairs(shapeClaimed) do claimedCells[key] = true end
@@ -1023,6 +1929,7 @@ local function buildRampShapes(layer, tileProps, width, height, anchorX, anchorY
       end
     end
   end
+  shapes = linkAndMergeWallClimbShapes(shapes)
   return shapes, claimedCells
 end
 
@@ -1079,28 +1986,25 @@ local function buildWallShapes(layer, tileProps, width, height, anchorX, anchorY
 end
 
 ----------------------------------------------------------------------
--- Lava — see lua/world/Lava.lua for the actual entity (shader-drawn
--- wavy surface + rising embers). One instance per lava-role tile, NOT
--- merged into multi-tile strips — Lava.lua's own wave is driven by
--- absolute world X, so independently-drawn adjacent tiles already line
--- up with each other at their shared edge with no seam; merging them
--- into wider quads would just be unneeded bookkeeping for no visual
--- difference.
+-- Lava tiles: where the level's lava starts out. The lava itself is a
+-- liquid, flowing like the water — see WaterSystem.lua (WaterSystem.init
+-- fills these tiles with it). Each is { x0, y0, size }: its top-left
+-- corner in world units, and its size.
 ----------------------------------------------------------------------
 
 local function buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
-  local lavas = {}
+  local lavaTiles = {}
   for row = 0, height - 1 do
     for col = 0, width - 1 do
       local gid = layer.data[row * width + col + 1]
       if gid ~= 0 and classifyGid(tileProps, gid) == "lava" then
-        local x0 = anchorX + col * TILE_WORLD_SIZE
-        local y0 = anchorY + row * TILE_WORLD_SIZE
-        table.insert(lavas, Lava.new(x0, y0, TILE_WORLD_SIZE))
+        table.insert(lavaTiles, {
+          x0 = anchorX + col * TILE_WORLD_SIZE, y0 = anchorY + row * TILE_WORLD_SIZE, size = TILE_WORLD_SIZE,
+        })
       end
     end
   end
-  return lavas
+  return lavaTiles
 end
 
 ----------------------------------------------------------------------
@@ -1119,21 +2023,446 @@ function Level:draw()
 end
 
 ----------------------------------------------------------------------
+-- Ball tunnels: solid tunnel pieces, and headroom
+----------------------------------------------------------------------
+--
+-- The ball-tunnel arc pieces (CrackedPlanetoid.lua's *Outer1/2/3, round
+-- the outside of a bend over a crest or under an arch) are solid exactly
+-- where their art is: Bob (and his head, standing — see below), fireballs
+-- and water are kept out of them. The tunnel's straight ceilings and
+-- walls are ordinary wall tiles, so are its *Inner corners (see
+-- classifyGid), and its bends are the ordinary ramp/ceiling/crest curves
+-- he already rolls round (see buildRampClimbShape/buildConvexClimbShape).
+--
+-- Headroom: standing up, Bob is taller than his round body — a head
+-- circle sits on top of it, reaching about 78 units above his feet. A
+-- ball tunnel is one tile (64 units) high: he only fits curled up as a
+-- ball (about 48), so he can't walk into one standing, his head is
+-- stopped jumping into one, and he can't uncurl inside one (see
+-- Player:exitBallMode and main.lua). The same as on the Tiled planet
+-- (CrackedPlanetoid:standingRoomAt).
+
+local HEAD_OFFSET = 26   -- the head circle's center, above his own center
+local HEAD_RADIUS = 22
+-- Curves that are a ceiling over him (solid above), for headroom.
+local HEADROOM_CURVES = { ceilingLeft = true, ceilingRight = true, archLeft = true, archRight = true }
+
+local function pointInOutline(o, x, y)
+  local inside, n = false, #o
+  local jx, jy = o[n - 1], o[n]
+  for k = 1, n, 2 do
+    local ix, iy = o[k], o[k + 1]
+    if (iy > y) ~= (jy > y) and x < (jx - ix) * (y - iy) / (jy - iy) + ix then inside = not inside end
+    jx, jy = ix, iy
+  end
+  return inside
+end
+
+local function nearestOnOutline(o, x, y)
+  local bx, by, bd = x, y, math.huge
+  local n = #o
+  for k = 1, n, 2 do
+    local k2 = (k + 1) % n + 1
+    local ax, ay, cx, cy = o[k], o[k + 1], o[k2], o[k2 + 1]
+    local dx, dy = cx - ax, cy - ay
+    local len2 = dx * dx + dy * dy
+    local t = len2 > 0 and ((x - ax) * dx + (y - ay) * dy) / len2 or 0
+    if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    local qx, qy = ax + dx * t, ay + dy * t
+    local d = (x - qx) ^ 2 + (y - qy) ^ 2
+    if d < bd then bx, by, bd = qx, qy, d end
+  end
+  return bx, by, bd
+end
+
+-- A tile's outline (shape name) in world space, for the cell at col/row.
+local function shapeOutlineWorld(shape, anchorX, anchorY, col, row)
+  local SHAPED = require("lua.world.CrackedPlanetoid").SHAPED_TILES
+  local T = TILE_WORLD_SIZE
+  local x0, y0 = anchorX + col * T, anchorY + row * T
+  local o = {}
+  for _, p in ipairs(SHAPED[shape].outline) do
+    o[#o + 1] = x0 + p[1] * T
+    o[#o + 1] = y0 + (1 - p[2]) * T
+  end
+  return o
+end
+
+function Level:cellAt(x, y)
+  local T = TILE_WORLD_SIZE
+  local col = math.floor((x - self.anchorX) / T)
+  local row = math.floor((y - self.anchorY) / T)
+  if col < 0 or row < 0 or col >= self.mapWidth or row >= self.mapHeight then return nil end
+  return col, row
+end
+
+-- Whether world (x, y) is inside a ball-tunnel piece.
+function Level:tunnelSolidAt(x, y)
+  local col, row = self:cellAt(x, y)
+  if not col then return false end
+  local t = self.tunnelByCell[row * self.mapWidth + col]
+  return t ~= nil and pointInOutline(t, x, y)
+end
+
+-- Whether world (x, y) is solid rock: a wall tile or a ball-tunnel piece
+-- — and, for headroom, the solid part of a ceiling/arch curve too. (Not
+-- an ordinary top: he can always stand up into, or jump up through, one
+-- of those.)
+function Level:solidAt(x, y, forHeadroom)
+  local col, row = self:cellAt(x, y)
+  if not col then return false end
+  local key = row * self.mapWidth + col
+  local t = self.tunnelByCell[key]
+  if t then return pointInOutline(t, x, y) end
+  local gid = self.collisionData[key + 1] or 0
+  if gid == 0 then return false end
+  local role = classifyGid(self.tileProps, gid)
+  if role == "wall" then return true end
+  if forHeadroom and HEADROOM_CURVES[role] then
+    return pointInOutline(shapeOutlineWorld(role, self.anchorX, self.anchorY, col, row), x, y)
+  end
+  return false
+end
+
+-- Whether a standing Bob with his center at (cx, cy) and body radius r
+-- has room: nothing solid in his head, or the top of his body.
+function Level:headroomAt(cx, cy, r)
+  local hx, hy = cx, cy - HEAD_OFFSET
+  if self:solidAt(hx, hy, true) then return false end
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    if self:solidAt(hx + math.cos(a) * (HEAD_RADIUS - 1), hy + math.sin(a) * (HEAD_RADIUS - 1), true) then
+      return false
+    end
+  end
+  for _, deg in ipairs({ -150, -120, -90, -60, -30 }) do
+    local a = math.rad(deg)
+    if self:solidAt(cx + math.cos(a) * (r - 1), cy + math.sin(a) * (r - 1), true) then return false end
+  end
+  return true
+end
+
+-- Whether curled-up Bob could stand up where he is: feet where the
+-- ball's bottom is, at his full standing size.
+function Level:standingRoomAt(player)
+  local full = player.baseRadius or player.radius
+  local feetY = player.pos.y + player.radius
+  return self:headroomAt(player.pos.x, feetY - full, full)
+end
+
+-- Pushes a circle at (x, y), radius r, out of the ball-tunnel pieces —
+-- and, with withCurves, out of the solid part of ceiling/arch curves, and
+-- with withWalls out of wall tiles too (for his head: his body's walls
+-- are CollisionSystem's). Returns its new center and the direction of
+-- the last push (nil if it wasn't moved).
+function Level:pushCircleOut(x, y, r, withWalls, withCurves)
+  local T = TILE_WORLD_SIZE
+  local nx, ny
+  for _ = 1, 3 do
+    local moved = false
+    local c0, r0 = self:cellAt(x - r, y - r)
+    local c1, r1 = self:cellAt(x + r, y + r)
+    c0 = c0 or math.max(0, math.floor((x - r - self.anchorX) / T))
+    r0 = r0 or math.max(0, math.floor((y - r - self.anchorY) / T))
+    c1 = c1 or math.min(self.mapWidth - 1, math.floor((x + r - self.anchorX) / T))
+    r1 = r1 or math.min(self.mapHeight - 1, math.floor((y + r - self.anchorY) / T))
+    for row = r0, r1 do
+      for col = c0, c1 do
+        local key = row * self.mapWidth + col
+        local o = self.tunnelByCell[key]
+        if not o and (withWalls or withCurves) then
+          local gid = self.collisionData[key + 1] or 0
+          if gid ~= 0 then
+            local role = classifyGid(self.tileProps, gid)
+            if role == "wall" and withWalls then
+              local x0, y0 = self.anchorX + col * T, self.anchorY + row * T
+              o = { x0, y0, x0 + T, y0, x0 + T, y0 + T, x0, y0 + T }
+            elseif HEADROOM_CURVES[role] and withCurves then
+              o = shapeOutlineWorld(role, self.anchorX, self.anchorY, col, row)
+            end
+          end
+        end
+        if o then
+          local qx, qy, d2 = nearestOnOutline(o, x, y)
+          local d = math.sqrt(d2)
+          local inside = pointInOutline(o, x, y)
+          if inside or d < r - 0.5 then
+            local px, py
+            if d > 1e-6 then px, py = (x - qx) / d, (y - qy) / d else px, py = 0, -1 end
+            if inside then px, py = -px, -py end -- (out the nearest side)
+            local depth = inside and (d + r) or (r - d)
+            x, y = x + px * depth, y + py * depth
+            nx, ny, moved = px, py, true
+          end
+        end
+      end
+    end
+    if not moved then break end
+  end
+  return x, y, nx, ny
+end
+
+-- Every frame (see main.lua): keeps Bob out of the ball-tunnel pieces —
+-- and of the ceiling/arch curves, except while he's riding one of this
+-- file's curve paths (it rounds them itself; see buildRampClimbShape) —
+-- and, standing, in the air, his head out of ceilings.
+function Level:pushPlayer(player)
+  local function apply(dx, dy, nx, ny)
+    player.pos.x, player.pos.y = player.pos.x + dx, player.pos.y + dy
+    local into = player.vel.x * nx + player.vel.y * ny
+    if into < 0 then
+      player.vel.x, player.vel.y = player.vel.x - nx * into, player.vel.y - ny * into
+    end
+    if player.onSurface and player.currentPlanet
+       and type(player.currentPlanet.arcPositionForWorldPoint) == "function" then
+      player.surfaceArcPos = player.currentPlanet:arcPositionForWorldPoint(player.pos.x, player.pos.y)
+    end
+  end
+  local onCurvePath = player.onSurface and player.currentPlanet and player.currentPlanet.isWallClimb
+  local x, y, nx, ny = self:pushCircleOut(player.pos.x, player.pos.y, player.radius, false, not onCurvePath)
+  if nx then apply(x - player.pos.x, y - player.pos.y, nx, ny) end
+  if not player.isBall and not player.onSurface then
+    local hx, hy = player.pos.x, player.pos.y - HEAD_OFFSET
+    local x2, y2, hnx, hny = self:pushCircleOut(hx, hy, HEAD_RADIUS, true, true)
+    if hnx then apply(x2 - hx, y2 - hy, hnx, hny) end
+  end
+end
+
+-- The ball-tunnel pieces: { [row * width + col] = world outline } — and,
+-- for the water, a solid cell for each whose middle is inside one.
+local function buildTunnelSolids(layer, tileProps, width, height, anchorX, anchorY)
+  local SHAPED = require("lua.world.CrackedPlanetoid").SHAPED_TILES
+  local byCell, waterSolids = {}, {}
+  local T = TILE_WORLD_SIZE
+  for row = 0, height - 1 do
+    for col = 0, width - 1 do
+      local raw = layer.data[row * width + col + 1] or 0
+      local gid = raw % 2 ^ 29
+      local props = gid ~= 0 and tileProps[gid]
+      local shape = props and props.slope
+      if shape and SHAPED[shape] and shape:find("Outer%d$") then -- (the *Inner corners are walls — see classifyGid)
+        if math.floor(raw / 2 ^ 31) % 2 == 1 then -- (flipped left-right in Tiled)
+          shape = shape:find("Right") and (shape:gsub("Right", "Left")) or (shape:gsub("Left", "Right"))
+        end
+        local o = shapeOutlineWorld(shape, anchorX, anchorY, col, row)
+        byCell[row * width + col] = o
+        local cx, cy = anchorX + (col + 0.5) * T, anchorY + (row + 0.5) * T
+        if pointInOutline(o, cx, cy) then
+          table.insert(waterSolids, { pos = Vector2.new(cx, cy), halfWidth = T / 2, halfHeight = T / 2, isWall = true })
+        end
+      end
+    end
+  end
+  return byCell, waterSolids
+end
+
+----------------------------------------------------------------------
+-- Depth shading — layers named Back and Middle set behind Front
+----------------------------------------------------------------------
+--
+-- Baked once, into the level's one canvas, back to front: a soft shadow
+-- of the layer in front cast onto each layer behind it — Middle's onto
+-- Back, then Front's onto both (offset down and a little sideways,
+-- blurred). Shadows are made at 1/SHADOW_DOWNSCALE size — they're blurred
+-- anyway — and the canvas only ever multiplied, so it costs no more
+-- memory than the plain bake did. And each layer darkening toward the
+-- bottom of the map (see GROUND_SHADE_ROWS).
+local SHADOWED_LAYERS = { back = true, middle = true } -- (by name, any capitals)
+local SHADOW_STRENGTH = 0.5        -- how dark the shadow of a layer in front is, at its darkest
+local SHADOW_OFFSET_X = 14         -- world units: the shadow lands this far right...
+local SHADOW_OFFSET_Y = 30         -- ...and this far down from what casts it
+-- (The same offset Bob's and the Ooombas' shadows use, so every shadow
+-- falls the same way — see lua/effects/CharacterShadows.lua.)
+TiledTerrain.SHADOW_OFFSET_X, TiledTerrain.SHADOW_OFFSET_Y = SHADOW_OFFSET_X, SHADOW_OFFSET_Y
+local SHADOW_BLUR = 3              -- blur passes (at the shadow's reduced size)
+local SHADOW_DOWNSCALE = 8
+-- Each layer's tiles darkening toward the bottom of the map, over its
+-- bottom this-many rows (by name, any capitals; any other: none) — darkest
+-- (GROUND_SHADE_DARKNESS) right at the bottom edge, none at the top of
+-- those rows. The further back the layer, the higher it reaches.
+local GROUND_SHADE_ROWS = { front = 1, middle = 3, back = 5 }
+local GROUND_SHADE_DARKNESS = 0.5  -- how much darker it gets at the very bottom (0 = none, 1 = black)
+
+-- Draws tiles darkened by how near the bottom of the map they are (see
+-- GROUND_SHADE_ROWS) — by their own pixels' height, so it's only ever the
+-- tiles' own art that darkens, never what shows through their clear parts.
+local groundShadeShader = nil
+local function getGroundShadeShader()
+  if groundShadeShader then return groundShadeShader end
+  groundShadeShader = love.graphics.newShader([[
+    varying float canvasY;
+    #ifdef VERTEX
+    vec4 position(mat4 transform_projection, vec4 vertex_position) {
+      canvasY = (TransformMatrix * vertex_position).y;
+      return transform_projection * vertex_position;
+    }
+    #endif
+    #ifdef PIXEL
+    extern number bottomY;   // the map's bottom edge, canvas pixels
+    extern number fadeHeight; // how far up from it the darkening reaches
+    extern number darkness;
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 c = Texel(tex, uv) * color;
+      float t = clamp((bottomY - canvasY) / fadeHeight, 0.0, 1.0); // 0 at the bottom, 1 at the top of the fade
+      c.rgb *= 1.0 - darkness * (1.0 - t);
+      return c;
+    }
+    #endif
+  ]])
+  return groundShadeShader
+end
+
+local blurShader = nil
+local function getBlurShader()
+  if blurShader then return blurShader end
+  blurShader = love.graphics.newShader([[
+    extern vec2 stepUV; // one texel along the blur's direction
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
+      vec4 sum = Texel(tex, uv) * 0.2270270;
+      sum += (Texel(tex, uv + stepUV * 1.3846154) + Texel(tex, uv - stepUV * 1.3846154)) * 0.3162162;
+      sum += (Texel(tex, uv + stepUV * 3.2307692) + Texel(tex, uv - stepUV * 3.2307692)) * 0.0702703;
+      return sum * color;
+    }
+  ]])
+  return blurShader
+end
+
+-- Bakes the tile layers into one canvas (see the comment above). Lava
+-- tiles are skipped: the lava (WaterSystem.lua's liquid) is drawn over
+-- it (and it flows away from where it started) — the sheet's own flat
+-- red tile art would show wherever it's run off from, as if still lava.
+local function bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
+  local function drawLayerTiles(l, scale, ox, oy)
+    for row = 0, height - 1 do
+      for col = 0, width - 1 do
+        local gid = l.data[row * width + col + 1]
+        if gid ~= 0 and classifyGid(tileProps, gid) ~= "lava" then
+          local ts = findTileset(tilesets, gid)
+          if ts then
+            local quad = getTileQuadForLocalIndex(img, gid - ts.firstgid, ts.columns or DEFAULT_TILESET_COLUMNS)
+            love.graphics.draw(img, quad, ox + col * TILE_WORLD_SIZE * scale, oy + row * TILE_WORLD_SIZE * scale,
+              0, TILE_SCALE * scale, TILE_SCALE * scale)
+          end
+        end
+      end
+    end
+  end
+
+
+  -- A soft shadow of `casters` (layers in front) multiplied over everything
+  -- baked so far. Made small: white, with the casters' silhouettes laid
+  -- over it in black at SHADOW_STRENGTH (offset), blurred, then stretched
+  -- back up over the canvas.
+  local sw = math.ceil(width * TILE_WORLD_SIZE / SHADOW_DOWNSCALE)
+  local sh = math.ceil(height * TILE_WORLD_SIZE / SHADOW_DOWNSCALE)
+  local shadowA, shadowB = nil, nil
+  local function castShadow(casters, onto)
+    shadowA = shadowA or love.graphics.newCanvas(sw, sh)
+    shadowB = shadowB or love.graphics.newCanvas(sw, sh)
+    shadowA:setFilter("linear", "linear")
+    shadowB:setFilter("linear", "linear")
+    love.graphics.setCanvas(shadowA)
+    love.graphics.clear(1, 1, 1, 1)
+    love.graphics.setColor(0, 0, 0, SHADOW_STRENGTH)
+    local s = 1 / SHADOW_DOWNSCALE
+    for _, l in ipairs(casters) do
+      drawLayerTiles(l, s, SHADOW_OFFSET_X * s, SHADOW_OFFSET_Y * s)
+    end
+    local blur = getBlurShader()
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setShader(blur)
+    for _ = 1, SHADOW_BLUR do
+      love.graphics.setCanvas(shadowB)
+      blur:send("stepUV", { 1 / sw, 0 })
+      love.graphics.draw(shadowA)
+      love.graphics.setCanvas(shadowA)
+      blur:send("stepUV", { 0, 1 / sh })
+      love.graphics.draw(shadowB)
+    end
+    love.graphics.setShader()
+    love.graphics.setCanvas(onto)
+    love.graphics.setBlendMode("multiply", "premultiplied")
+    love.graphics.draw(shadowA, 0, 0, 0, SHADOW_DOWNSCALE, SHADOW_DOWNSCALE)
+    love.graphics.setBlendMode("alpha")
+  end
+
+  local canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE)
+  love.graphics.push("all")
+  love.graphics.origin()
+  love.graphics.setCanvas(canvas)
+  love.graphics.clear(0, 0, 0, 0)
+  for i, l in ipairs(tileLayers) do
+    love.graphics.setColor(1, 1, 1, 1)
+    local shadeRows = GROUND_SHADE_ROWS[string.lower(l.name or "")]
+    if shadeRows and shadeRows > 0 then
+      local shade = getGroundShadeShader()
+      shade:send("bottomY", height * TILE_WORLD_SIZE)
+      shade:send("fadeHeight", shadeRows * TILE_WORLD_SIZE)
+      shade:send("darkness", GROUND_SHADE_DARKNESS)
+      love.graphics.setShader(shade)
+    end
+    drawLayerTiles(l, 1, 0, 0)
+    love.graphics.setShader()
+    if SHADOWED_LAYERS[string.lower(l.name or "")] then
+      -- The shadow of the next layer in front (only the next: one further
+      -- forward casts its own over this one too, when that one's done).
+      local nextLayer = tileLayers[i + 1]
+      if nextLayer then castShadow({ nextLayer }, canvas) end
+    end
+  end
+  love.graphics.pop()
+  love.graphics.setColor(1, 1, 1, 1)
+  if shadowA then shadowA:release(); shadowB:release() end
+  return canvas
+end
+
+----------------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------------
 
 -- mapData: the table returned by require()-ing a Tiled Lua export.
 -- anchorX/anchorY: world position of the map's own (0,0) (top-left) corner.
 function TiledTerrain.load(mapData, anchorX, anchorY)
-  local layer = nil
+  -- Tile layers, in drawing order (Tiled's own: first is furthest back).
+  -- A map can have several — ones named "Back" and "Middle" get the shadows
+  -- of the layers in front of them (see bakeLayers); any other name is drawn plain, like a
+  -- front layer.
+  local tileLayers = {}
   for _, l in ipairs(mapData.layers) do
-    if l.type == "tilelayer" then layer = l; break end
+    if l.type == "tilelayer" then table.insert(tileLayers, l) end
   end
-  assert(layer, "TiledTerrain.load: no tilelayer found in map data")
+  assert(#tileLayers > 0, "TiledTerrain.load: no tilelayer found in map data")
 
   local width, height = mapData.width, mapData.height
   local tilesets = mapData.tilesets
   local tileProps = buildTilePropertyLookup(tilesets)
+
+  -- Collision comes from every layer at once: one combined layer that,
+  -- cell by cell, takes the most solid tile any layer has there (a wall or
+  -- lava over a walkable top, a walkable top over plain fill; the front-
+  -- most of equals) — so a ledge collides the same whichever layer it was
+  -- drawn on, just as when the whole level was one layer.
+  local layer = tileLayers[1]
+  if #tileLayers > 1 then
+    local function solidity(gid)
+      if gid == 0 then return 0 end
+      local role = classifyGid(tileProps, gid)
+      if role == "wall" or role == "lava" then return 3 end
+      if role == "fill" then return 1 end
+      return 2 -- walkable: flat tops, slopes, ramps, crests, arches, ceilings
+    end
+    local data = {}
+    for i = 1, width * height do
+      local best, bestRank = 0, 0
+      for li = #tileLayers, 1, -1 do -- front first, so it wins ties
+        local gid = tileLayers[li].data[i] or 0
+        local rank = solidity(gid)
+        if rank > bestRank then best, bestRank = gid, rank end
+      end
+      data[i] = best
+    end
+    layer = { data = data }
+  end
 
   -- Ramp-to-wall climbs (rampRight/rampLeft) — built BEFORE the
   -- ordinary column scan below, so its own claimed cells (see
@@ -1167,44 +2496,384 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   -- rather than TerrainShape instances.
   local walls = buildWallShapes(layer, tileProps, width, height, anchorX, anchorY)
 
-  -- Lava tiles — see buildLavaTiles above and lua/world/Lava.lua for
-  -- the shader-drawn entity itself.
-  local lavas = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
+  -- Ball-tunnel pieces, solid in their exact shape (see Level:pushPlayer).
+  local tunnelByCell, waterSolids = buildTunnelSolids(layer, tileProps, width, height, anchorX, anchorY)
 
-  -- Rendering: bake the ENTIRE grid (fill tiles included — rendering
-  -- doesn't care about the walkable/fill/wall distinction, only collision
-  -- does) to one canvas, once. Lava tiles are the one exception: skipped
-  -- here entirely, since Lava.lua draws its own animated shader quad
-  -- over that same area every frame instead — baking the sheet's own
-  -- flat tile art underneath would just sit there uselessly (visible
-  -- only through the shader's transparent-above-the-wave cutout, where
-  -- it isn't wanted either).
-  local canvas = nil
-  local img = state.platformTexture
-  if img then
-    canvas = love.graphics.newCanvas(width * TILE_WORLD_SIZE, height * TILE_WORLD_SIZE)
-    love.graphics.push()
-    love.graphics.origin()
-    love.graphics.setCanvas(canvas)
-    love.graphics.clear(0, 0, 0, 0)
-    love.graphics.setColor(1, 1, 1, 1)
-    for row = 0, height - 1 do
-      for col = 0, width - 1 do
-        local gid = layer.data[row * width + col + 1]
-        if gid ~= 0 and classifyGid(tileProps, gid) ~= "lava" then
-          local ts = findTileset(tilesets, gid)
-          if ts then
-            local localIndex = gid - ts.firstgid
-            local columns = ts.columns or DEFAULT_TILESET_COLUMNS
-            local quad = getTileQuadForLocalIndex(img, localIndex, columns)
-            love.graphics.draw(img, quad, col * TILE_WORLD_SIZE, row * TILE_WORLD_SIZE, 0, TILE_SCALE, TILE_SCALE)
+  -- Lava tiles — where the lava starts out (see buildLavaTiles above,
+  -- and WaterSystem.init).
+  local lavaTiles = buildLavaTiles(layer, tileProps, width, height, anchorX, anchorY)
+
+  -- Entity spawn points authored via Tiled's own Object Layer (see
+  -- tiled/Level1.lua's "objectgroup" layer) — each object's Class field
+  -- says what kind of entity it is, matched against main.lua's own spawn
+  -- loops. Object x/y come out of Tiled in the tileset's own unscaled
+  -- pixel space (tilewidth=32, same raw units as every gid/row/col
+  -- computation above), so they need the same TILE_SCALE applied as the
+  -- tile grid to land in world space alongside anchorX/anchorY.
+  local ooombaSpawns = {}
+  -- "Sphere" objects (see lua/world/Sphere.lua): unlike ooombaSpawns,
+  -- these are never raycast onto terrain below them — the object's own
+  -- x/y IS the sphere's center, since it's a freestanding gravity/landing
+  -- body in open space, not something that needs to rest on a surface.
+  local sphereSpawns = {}
+  -- "Spikey" objects (see lua/world/Spikey.lua): same
+  -- point-placement convention as sphereSpawns above — the object's own
+  -- x/y IS the planetoid's center, no raycasting onto terrain below it.
+  local spikeySpawns = {}
+  -- "Mirror" objects (see lua/world/Mirror.lua): same point-placement
+  -- convention as sphereSpawns/spikeySpawns above — the object's own
+  -- x/y IS the mirror's own pivot, no raycasting onto terrain below it.
+  -- angle comes from its own "Angle" custom property (a String
+  -- property in Tiled's own export, same as every other custom
+  -- property here — tonumber'd back into a number, degrees, defaulting
+  -- to 0/horizontal if left out).
+  local mirrorSpawns = {}
+  -- "Spikey-Vertical" objects (see lua/world/SpikeyVertical.lua): same
+  -- hazard, but patrols up and down within a shaft instead of sitting
+  -- still. topY/bottomY are the WALL half of its patrol bounds —
+  -- resolved right here via the same tile-grid scan Gate uses just
+  -- below, for the same reason (needs the raw layer.data/tileProps this
+  -- function has in scope). The OTHER half — clamping those bounds
+  -- against any nearby static Spikey sitting in the same shaft — needs
+  -- to happen in main.lua instead, once every Spikey has actually been
+  -- spawned (this function only knows about the tile grid, not other
+  -- entity spawns).
+  local spikeyVerticalSpawns = {}
+  -- "Lever" objects (see lua/world/Lever.lua): placed on the ground,
+  -- same "loosely placed, snapped down onto whatever's actually below
+  -- it" convention as ooombaSpawns — the raycast itself happens in
+  -- main.lua's own spawn loop (it needs `terrainLevel.shapes`, which
+  -- isn't fully assembled yet at this point in this function), so this
+  -- is just the raw spawn point, exactly like ooombaSpawns.
+  local leverSpawns = {}
+  -- "Crank" objects (see lua/world/Crank.lua): same "loosely placed,
+  -- snapped down onto whatever's actually below it" convention as
+  -- leverSpawns above — the raycast happens in main.lua's own spawn
+  -- loop, this is just the raw spawn point plus whichever Tiled object
+  -- id its own "Mirror" custom property names, if any (a String
+  -- property in Tiled's own export — tonumber'd back into a number
+  -- here, same as spikeyOrbitSpawns' own orbitId below). Not resolved
+  -- against anything yet; carried along for a future effect to use.
+  local crankSpawns = {}
+  -- "Sign" objects (see lua/world/Sign.lua): same "loosely placed,
+  -- snapped down onto whatever's actually below it" convention as
+  -- leverSpawns/crankSpawns above — the raycast happens in main.lua's
+  -- own spawn loop, this is just the raw spawn point plus its own
+  -- "message" custom property (a String property in Tiled's own
+  -- export, pipe-delimited for more than one message — see Sign.lua's
+  -- own splitMessages).
+  local signSpawns = {}
+  local plungerSpawns = {} -- (RightPlunger/LeftPlunger — see lua/world/Plunger.lua)
+  -- "Gate" objects (see lua/world/Gate.lua): a vertical barrier that
+  -- spans from the nearest wall/top tile BELOW the object's own point
+  -- up to the nearest wall/top tile ABOVE it — resolved right here via
+  -- a plain tile-grid scan (rather than in main.lua, like Lever above)
+  -- since that scan needs the raw layer.data/tileProps/classifyGid this
+  -- function already has in scope, not anything from the assembled
+  -- shapes/walls lists.
+  local gateSpawns = {}
+  local GATE_HALF_WIDTH = 16 -- world units — a thin vertical bar, not a full tile-wide wall
+  -- "Spikey-Orbit" objects (see lua/world/SpikeyOrbit.lua): a Spikey that
+  -- orbits another entity instead of sitting still or patrolling a
+  -- shaft. orbitId is the raw Tiled object id its own "orbit" custom
+  -- property names (a String property in practice, per Tiled's own
+  -- export — tonumber here turns it back into the number main.lua needs
+  -- to look it up against the OTHER spawn lists' own `id` fields, which
+  -- is where the actual resolution happens: this function only knows the
+  -- tile grid and this object layer's own data, not which entities main.lua
+  -- ends up spawning from any of it).
+  local spikeyOrbitSpawns = {}
+  -- "Sphere-Move" objects (see lua/world/SphereMove.lua): a Sphere that
+  -- shuttles back and forth between two points instead of sitting still.
+  -- Its own x/y (like plain Sphere) is just where it starts out; the
+  -- startX/startY/endX/endY/speed custom properties (Strings in Tiled's
+  -- own export, same as every other custom property here — tonumber'd
+  -- below) describe the actual path.
+  local sphereMoveSpawns = {}
+  -- "Zoom-Window" objects: a rectangle (not a point, unlike everything
+  -- else here) that eases the camera to its own "zoom" custom property
+  -- while the player is inside it — see lua/systems/Camera.lua's zoom-window pass
+  -- in love.update. Already converted to world space here.
+  local zoomWindows = {}
+  -- "DeathZone" objects: a rectangle with respawnX/respawnY custom
+  -- properties (raw Tiled pixel space, like Sphere-Move's own path
+  -- points) — dying inside it respawns the player at that point instead
+  -- of the Space Shelter door. See Player:startDeath/respawn.
+  local deathZones = {}
+  -- "Rope" and "Rock" objects (rectangles): a rope hanging from its top,
+  -- holding whatever its "holds" property names — see lua/world/RopeRock.lua
+  -- (main.lua pairs them up). World space; ids kept for the pairing.
+  local ropeSpawns = {}
+  local rockSpawns = {}
+
+  -- Scans column `col` outward from `startRow` in direction `dRow`
+  -- (+1 = downward/floor search, -1 = upward/ceiling search) for the
+  -- nearest tile classified as "wall" or a walkable "top" (isTopRole —
+  -- see that function's own comment: a wall tile's TOP counts as solid
+  -- ground too, exactly the "wall or top tile" the Gate is meant to
+  -- reach). Returns that tile's own row, or nil if the scan runs off
+  -- the map edge without finding one.
+  local function findSolidRow(col, startRow, dRow)
+    local r = startRow
+    while r >= 0 and r < height do
+      local gid = layer.data[r * width + col + 1]
+      if gid ~= 0 and isTopRole(classifyGid(tileProps, gid)) then
+        return r
+      end
+      r = r + dRow
+    end
+    return nil
+  end
+
+  for _, l in ipairs(mapData.layers) do
+    if l.type == "objectgroup" then
+      for _, obj in ipairs(l.objects or {}) do
+        if obj.class == "Ooomba" then
+          table.insert(ooombaSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+          })
+        elseif obj.class == "Sphere" then
+          table.insert(sphereSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            -- Tiled's own object id — exposed so a Spikey-Orbit object
+            -- elsewhere in this same layer can reference this one by it
+            -- (see spikeyOrbitSpawns below and main.lua's own spawn
+            -- wiring, which is where that reference actually gets
+            -- resolved to the real spawned Sphere).
+            id = obj.id,
+            -- Optional "radius" custom property — the Sphere's own
+            -- radius in WORLD units, the same units as its default
+            -- (Sphere.DEFAULT_RADIUS, 30), not Tiled pixels. nil when
+            -- not set (or not a number), which leaves it at that
+            -- default. A String in Tiled's own export, like every other
+            -- custom property here, hence tonumber.
+            radius = tonumber(obj.properties and obj.properties["radius"]),
+            -- Optional "ooomba" custom property — how many Ooombas
+            -- walk laps of this Sphere (see main.lua's own Sphere spawn
+            -- loop and Ooomba.newOnPlanet). 0 when not set.
+            ooombaCount = math.max(0, math.floor(tonumber(obj.properties and obj.properties["ooomba"]) or 0)),
+            -- Optional "gravity" custom property — the radius of this
+            -- Sphere's gravity, measured from its CENTER, in world
+            -- units (the same units as "radius"): anywhere within that
+            -- distance, it's what pulls on the player. nil when not
+            -- set, which leaves the Sphere's own small default (see
+            -- Sphere.new).
+            gravityRadius = tonumber(obj.properties and obj.properties["gravity"]),
+          })
+        elseif obj.class == "Spikey" then
+          table.insert(spikeySpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            id = obj.id,
+          })
+        elseif obj.class == "Mirror" then
+          table.insert(mirrorSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            angle = tonumber(obj.properties and obj.properties["Angle"]) or 0,
+            id = obj.id,
+          })
+        elseif obj.class == "Lever" then
+          table.insert(leverSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            -- The Gate object's own Tiled id this lever opens/closes
+            -- (a String property in Tiled's own export, same as every
+            -- other custom property here — tonumber'd back into a
+            -- number, matched against each gateSpawns entry's own `id`
+            -- below). Resolved to the actual spawned Gate in main.lua,
+            -- once both lists exist.
+            gateId = tonumber(obj.properties and obj.properties["gate"]),
+          })
+        elseif obj.class == "Crank" then
+          table.insert(crankSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            mirrorId = tonumber(obj.properties and obj.properties["Mirror"]),
+          })
+        elseif obj.class == "RightPlunger" or obj.class == "LeftPlunger" then
+          -- (See lua/world/Plunger.lua. Snapped to the tile the object's
+          -- top-left corner is in.)
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE + 0.01)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE + 0.01)
+          table.insert(plungerSpawns, {
+            x = anchorX + col * TILE_WORLD_SIZE,
+            y = anchorY + row * TILE_WORLD_SIZE,
+            dir = obj.class == "RightPlunger" and 1 or -1,
+          })
+        elseif obj.class == "Sign" then
+          table.insert(signSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            message = (obj.properties and obj.properties["message"]) or "",
+          })
+        elseif obj.class == "Gate" then
+          -- obj.x/y are in the RAW, unscaled tile-pixel space (same as
+          -- every gid/row/col computation in this file) — dividing by
+          -- TILE_SOURCE_SIZE (not TILE_WORLD_SIZE) is what actually
+          -- lands on the right row/col here, matching how classifyGid's
+          -- own callers index layer.data elsewhere in this file.
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE)
+          local topRow = findSolidRow(col, row, -1)
+          local bottomRow = findSolidRow(col, row, 1)
+          if topRow and bottomRow and bottomRow > topRow then
+            table.insert(gateSpawns, {
+              x = anchorX + (col + 0.5) * TILE_WORLD_SIZE,
+              topY = anchorY + (topRow + 1) * TILE_WORLD_SIZE,
+              bottomY = anchorY + bottomRow * TILE_WORLD_SIZE,
+              halfWidth = GATE_HALF_WIDTH,
+              -- Tiled's own object id — exposed so a Lever elsewhere in
+              -- this same layer can reference this one by it (see
+              -- leverSpawns' own gateId above and main.lua's own spawn
+              -- wiring, which is where that reference actually gets
+              -- resolved to the real spawned Gate).
+              id = obj.id,
+            })
+          else
+            -- Silent failure otherwise (no gate spawned at all) is
+            -- exactly the kind of thing a level designer could spend a
+            -- long time confused about — e.g. nudging the object's
+            -- point a bit and having it land ON a wall/top tile instead
+            -- of the open space between two of them collapses topRow
+            -- and bottomRow onto the same tile (or leaves one/both nil
+            -- if the scan runs off the map edge without finding solid
+            -- ground at all), and this print is the only signal that
+            -- happened.
+            print(string.format(
+              "TiledTerrain: Gate object at tile (col=%d, row=%d) failed to resolve a gate (topRow=%s, bottomRow=%s) — no gate spawned here.",
+              col, row, tostring(topRow), tostring(bottomRow)))
+          end
+        elseif obj.class == "Spikey-Vertical" then
+          -- col/row (for the wall scan below) DO need the tile-grid
+          -- conversion Gate uses (obj.x/y are in the RAW, unscaled
+          -- tile-pixel space) — but the entity's own world x is kept at
+          -- its EXACT raw position, same convention ordinary Spikey
+          -- uses just above, NOT snapped to the tile column's own
+          -- center the way Gate's x is. Gate genuinely needs that snap
+          -- (a wall should sit centered in its corridor tile) — a
+          -- Spikey-Vertical is just a circular hazard like any other
+          -- Spikey, and snapping it introduced a visible horizontal
+          -- offset from a stationary Spikey placed at the exact same x
+          -- in Tiled, since the two would then use different position
+          -- math for what was supposed to be an identical value.
+          --
+          -- Only the WALL half of the patrol bounds is resolved here —
+          -- topY/bottomY are left nil whenever findSolidRow doesn't
+          -- find one in that direction, rather than failing the whole
+          -- spawn outright: a shaft can just as validly be bounded by a
+          -- nearby static Spikey instead of a wall (see this file's own
+          -- spikeyVerticalSpawns comment), and this function has no way
+          -- to know about other entity spawns — main.lua's own spawn
+          -- wiring is what actually falls back to that, and it's the
+          -- only place that can tell whether BOTH kinds of bound ended
+          -- up missing on a given side.
+          local col = math.floor(obj.x / TILE_SOURCE_SIZE)
+          local row = math.floor(obj.y / TILE_SOURCE_SIZE)
+          local topRow = findSolidRow(col, row, -1)
+          local bottomRow = findSolidRow(col, row, 1)
+          table.insert(spikeyVerticalSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            topY = topRow and (anchorY + (topRow + 1) * TILE_WORLD_SIZE) or nil,
+            bottomY = bottomRow and (anchorY + bottomRow * TILE_WORLD_SIZE) or nil,
+            -- Optional per-object override — set in Tiled via a custom
+            -- Float property named "speed" on this point; nil (falling
+            -- back to SpikeyVertical.DEFAULT_SPEED) when not set.
+            speed = obj.properties and obj.properties.speed,
+          })
+        elseif obj.class == "Spikey-Orbit" then
+          -- Both custom properties come through as Strings in Tiled's own
+          -- lua export (confirmed directly against tiled/Level1.lua's own
+          -- data) — tonumber turns "28"/"3.5" back into real numbers.
+          table.insert(spikeyOrbitSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            orbitId = obj.properties and tonumber(obj.properties.orbit),
+            speed = obj.properties and tonumber(obj.properties.speed),
+          })
+        elseif obj.class == "Sphere-Move" then
+          local props = obj.properties or {}
+          -- startX/startY/endX/endY are authored in the SAME raw,
+          -- unscaled tile-pixel space obj.x/y themselves are (that's the
+          -- only coordinate space a level designer placing points in
+          -- Tiled ever sees), so they need the identical
+          -- anchor+TILE_SCALE conversion applied to obj.x/y just below,
+          -- not a bare pass-through.
+          table.insert(sphereMoveSpawns, {
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            startX = anchorX + (tonumber(props.startX) or obj.x) * TILE_SCALE,
+            startY = anchorY + (tonumber(props.startY) or obj.y) * TILE_SCALE,
+            endX = anchorX + (tonumber(props.endX) or obj.x) * TILE_SCALE,
+            endY = anchorY + (tonumber(props.endY) or obj.y) * TILE_SCALE,
+            speed = tonumber(props.speed),
+          })
+        elseif obj.class == "Zoom-Window" then
+          local zoom = tonumber(obj.properties and obj.properties.zoom)
+          if zoom then
+            table.insert(zoomWindows, {
+              x = anchorX + obj.x * TILE_SCALE,
+              y = anchorY + obj.y * TILE_SCALE,
+              width = obj.width * TILE_SCALE,
+              height = obj.height * TILE_SCALE,
+              zoom = zoom,
+            })
+          else
+            print(string.format(
+              "TiledTerrain: Zoom-Window object id %s has no numeric \"zoom\" property — ignored.",
+              tostring(obj.id)))
+          end
+        elseif obj.class == "Rope" or obj.class == "Rock" then
+          local props = obj.properties or {}
+          local spawn = {
+            id = obj.id,
+            x = anchorX + obj.x * TILE_SCALE,
+            y = anchorY + obj.y * TILE_SCALE,
+            width = obj.width * TILE_SCALE,
+            height = obj.height * TILE_SCALE,
+          }
+          if obj.class == "Rope" then
+            -- "holds": an object property (exported as { id = n }), or
+            -- the id typed in as a number/string, like Spikey-Orbit's "orbit".
+            local holds = props.holds
+            spawn.holdsId = tonumber(type(holds) == "table" and holds.id or holds)
+            table.insert(ropeSpawns, spawn)
+          else
+            spawn.solid = props.solid ~= false
+            table.insert(rockSpawns, spawn)
+          end
+        elseif obj.class == "DeathZone" then
+          local props = obj.properties or {}
+          local respawnX, respawnY = tonumber(props.respawnX), tonumber(props.respawnY)
+          if respawnX and respawnY then
+            table.insert(deathZones, {
+              x = anchorX + obj.x * TILE_SCALE,
+              y = anchorY + obj.y * TILE_SCALE,
+              width = obj.width * TILE_SCALE,
+              height = obj.height * TILE_SCALE,
+              respawnX = anchorX + respawnX * TILE_SCALE,
+              respawnY = anchorY + respawnY * TILE_SCALE,
+            })
+          else
+            print(string.format(
+              "TiledTerrain: DeathZone object id %s needs numeric \"respawnX\" and \"respawnY\" properties — ignored.",
+              tostring(obj.id)))
           end
         end
       end
     end
-    love.graphics.setCanvas()
-    love.graphics.pop()
-    love.graphics.setColor(1, 1, 1, 1)
+  end
+
+  -- Rendering: bake EVERY tile layer (fill tiles included — rendering
+  -- doesn't care about the walkable/fill/wall distinction, only collision
+  -- does) to one canvas, once, with the depth shading (see bakeLayers).
+  local canvas = nil
+  local img = state.platformTexture
+  if img then
+    canvas = bakeLayers(tileLayers, tilesets, tileProps, width, height, img)
   end
 
   local mapWorldWidth = width * TILE_WORLD_SIZE
@@ -1213,7 +2882,33 @@ function TiledTerrain.load(mapData, anchorX, anchorY)
   local level = setmetatable({
     shapes = shapes,
     walls = walls,
-    lavas = lavas,
+    lavaTiles = lavaTiles,
+    ooombaSpawns = ooombaSpawns,
+    sphereSpawns = sphereSpawns,
+    spikeySpawns = spikeySpawns,
+    mirrorSpawns = mirrorSpawns,
+    leverSpawns = leverSpawns,
+    crankSpawns = crankSpawns,
+    signSpawns = signSpawns,
+    plungerSpawns = plungerSpawns,
+    gateSpawns = gateSpawns,
+    spikeyVerticalSpawns = spikeyVerticalSpawns,
+    spikeyOrbitSpawns = spikeyOrbitSpawns,
+    sphereMoveSpawns = sphereMoveSpawns,
+    zoomWindows = zoomWindows,
+    deathZones = deathZones,
+    ropeSpawns = ropeSpawns,
+    rockSpawns = rockSpawns,
+    -- (For Level:solidAt/headroomAt/pushPlayer — ball tunnels.)
+    tunnelByCell = tunnelByCell,
+    waterSolids = waterSolids,
+    collisionData = layer.data,
+    tileProps = tileProps,
+    -- (The visible art, layer by layer — see lua/effects/GrassBlades.lua.)
+    tileLayers = tileLayers,
+    tilesets = tilesets,
+    mapWidth = width,
+    mapHeight = height,
     canvas = canvas,
     anchorX = anchorX,
     anchorY = anchorY,

@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="60" height="30" tilewidth="32" tileheight="32" infinite="0" nextlayerid="2" nextobjectid="1">
+<map version="1.9" tiledversion="1.9.2" orientation="orthogonal" renderorder="right-down" width="120" height="60" tilewidth="32" tileheight="32" infinite="0" nextlayerid="5" nextobjectid="114">
  <editorsettings>
   <export target="Level1.lua" format="lua"/>
  </editorsettings>
- <tileset firstgid="1" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="81" columns="9">
+ <tileset firstgid="1" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
   <properties>
    <property name="role" value=""/>
   </properties>
-  <image source="../img/platform.png" width="288" height="288"/>
+  <image source="../img/platform.png" width="288" height="576"/>
   <tile id="0">
    <properties>
     <property name="role" value="top"/>
@@ -250,25 +250,25 @@
   </tile>
   <tile id="40">
    <properties>
-    <property name="role" value="fill"/>
+    <property name="role" value="wall"/>
     <property name="slope" value="flat"/>
    </properties>
   </tile>
   <tile id="41">
    <properties>
-    <property name="role" value="fill"/>
+    <property name="role" value="wall"/>
     <property name="slope" value="flat"/>
    </properties>
   </tile>
   <tile id="42">
    <properties>
-    <property name="role" value="fill"/>
+    <property name="role" value="wall"/>
     <property name="slope" value="flat"/>
    </properties>
   </tile>
   <tile id="43">
    <properties>
-    <property name="role" value="fill"/>
+    <property name="role" value="wall"/>
     <property name="slope" value="flat"/>
    </properties>
   </tile>
@@ -276,6 +276,30 @@
    <properties>
     <property name="role" value="fill"/>
     <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="48">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="49">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="50">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="51">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
    </properties>
   </tile>
   <tile id="55">
@@ -290,6 +314,18 @@
     <property name="slope" value="ceilingLeft"/>
    </properties>
   </tile>
+  <tile id="59">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="60">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
   <tile id="64">
    <properties>
     <property name="role" value="top"/>
@@ -302,39 +338,1695 @@
     <property name="slope" value="rampRight"/>
    </properties>
   </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
  </tileset>
- <layer id="1" name="Tile Layer 1" width="60" height="30">
+ <tileset firstgid="163" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
+  <properties>
+   <property name="role" value=""/>
+  </properties>
+  <image source="../img/platform.png" width="288" height="576"/>
+  <tile id="0">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="1">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="2">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="3">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="5">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="6">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="7">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="8">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="9">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="10">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="11">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="12">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="13">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="14">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="15">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="16">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="17">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="18">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="19">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="20">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="21">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="22">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="23">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="24">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="25">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="26">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="27">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="28">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="29">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="30">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="31">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="32">
+   <properties>
+    <property name="role" value="lava"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="33">
+   <properties>
+    <property name="role" value="water"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="34">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="35">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="36">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="37">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="38">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="39">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="40">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="41">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="42">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="43">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="44">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="48">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="49">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="50">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="51">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="55">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="56">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="59">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="60">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="64">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="65">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
+ </tileset>
+ <tileset firstgid="325" name="Grass Tiles" tilewidth="32" tileheight="32" tilecount="162" columns="9">
+  <properties>
+   <property name="role" value=""/>
+  </properties>
+  <image source="../img/platform.png" width="288" height="576"/>
+  <tile id="0">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="1">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="2">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="3">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="5">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="6">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="7">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseRight"/>
+   </properties>
+  </tile>
+  <tile id="8">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="riseLeft"/>
+   </properties>
+  </tile>
+  <tile id="9">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="10">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="11">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="12">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="13">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="14">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="15">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="16">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="17">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="18">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="19">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="20">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="21">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="22">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="23">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="24">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="25">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="26">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="27">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="28">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="29">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="30">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="31">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="32">
+   <properties>
+    <property name="role" value="lava"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="33">
+   <properties>
+    <property name="role" value="water"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="34">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="35">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="36">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="37">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="38">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="39">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="40">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="41">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="42">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="43">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="44">
+   <properties>
+    <property name="role" value="fill"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="48">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="49">
+   <properties>
+    <property name="role" value="wall"/>
+    <property name="slope" value="flat"/>
+   </properties>
+  </tile>
+  <tile id="50">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="51">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="55">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="56">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="59">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="60">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="64">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="65">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="90">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRightInner"/>
+   </properties>
+  </tile>
+  <tile id="94">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="97">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeft"/>
+   </properties>
+  </tile>
+  <tile id="100">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampRight"/>
+   </properties>
+  </tile>
+  <tile id="102">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="rampLeft"/>
+   </properties>
+  </tile>
+  <tile id="105">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingLeftInner"/>
+   </properties>
+  </tile>
+  <tile id="117">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRight"/>
+   </properties>
+  </tile>
+  <tile id="120">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="121">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="123">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter2"/>
+   </properties>
+  </tile>
+  <tile id="124">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="127">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="ceilingRightInner"/>
+   </properties>
+  </tile>
+  <tile id="129">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRight"/>
+   </properties>
+  </tile>
+  <tile id="130">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="132">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="133">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="crestLeft"/>
+   </properties>
+  </tile>
+  <tile id="144">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter3"/>
+   </properties>
+  </tile>
+  <tile id="145">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRight"/>
+   </properties>
+  </tile>
+  <tile id="147">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeft"/>
+   </properties>
+  </tile>
+  <tile id="148">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter3"/>
+   </properties>
+  </tile>
+  <tile id="153">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter2"/>
+   </properties>
+  </tile>
+  <tile id="154">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archRightOuter1"/>
+   </properties>
+  </tile>
+  <tile id="156">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter1"/>
+   </properties>
+  </tile>
+  <tile id="157">
+   <properties>
+    <property name="role" value="top"/>
+    <property name="slope" value="archLeftOuter2"/>
+   </properties>
+  </tile>
+ </tileset>
+ <layer id="1" name="Back" width="120" height="60">
   <data encoding="csv">
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,47,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,48,11,12,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,55,56,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,57,58,12,0,0,0,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,2,2,3,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,19,24,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,27,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,66,67,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,37,38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,2,2,2,2,75,11,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,15,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,64,65,0,0,0,0,0,0,1,3,33,33,33,33,33,33,1,3,0,0,0,0,0,0,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,74,2,2,2,2,2,2,11,11,2,2,2,2,2,2,11,11,2,2,2,2,2,3,0,1,2,9,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,10,11,16,2,2,5,11,4,2,9,11,11,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,10,11,11,11,11,14,11,13,11,16,2,5,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,10,11,11,11,11,14,11,13,11,11,11,14,11,12,0,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,10,11,11,11,11,14,11,13,11,8,2,2,2,2,3,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,10,11,11,11,11,4,2,2,2,15,11,11,11,11,12,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,4,2,2,2,2,2,5,11,13,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,
-0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,2,2,5,11,13,11,11,11,11,11,14,11,13,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,19,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,47,41,41,38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,124,125,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,55,133,51,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,47,41,41,48,11,11,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,124,125,0,0,121,122,11,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,55,133,51,2,2,52,131,58,11,29,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,37,41,41,41,41,41,41,91,0,28,11,11,29,0,95,41,91,0,28,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,19,20,0,0,19,20,0,0,0,0,0,0,0,0,0,0,0,0,0,66,67,11,11,64,65,0,0,0,66,67,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,31,2,2,2,2,2,2,2,2,2,2,2,2,2,75,11,11,11,11,74,2,2,2,75,11,11,11,31,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,22,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,23,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,31,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,22,41,41,41,41,41,41,41,41,41,41,41,41,41,23,11,11,11,11,11,11,11,47,41,41,41,41,41,41,41,41,48,11,11,47,41,41,41,41,41,48,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,55,56,0,0,0,0,0,0,0,0,57,58,55,56,0,0,0,0,0,57,58,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,28,29,0,0,0,0,0,0,0,28,11,2,2,3,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,64,65,0,0,0,0,0,0,0,0,0,60,61,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,31,2,2,2,2,2,2,2,2,2,20,0,0,0,28,11,11,11,11,11,11,11,74,2,2,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,22,41,41,41,41,41,41,41,41,41,38,0,0,0,28,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,28,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,11,11,11,11,11,11,11,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,37,41,41,41,41,38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,37,41,41,41,41,41,38,0,0,0,0,0,0,0,0,0,0,0,0,0,37,41,41,41,41,41,41,41,41,41,41,38,0,0,0,0,0,0,0,0,0,0,0,0,0,0,66,67,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,2,2,2,2,75,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,15,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,28,29,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,37,50,25,25,25,25,25,25,25,25,25,25,25,25,27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,43,2,2,2,2,3,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,21,0,0,0,0,21,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,30,195,195,195,195,30,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,40,2,2,2,2,49,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,12,0,0,10,11,11,11,11,11,11,11,11,11,11,11,12,0,0,28,11,11,11,11,29,0,0,0,0
 </data>
  </layer>
+ <layer id="3" name="Middle" width="120" height="60">
+  <data encoding="csv">
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,16,2,2,3,0,1,2,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,16,2,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10,11,11,11,11,12,0,10,11,11,11,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+</data>
+ </layer>
+ <layer id="4" name="Front" width="120" height="60">
+  <data encoding="csv">
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,2,2,2,2,3,0,21,0,0,0,0,21,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,2,2,15,11,11,11,11,12,0,30,0,0,0,0,30,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,2,2,2,2,3,0,10,11,11,11,11,11,11,11,11,12,0,40,2,2,2,2,49,0,0,0,0,
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,2,2,3,0,10,11,11,11,11,11,12,0,10,11,11,11,11,11,11,11,11,12,0,28,11,11,11,11,29,0,0,0,0
+</data>
+ </layer>
+ <objectgroup id="2" name="Object Layer 1">
+  <object id="113" name="Tunnel plunger" class="RightPlunger" x="800" y="1120" width="32" height="32"/>
+  <object id="2" class="Ooomba" x="3162" y="1565">
+   <point/>
+  </object>
+  <object id="3" class="Ooomba" x="2957" y="1847">
+   <point/>
+  </object>
+  <object id="4" class="Ooomba" x="2930" y="1216">
+   <point/>
+  </object>
+  <object id="6" class="Sphere" x="1679.33" y="1599">
+   <point/>
+  </object>
+  <object id="7" class="Sphere" x="1677.67" y="1334.67">
+   <point/>
+  </object>
+  <object id="8" class="Spikey" x="1575.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="9" class="Spikey" x="1608" y="1693.67">
+   <point/>
+  </object>
+  <object id="10" class="Spikey" x="1574" y="1663.33">
+   <point/>
+  </object>
+  <object id="12" class="Spikey" x="1574.33" y="1631.67">
+   <point/>
+  </object>
+  <object id="13" class="Spikey" x="1573.33" y="1567.33">
+   <point/>
+  </object>
+  <object id="14" class="Spikey" x="1767.33" y="1692.67">
+   <point/>
+  </object>
+  <object id="15" class="Spikey" x="1733.33" y="1692.67">
+   <point/>
+  </object>
+  <object id="16" class="Spikey" x="1702.33" y="1693">
+   <point/>
+  </object>
+  <object id="17" class="Spikey" x="1670" y="1693">
+   <point/>
+  </object>
+  <object id="18" class="Spikey" x="1638.33" y="1693">
+   <point/>
+  </object>
+  <object id="19" class="Spikey" x="1574" y="1599.33">
+   <point/>
+  </object>
+  <object id="20" class="Spikey" x="1573.67" y="1534.66">
+   <point/>
+  </object>
+  <object id="21" class="Spikey" x="1573" y="1503.66">
+   <point/>
+  </object>
+  <object id="22" class="Spikey" x="1574" y="1472.33">
+   <point/>
+  </object>
+  <object id="23" class="Spikey" x="1574" y="1438.67">
+   <point/>
+  </object>
+  <object id="24" class="Lever" x="2743" y="1376">
+   <properties>
+    <property name="gate" value="67"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="25" class="Gate" x="1967" y="1602">
+   <point/>
+  </object>
+  <object id="26" class="Spikey-Vertical" x="1574" y="1407.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="27" class="Sphere" x="1447.67" y="1334.67">
+   <point/>
+  </object>
+  <object id="28" class="Sphere" x="1287.67" y="1535.67">
+   <point/>
+  </object>
+  <object id="29" class="Spikey" x="1289" y="1336.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="31" class="Spikey" x="1289" y="1302.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="32" class="Spikey" x="1289" y="1270.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="33" class="Spikey" x="1289" y="1238.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="34" class="Spikey" x="1543.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="35" class="Spikey" x="1512.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="36" class="Spikey" x="1479.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="37" class="Spikey" x="1448.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="38" class="Spikey" x="1416.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="39" class="Spikey" x="1383.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="40" class="Spikey" x="1351.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="41" class="Spikey" x="1319.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="42" class="Spikey" x="1287.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="43" class="Spikey" x="1255.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="44" class="Spikey-Orbit" x="1287.67" y="1646.34">
+   <properties>
+    <property name="orbit" value="28"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="45" class="Spikey-Orbit" x="1287.67" y="1425">
+   <properties>
+    <property name="orbit" value="28"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="47" class="Spikey" x="1289" y="1367.33">
+   <properties>
+    <property name="speed" value="3.5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="49" class="Spikey" x="1223.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="50" class="Spikey" x="1192.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="51" class="Spikey" x="1159.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="53" class="Spikey" x="1128.33" y="1693.67">
+   <point/>
+  </object>
+  <object id="54" class="Spikey" x="1097.33" y="1694.67">
+   <point/>
+  </object>
+  <object id="55" class="Spikey" x="1096" y="1664.33">
+   <point/>
+  </object>
+  <object id="56" class="Spikey" x="1096.33" y="1632.67">
+   <point/>
+  </object>
+  <object id="57" class="Spikey" x="1095.33" y="1568.33">
+   <point/>
+  </object>
+  <object id="58" class="Spikey" x="1096" y="1600.33">
+   <point/>
+  </object>
+  <object id="59" class="Spikey" x="1095.67" y="1535.66">
+   <point/>
+  </object>
+  <object id="60" class="Spikey" x="1095" y="1504.66">
+   <point/>
+  </object>
+  <object id="61" class="Spikey" x="1096" y="1473.33">
+   <point/>
+  </object>
+  <object id="62" class="Spikey" x="1096" y="1439.67">
+   <point/>
+  </object>
+  <object id="65" class="Sphere-Move" x="1000.67" y="1290">
+   <properties>
+    <property name="endX" value="1000.67"/>
+    <property name="endY" value="1600"/>
+    <property name="startX" value="1000.67"/>
+    <property name="startY" value="1270.00"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="66" class="Lever" x="2048" y="1373">
+   <properties>
+    <property name="gate" value="25"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="67" class="Gate" x="2767" y="1626">
+   <point/>
+  </object>
+  <object id="68" class="Mirror" x="2427" y="1410">
+   <properties>
+    <property name="Angle" value="90"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="69" class="Mirror" x="2335" y="1286">
+   <properties>
+    <property name="Angle" value="0"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="70" class="Mirror" x="2240" y="1372">
+   <properties>
+    <property name="Angle" value="0"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="71" class="Mirror" x="2208" y="1287">
+   <properties>
+    <property name="Angle" value="0"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="72" class="Crank" x="2048" y="1656">
+   <properties>
+    <property name="Mirror" value="71"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="73" class="Crank" x="2176" y="1656">
+   <properties>
+    <property name="Mirror" value="70"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="75" class="Crank" x="2304" y="1656">
+   <properties>
+    <property name="Mirror" value="69"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="76" class="Crank" x="2432" y="1656">
+   <properties>
+    <property name="Mirror" value="68"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="77" class="Sign" x="2592" y="1655">
+   <properties>
+    <property name="message" value="You can adjust the zoom by pressing **up** or **down** on the directional pad of the controller. "/>
+   </properties>
+   <point/>
+  </object>
+  <object id="78" class="Sign" x="1888" y="1657">
+   <properties>
+    <property name="message" value="Did you know you can press **L1** or **R1** to go to target spheres and planetoids around you? If you press **L2** while targeting a sphere or planetoid, you can pull yourself to it. "/>
+   </properties>
+   <point/>
+  </object>
+  <object id="79" class="Sign" x="2926" y="1659">
+   <properties>
+    <property name="message" value="Did you know you can run by holding the **SQUARE** button? It's a great way to get someplace fast! Just don't quickly press **SQUARE** twice, or the player will bunch up into a ball; it's not too big of a deal, since you can press **SQUARE** twice again to morph back.  "/>
+   </properties>
+   <point/>
+  </object>
+  <object id="80" class="Sign" x="832" y="1650">
+   <properties>
+    <property name="message" value="You can jump off walls if you time it right. "/>
+   </properties>
+   <point/>
+  </object>
+  <object id="81" class="Sign" x="2733" y="1882">
+   <properties>
+    <property name="message" value="These monsters ahead are Ooombas. You can jump on their heads, or you can use your arm cannon to shoot them. Simply use the right joystick to aim, and press **R2** button to shoot. Just make sure they don't hit you, or you'll respawn at the start of the level!"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="82" class="Sign" x="848" y="1143">
+   <properties>
+    <property name="message" value="Nothing more to see up here... yet. "/>
+   </properties>
+   <point/>
+  </object>
+  <object id="83" class="Zoom-Window" x="1979" y="1244" width="484" height="439">
+   <properties>
+    <property name="zoom" value="0.6"/>
+   </properties>
+  </object>
+  <object id="85" class="Ooomba" x="3110" y="1843">
+   <point/>
+  </object>
+  <object id="86" class="DeathZone" x="1051" y="1204" width="777" height="475">
+   <properties>
+    <property name="respawnX" value="1844"/>
+    <property name="respawnY" value="1650"/>
+   </properties>
+  </object>
+  <object id="89" class="Sphere" x="417" y="1520">
+   <point/>
+  </object>
+  <object id="90" class="Sphere" x="500" y="1279">
+   <point/>
+  </object>
+  <object id="91" class="Sphere" x="569" y="971">
+   <point/>
+  </object>
+  <object id="93" class="Sphere" x="1378" y="686">
+   <properties>
+    <property name="gravity" value="500"/>
+    <property name="ooomba" value="6"/>
+    <property name="radius" value="200"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="96" class="Sphere" x="1810" y="331">
+   <point/>
+  </object>
+  <object id="97" class="Spikey-Orbit" x="1762" y="414">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="98" class="Spikey-Orbit" x="1856" y="488">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="99" class="Spikey-Orbit" x="1971" y="401">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="100" class="Spikey-Orbit" x="1846" y="202">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="101" class="Spikey-Orbit" x="1715" y="271">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="5"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="102" class="Spikey-Orbit" x="1900" y="300">
+   <properties>
+    <property name="orbit" value="96"/>
+    <property name="speed" value="10"/>
+   </properties>
+   <point/>
+  </object>
+  <object id="103" class="Ooomba" x="2656" y="1214">
+   <point/>
+  </object>
+  <object id="104" class="Ooomba" x="2296" y="1212">
+   <point/>
+  </object>
+  <object id="105" class="Ooomba" x="1926" y="1146">
+   <point/>
+  </object>
+  <object id="110" class="Rock" x="1855" y="1788.25" width="130.5" height="35.5">
+   <properties>
+    <property name="solid" type="bool" value="true"/>
+   </properties>
+  </object>
+  <object id="111" class="Rope" x="1919" y="1694.75" width="2.5" height="98.25">
+   <properties>
+    <property name="holds" type="object" value="110"/>
+   </properties>
+  </object>
+ </objectgroup>
 </map>

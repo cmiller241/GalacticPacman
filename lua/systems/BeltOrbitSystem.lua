@@ -1,7 +1,7 @@
 -- lua/systems/BeltOrbitSystem.lua
 
 local state = require("lua.state")
-local worldGen = require("lua.setup.worldGen")
+local worldGen = require("lua.setup.WorldGen")
 
 local RESTORE = 0.012
 local TANGENT_KEEP = 0.02
@@ -14,7 +14,7 @@ local function apply(planetoids)
   local orbitSpeed = worldGen.BELT_ORBIT_SPEED or 2.7
 
   for _, p in ipairs(planetoids) do
-    if p.isBeltPlanetoid and not p.isImmovable and p.vel and p.pos then
+    if p.isBeltPlanetoid and not p.isImmovable and not p.recalling and p.vel and p.pos then
       local dx = p.pos.x - sunX
       local dy = p.pos.y - sunY
       local dist = math.sqrt(dx * dx + dy * dy)

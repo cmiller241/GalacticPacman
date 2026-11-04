@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Composer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="group">
+      <span class="logo">🎵</span>
+      <input id="songTitle" class="title" spellcheck="false" title="Song title (also used as the file name)">
+    </div>
+    <div class="group transport">
+      <button id="btnHome" title="Back to start (Home)">⏮</button>
+      <button id="btnPlay" class="play" title="Play / stop (Space)">▶</button>
+      <button id="btnLoop" class="toggle" title="Loop on/off (L). Drag along the ruler to set the loop region.">🔁 Loop</button>
+      <span id="clock" class="clock"></span>
+    </div>
+    <div class="group">
+      <label title="Speed in beats per minute">Tempo <input id="bpm" type="number" min="20" max="400" step="1"></label>
+      <label title="Time signature: beats per bar / which note gets the beat">Time <select id="tsNum"></select>/<select id="tsDen"></select></label>
+      <label title="Song length in bars (grows automatically when you add notes past the end)">Bars <input id="bars" type="number" min="1" max="2000"></label>
+      <label title="The song's key. Notes in the key are highlighted.">Key <select id="keyRoot"></select><select id="keyScale"></select></label>
+      <label class="chk" title="Darken rows that are outside the key"><input type="checkbox" id="highlightScale" checked> Highlight key</label>
+    </div>
+    <div class="group tools">
+      <button id="tool-draw" class="toggle" title="Draw notes (D)">✏️ Draw</button>
+      <button id="tool-select" class="toggle" title="Select notes (S)">⬚ Select</button>
+      <button id="tool-erase" class="toggle" title="Erase notes (E)">🧽 Erase</button>
+      <label title="Length of new notes (keys 1-9)">Note <select id="noteLen"></select></label>
+      <label title="Notes snap to this grid">Snap <select id="snap"></select></label>
+      <button id="zoomOut" title="Zoom out (-)">－</button>
+      <button id="zoomIn" title="Zoom in (+)">＋</button>
+    </div>
+    <div class="group file">
+      <button id="btnNew" title="New empty song">New</button>
+      <button id="btnOpen" title="Open a .song.json file (Ctrl+O)">Open</button>
+      <button id="btnSave" title="Save (Ctrl+S)">Save</button>
+      <button id="btnSaveAs" title="Save as a new file (Ctrl+Shift+S)">Save as</button>
+      <button id="btnMidi" title="Import a .mid file (or drag one onto the window)">Import MIDI</button>
+      <button id="btnExport" class="primary" title="Render to a WAV file">Export audio</button>
+      <button id="btnDemo" title="Load the Amazing Grace demo">Demo</button>
+      <button id="btnHelp" title="Keyboard shortcuts and tips">?</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <section>
+        <h3>Tracks</h3>
+        <div id="trackList"></div>
+        <button id="addTrack" class="wide">＋ Add track</button>
+      </section>
+      <section id="inspector"></section>
+      <section id="transform"></section>
+      <section id="songPanel"></section>
+    </aside>
+    <div id="rollWrap"><canvas id="roll" tabindex="0"></canvas></div>
+  </main>
+
+  <footer id="status"></footer>
+  <div id="toast"></div>
+  <div id="modal" hidden><div class="box"></div></div>
+  <input type="file" id="fileOpen" accept=".json" hidden>
+  <input type="file" id="fileMidi" accept=".mid,.midi" hidden>
+
+  <script src="js/music.js"></script>
+  <script src="js/song.js"></script>
+  <script src="js/instruments.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/midi.js"></script>
+  <script src="js/wav.js"></script>
+  <script src="js/demo.js"></script>
+  <script src="js/pianoroll.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

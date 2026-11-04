@@ -14,9 +14,16 @@ local utils = require("lua.utils")
 local worldGen = {}
 
 worldGen.CELL_SIZE = 3000
-worldGen.GRID_SIZE = 20
-worldGen.CENTER_CELL = { col = 10, row = 10 }
-worldGen.CELL_CHECK_INTERVAL = 30
+-- 40 cells a side (doubled from 20): the sun's always the world's middle
+-- (see worldGen.sunPos), and the belt and every landmark are placed
+-- relative to it (see main.lua), so growing this only adds open space
+-- all round the outside of what was there.
+worldGen.GRID_SIZE = 40
+worldGen.CENTER_CELL = { col = worldGen.GRID_SIZE / 2, row = worldGen.GRID_SIZE / 2 }
+-- Seconds between checks of which cells are near enough to be streamed
+-- in (see worldGen.updateActiveCells, from main.lua). In seconds, not
+-- frames, so it's the same at any frame rate.
+worldGen.CELL_CHECK_SECONDS = 0.5
 
 worldGen.BELT_INNER_CELLS = 2
 worldGen.BELT_OUTER_CELLS = 3
@@ -33,8 +40,16 @@ worldGen.BELT_ORBIT_SPEED = 1.8 * 1.5   -- 2.7
 -- planetoid upstream (counter-clockwise) of the player, pushed back
 -- along the belt ring until it's confirmed off-screen, so it drifts
 -- into view over the following seconds instead of popping in.
-worldGen.BELT_SPAWN_INTERVAL = 6        -- frames between drip checks (~0.1s @60fps)
+worldGen.BELT_SPAWN_SECONDS = 0.1       -- between drip checks (seconds, not frames: the same at any frame rate)
 worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500
+-- Whether the burst of planetoids a belt cell gets when it's first
+-- generated (generateCell) counts against BELT_MAX_TOTAL_PLANETOIDS
+-- too, not just the drip. true: a new region only adds as many as the
+-- cap still has room for, so the belt genuinely tops out at the cap.
+-- false: the old behavior — every new belt cell adds its full
+-- BELT_PLANETOIDS_PER_CELL regardless, which let the belt climb to
+-- 700-900 planetoids after a minute or so of moving around it.
+worldGen.BELT_CELL_BURST_RESPECTS_CAP = true
 local BELT_SPAWN_ARC_SPACING = 300      -- target arc-length (world units) between consecutive drip spawns
 local BELT_DRIFT_RADIUS_MIN = 28
 local BELT_DRIFT_RADIUS_MAX = 64
@@ -54,7 +69,7 @@ local BELT_EXTRA_STAGGER_FRAC = 0.4     -- extra randomized push (fraction of CE
 -- ~2.12 cells away (3x3 half-diagonal), and a drip spawn's hide
 -- push-back adds up to ~2.15 more cells on top of that -- 4 cells
 -- leaves ample margin on both.
-worldGen.BELT_CULL_RADIUS_CELLS = 4
+worldGen.BELT_CULL_RADIUS_CELLS = 3
 
 worldGen.FIREBAR_COUNT = 36      -- spread across the belt's radial width
 worldGen.FIREBAR_EDGE_COUNT = 10 -- extra, hugging the inner/outer edges specifically
@@ -64,6 +79,20 @@ local BELT_PLANETOIDS_PER_CELL = 36
 local ASTEROIDS_PER_CELL  = 2
 local COINS_PER_PLANET_BASE = 4
 
+-- Belt planetoids are dense (up to BELT_MAX_TOTAL_PLANETOIDS=500 of them
+-- alive at once) and every coin is its own per-frame Coin:update() call
+-- -- the old radius-scaled density formula (same as regular planets,
+-- just halved) meant a large, steady coin population out there for no
+-- real gameplay reason. A small random count instead -- some belt
+-- planetoids bare, none with more than BELT_COIN_MAX -- cuts that
+-- per-frame population substantially. Shared by both belt coin spawn
+-- sites below (the cell-generation burst and the ongoing drip spawn)
+-- so the range only needs tuning in one place.
+local BELT_COIN_MAX = 2
+local function randomBeltCoinCount()
+  return math.random(0, BELT_COIN_MAX)
+end
+
 local PLANET_COLORS = {
   { 0.75, 0.78, 0.85, 1 },
   { 0.95, 0.45, 0.40, 1 },
@@ -72,6 +101,29 @@ local PLANET_COLORS = {
   { 0.55, 0.55, 0.70, 1 },
   { 0.80, 0.55, 0.35, 1 },
 }
+
+-- The reference point cell streaming (generation, culling, and the
+-- belt drip spawn) centers on. Ordinarily this IS wherever the player
+-- is — state.camera is always player-centered during normal play (see
+-- main.lua's own per-frame camera computation) — but while
+-- RobotButler.lua's intro script is panning the camera off on a tour
+-- (CameraDirector.lua) with the player himself standing still back in
+-- the dome, state.camera follows the TOUR instead. Reading the current
+-- camera center here rather than state.player.pos directly means the
+-- world actually finishes generating/culling around wherever the
+-- player is currently being SHOWN, not just wherever they physically
+-- are — so a scripted pan over the belt or any other streamed area
+-- doesn't reveal empty space that nothing has spawned into yet.
+function worldGen.streamFocus()
+  local cam = state.camera
+  if not cam then
+    if not state.player then return nil, nil end
+    return state.player.pos.x, state.player.pos.y
+  end
+  local cx = cam.x + (state.visibleWidth or 0) / 2
+  local cy = cam.y + (state.visibleHeight or 0) / 2
+  return cx, cy
+end
 
 function worldGen.cellCoordFor(worldX, worldY)
   return {
@@ -231,6 +283,33 @@ local function randomColor()
   return PLANET_COLORS[math.random(1, #PLANET_COLORS)]
 end
 
+-- Snaps a randomly generated planetoid radius to a multiple of
+-- RADIUS_STEP within [min, max] — there's no gameplay reason for two
+-- planetoids to differ by a single pixel, and continuous radii meant
+-- almost every planetoid needed its own unique baked body texture (see
+-- Planetoid.lua's ensureBodyCanvas). Since color already only ever comes
+-- from the fixed PLANET_COLORS swatch list, quantizing radius too means
+-- the (color, radius) pairs actually seen across the whole field/belt
+-- collapse to a small, fixed set — that shared body-canvas cache can
+-- then reuse one bake across every planetoid with a matching pair
+-- instead of baking one per instance.
+local RADIUS_STEP = 5
+local function randomQuantizedRadius(min, max, step)
+  step = step or RADIUS_STEP
+  local steps = math.floor((max - min) / step)
+  return min + math.random(0, steps) * step
+end
+
+-- A belt planetoid is never GENERATED with less than this much clear
+-- space (surface to surface) between it and any other planetoid — both
+-- generation paths enforce it: the burst when a cell is first generated
+-- (createPlanetoidsInCell) and the ongoing drip (spawnDriftingBeltPlanetoid).
+-- A spot that can't satisfy it after BELT_PLACEMENT_ATTEMPTS tries is
+-- simply skipped, rather than placed too close anyway.
+local BELT_PLANETOID_MIN_GAP = 20
+local BELT_PLACEMENT_ATTEMPTS = 30
+local beltPlanetoidTooClose -- defined further down, next to the cell-generation code that first needed it
+
 local function applyBeltOrbit(planet)
   planet.isBeltPlanetoid = true
   local sunX, sunY = worldGen.sunPos()
@@ -244,7 +323,7 @@ local function applyBeltOrbit(planet)
 end
 
 ----------------------------------------------------------------------
--- Ongoing belt drip -- see worldGen.BELT_SPAWN_INTERVAL comment above
+-- Ongoing belt drip -- see worldGen.BELT_SPAWN_SECONDS comment above
 ----------------------------------------------------------------------
 
 -- Starting at angle `theta` (radians, standard atan2 convention) and
@@ -289,22 +368,43 @@ end
 -- tracking the player's angular position, with the belt's middle left
 -- empty until the player was fully inside it. Sampling the full width
 -- has no boundary to pile up against.
+--
+-- "Uniform across the full width" means uniform in r itself here, which
+-- is subtly wrong for uniform-DENSITY coverage of an annulus: a thin
+-- ring near the outer edge covers far more actual area (circumference
+-- scales with r) than an equally-thin ring near the inner edge, so
+-- sampling r with equal probability per unit radius packs more
+-- planetoids per unit AREA near the inner edge than the outer one --
+-- exactly the "everything congregates near the min radius" pileup.
+-- Sampling r^2 uniformly instead (then sqrt) weights larger radii
+-- proportionally to how much more area they actually cover, giving a
+-- spatially even scatter across the whole belt's width.
 local function spawnDriftingBeltPlanetoid(refTheta)
   local inner, outer = worldGen.beltRadii()
-  local r = inner + 10 + math.random() * (outer - inner - 20)
-  local radius = BELT_DRIFT_RADIUS_MIN + math.random() * (BELT_DRIFT_RADIUS_MAX - BELT_DRIFT_RADIUS_MIN)
+  local rInner, rOuter = inner + 10, outer - 10
+  local radius = randomQuantizedRadius(BELT_DRIFT_RADIUS_MIN, BELT_DRIFT_RADIUS_MAX)
 
-  local x, y = pushUpstreamUntilHidden(refTheta, r, radius)
+  -- Each try re-rolls both the ring radius and (inside
+  -- pushUpstreamUntilHidden) how far upstream it lands, until one comes
+  -- up with BELT_PLANETOID_MIN_GAP clear of every other planetoid. If
+  -- none does, this spawn is skipped — the drip runs again in a moment.
+  local x, y
+  local placed = false
+  for _ = 1, BELT_PLACEMENT_ATTEMPTS do
+    local r = math.sqrt(rInner * rInner + math.random() * (rOuter * rOuter - rInner * rInner))
+    x, y = pushUpstreamUntilHidden(refTheta, r, radius)
+    if not beltPlanetoidTooClose(x, y, radius) then
+      placed = true
+      break
+    end
+  end
+  if not placed then return nil end
 
   local p = Planetoid.new(x, y, radius, randomColor())
-  p:createRingCanvas()
   applyBeltOrbit(p)
   table.insert(state.planetoids, p)
 
-  -- Same coin density formula as createCoinsForPlanetoids (halved for
-  -- belt planetoids) -- duplicated rather than shared since that
-  -- helper is defined later in this file, after createPlanetoidsInCell.
-  local numCoins = math.max(1, math.floor((COINS_PER_PLANET_BASE + math.floor(radius / 10)) / 2))
+  local numCoins = randomBeltCoinCount()
   for i = 1, numCoins do
     local coin = Coin.new(p)
     coin.angle = (i / numCoins) * math.pi * 2 + math.random() * 0.2
@@ -324,14 +424,14 @@ local function countBeltPlanetoids()
 end
 
 -- Same 3x3 neighborhood updateActiveCells() streams, checked directly
--- from the player's live position so the drip can start the instant
--- they're near belt territory rather than waiting on activeCells.
-local function playerNearBelt()
-  if not state.player then return false end
-  local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+-- from the live streaming focus (see worldGen.streamFocus) so the drip
+-- can start the instant it's near belt territory rather than waiting
+-- on activeCells.
+local function focusNearBelt(fx, fy)
+  local focusCell = worldGen.cellCoordFor(fx, fy)
   for dRow = -1, 1 do
     for dCol = -1, 1 do
-      if worldGen.cellIntersectsBelt(playerCell.col + dCol, playerCell.row + dRow) then
+      if worldGen.cellIntersectsBelt(focusCell.col + dCol, focusCell.row + dRow) then
         return true
       end
     end
@@ -339,21 +439,22 @@ local function playerNearBelt()
   return false
 end
 
-local lastPlayerBeltTheta = nil
+local lastFocusBeltTheta = nil
 
--- Called on its own cadence (worldGen.BELT_SPAWN_INTERVAL, from
+-- Called on its own cadence (worldGen.BELT_SPAWN_SECONDS, from
 -- main.lua) rather than piggybacking on updateActiveCells -- the drip
 -- needs to run much more often than the cell-generation pass to read
 -- as a steady trickle instead of periodic bursts.
 function worldGen.updateBeltSpawning()
-  if not playerNearBelt() then
-    lastPlayerBeltTheta = nil
+  local fx, fy = worldGen.streamFocus()
+  if not fx or not focusNearBelt(fx, fy) then
+    lastFocusBeltTheta = nil
     return
   end
 
   local sunX, sunY = worldGen.sunPos()
-  local dx = state.player.pos.x - sunX
-  local dy = state.player.pos.y - sunY
+  local dx = fx - sunX
+  local dy = fy - sunY
   local dist = math.sqrt(dx * dx + dy * dy)
   if dist < 1 then dist = 1 end
   local theta = math.atan2(dy, dx)
@@ -366,26 +467,27 @@ function worldGen.updateBeltSpawning()
   -- comment for why.
   local pacingR = math.max(inner + 10, math.min(outer - 10, dist))
 
-  -- Pace the spawn count by how far the player has actually traveled
-  -- around the ring since the last check (arc length = angle * radius)
-  -- rather than by elapsed time alone -- a player sweeping through the
-  -- belt fast would otherwise outrun a purely time-based trickle and
-  -- see it thin out, same reasoning as the distance-paced drip in the
-  -- diagonal-corridor belt (js/world/CellManifest.js).
+  -- Pace the spawn count by how far the streaming focus has actually
+  -- traveled around the ring since the last check (arc length = angle
+  -- * radius) rather than by elapsed time alone -- sweeping through
+  -- the belt fast (on foot, or via a scripted camera pan) would
+  -- otherwise outrun a purely time-based trickle and see it thin out,
+  -- same reasoning as the distance-paced drip in the diagonal-corridor
+  -- belt (js/world/CellManifest.js).
   local spawnsNeeded = 1
-  if lastPlayerBeltTheta ~= nil then
-    local d = theta - lastPlayerBeltTheta
+  if lastFocusBeltTheta ~= nil then
+    local d = theta - lastFocusBeltTheta
     while d > math.pi do d = d - 2 * math.pi end
     while d < -math.pi do d = d + 2 * math.pi end
     local arcMoved = math.abs(d) * pacingR
     spawnsNeeded = math.max(1, math.ceil(arcMoved / BELT_SPAWN_ARC_SPACING))
   end
-  lastPlayerBeltTheta = theta
+  lastFocusBeltTheta = theta
 
   local total = countBeltPlanetoids()
   for _ = 1, spawnsNeeded do
     if total >= worldGen.BELT_MAX_TOTAL_PLANETOIDS then break end
-    spawnDriftingBeltPlanetoid(theta)
+    if not spawnDriftingBeltPlanetoid(theta) then break end -- no clear spot right now; try again next check
     total = total + 1
   end
 end
@@ -444,6 +546,90 @@ function worldGen.cellIntersectsSkyDome(col, row)
   return dx * dx + dy * dy < exclR * exclR
 end
 
+-- Same "skip generateCell entirely for any REGULAR cell this landmark's
+-- own footprint touches" pattern as the sky dome exclusion above
+-- (worldGen.cellIntersectsSkyDome), generalized to however many
+-- WaterPlanets exist rather than a single named landmark. WaterPlanets
+-- are created directly in main.lua as permanent Planetoids OUTSIDE the
+-- normal per-cell spawn system, so WorldGen has no built-in knowledge
+-- of where they are otherwise — this just scans state.planetoids for
+-- the isWaterPlanet flag every time a cell activates (cheap: only runs
+-- once per cell, on activation, against a short list of permanent
+-- landmarks, not every frame). Unlike the dome exclusion, this isn't
+-- about visual clutter (a regular planetoid spawned under the water
+-- wouldn't even be visible) — it's plain FPS: every extra planetoid is
+-- another gravity source, another per-frame shading/collision check,
+-- and another baked-canvas draw call for something the player could
+-- never actually reach under a water body's own wavy silhouette anyway.
+local WATER_SPAWN_MARGIN = 150 -- extra clearance kept beyond the water body's own true radius
+
+function worldGen.cellIntersectsWaterPlanet(col, row)
+  if not state.planetoids then return false end
+  local x0 = col * worldGen.CELL_SIZE
+  local y0 = row * worldGen.CELL_SIZE
+  local x1 = x0 + worldGen.CELL_SIZE
+  local y1 = y0 + worldGen.CELL_SIZE
+  for _, p in ipairs(state.planetoids) do
+    if p.isWaterPlanet then
+      local exclR = p.radius + WATER_SPAWN_MARGIN
+      local nearestX = math.max(x0, math.min(p.pos.x, x1))
+      local nearestY = math.max(y0, math.min(p.pos.y, y1))
+      local dx, dy = p.pos.x - nearestX, p.pos.y - nearestY
+      if dx * dx + dy * dy < exclR * exclR then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Same idea again for rectangular landmarks placed in main.lua (the
+-- pinball planet so far): any permanent planetoid flagged
+-- isSpawnExclusion keeps every regular cell its rectangle (plus a
+-- margin) touches empty, so nothing spawns on or around it.
+local LANDMARK_SPAWN_MARGIN = 600
+
+function worldGen.cellIntersectsLandmark(col, row)
+  if not state.planetoids then return false end
+  local x0 = col * worldGen.CELL_SIZE
+  local y0 = row * worldGen.CELL_SIZE
+  local x1 = x0 + worldGen.CELL_SIZE
+  local y1 = y0 + worldGen.CELL_SIZE
+  for _, p in ipairs(state.planetoids) do
+    if p.isSpawnExclusion then
+      local hw, hh = p.halfWidth or p.radius, p.halfHeight or p.radius
+      -- A turning landmark sweeps a whole circle, corner to corner.
+      if (p.rotationSpeed or 0) ~= 0 then
+        local reach = math.sqrt(hw * hw + hh * hh)
+        hw, hh = reach, reach
+      end
+      hw, hh = hw + LANDMARK_SPAWN_MARGIN, hh + LANDMARK_SPAWN_MARGIN
+      if x1 > p.pos.x - hw and x0 < p.pos.x + hw and y1 > p.pos.y - hh and y0 < p.pos.y + hh then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Lanes kept clear of random spawns: state.clearLanes, each
+-- { ax, ay, bx, by, halfWidth } — a segment, and how far either side of
+-- it (and round its ends) nothing is placed. The cannon's flight path is
+-- one (see main.lua and lua/world/Cannon.lua): a straight shot across
+-- several cells would otherwise almost always clip a planetoid on the way.
+function worldGen.isInClearLane(x, y, radius)
+  for _, lane in ipairs(state.clearLanes or {}) do
+    local ax, ay, bx, by = lane[1], lane[2], lane[3], lane[4]
+    local dx, dy = bx - ax, by - ay
+    local lenSq = dx * dx + dy * dy
+    local t = lenSq > 0 and math.max(0, math.min(1, ((x - ax) * dx + (y - ay) * dy) / lenSq)) or 0
+    local px, py = ax + dx * t, ay + dy * t
+    local reach = lane[5] + (radius or 0)
+    if (x - px) ^ 2 + (y - py) ^ 2 < reach * reach then return true end
+  end
+  return false
+end
+
 local function randomPointInCell(col, row, radius)
   local originX = col * worldGen.CELL_SIZE
   local originY = row * worldGen.CELL_SIZE
@@ -451,7 +637,7 @@ local function randomPointInCell(col, row, radius)
   for _ = 1, 20 do
     x = originX + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
     y = originY + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
-    if not isNearSkyDome(x, y) then
+    if not isNearSkyDome(x, y) and not worldGen.isInClearLane(x, y, radius) then
       return x, y
     end
   end
@@ -462,36 +648,70 @@ local function randomPointInCell(col, row, radius)
   return x, y
 end
 
+-- Plain rejection sampling: pick (x,y) uniformly in the cell's own
+-- rectangle, keep it only if it's genuinely inside the belt annulus too
+-- -- every accepted point is trivially inside the cell, by construction.
+--
+-- An earlier version of this function tried to be clever when a cell
+-- only clips a thin sliver of the ring (its farthest corner barely past
+-- the inner radius, say): it sampled a valid RADIUS directly from the
+-- band the cell can reach, but kept the ANGLE from an independently
+-- random point in the rectangle. That decoupling was wrong -- measured
+-- with a Monte Carlo check against the actual thin-sliver cell next to
+-- the dome, ~70% of the resulting points landed OUTSIDE that cell's own
+-- rectangle entirely (a point sampled near the cell's NEAR corner, then
+-- pushed out to a radius only valid near the FAR corner, walks into
+-- neighboring territory). That's a worse bug than the one it replaced:
+-- planetoids weren't stacking anymore, but most of them weren't
+-- landing anywhere near where they were supposed to either.
+--
+-- The actual fix for the original stacking bug is just a much higher
+-- retry budget: measured against that same real sliver cell, a random
+-- rectangle point has roughly an 8.7% chance of landing in the belt
+-- annulus, so 40 tries (the old count) had a ~2.7% chance of exhausting
+-- -- rare, but landing on the SAME fixed fallback point every time it
+-- did happen is what let multiple planetoids in one 36-planetoid batch
+-- pile on each other. 200 tries drops that exhaustion chance to roughly
+-- 1 in 10^8, and generation only runs once per cell activation, so the
+-- extra tries cost nothing that matters.
 local function randomPointInCellBelt(col, row, radius)
-  local inner, outer = worldGen.beltRadii()
-  for _ = 1, 40 do
-    local x, y = randomPointInCell(col, row, radius)
-    if worldGen.isInBeltRing(x, y) then
+  local x0, y0 = col * worldGen.CELL_SIZE, row * worldGen.CELL_SIZE
+  for _ = 1, 200 do
+    local x = x0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    local y = y0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+    if worldGen.isInBeltRing(x, y) and not isNearSkyDome(x, y) then
       return x, y
     end
   end
+
+  -- Only reached if 200 tries in a row missed the annulus or landed
+  -- near the sky dome -- shouldn't happen for any cell generateCell has
+  -- already confirmed intersects the belt (see cellIntersectsBelt), but
+  -- re-rolls a fresh point and just clamps ITS radius onto the nearest
+  -- belt boundary rather than using one fixed coordinate every time --
+  -- keeps this from ever becoming a new shared stacking point the way
+  -- the old fallback was.
   local sx, sy = worldGen.sunPos()
-  local cx = (col + 0.5) * worldGen.CELL_SIZE
-  local cy = (row + 0.5) * worldGen.CELL_SIZE
-  local dx, dy = cx - sx, cy - sy
+  local inner, outer = worldGen.beltRadii()
+  local x = x0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+  local y = y0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)
+  local dx, dy = x - sx, y - sy
   local d = math.sqrt(dx * dx + dy * dy)
   if d < 1 then d = 1; dx, dy = 1, 0 end
-  local r = (inner + outer) * 0.5
-  return sx + (dx / d) * r, sy + (dy / d) * r
+  local clampedD = math.max(inner + radius, math.min(outer - radius, d))
+  return sx + (dx / d) * clampedD, sy + (dy / d) * clampedD
 end
 
-local BELT_PLANETOID_MIN_GAP = 5 -- min surface-to-surface distance enforced between belt planetoids
-
--- Checked only against OTHER belt planetoids (not the whole
--- state.planetoids array, which also holds every regular/spikey/maze
--- planet in the game) — non-belt planetoids live in a completely
--- different region of the world and were never the ones observed
--- stacking. Cheap enough to call per placement attempt: this only runs
--- during the occasional cell-generation event, never per-frame, and
--- the active belt planetoid count at any one time is small.
-local function beltPlanetoidTooClose(x, y, radius)
+-- Checked against every ROUND planetoid, not just other belt ones — the
+-- belt-edge landing planet (see main.lua's own beam setup) and any
+-- regular planetoid that happens to sit near the ring count too.
+-- Rounded-rect ones (the sky dome and friends) are left out: their own
+-- `radius` is a loose bounding circle, and randomPointInCellBelt already
+-- steers clear of the dome by its real footprint. Cheap enough to call
+-- per placement attempt: a few hundred distance checks, only on a spawn.
+function beltPlanetoidTooClose(x, y, radius)
   for _, p in ipairs(state.planetoids) do
-    if p.isBeltPlanetoid then
+    if p.radius and not p.isRoundedRect then
       local dx, dy = p.pos.x - x, p.pos.y - y
       local minDist = p.radius + radius + BELT_PLANETOID_MIN_GAP
       if dx * dx + dy * dy < minDist * minDist then
@@ -505,32 +725,38 @@ end
 local function createPlanetoidsInCell(col, row, count, belt)
   local created = {}
   for i = 1, count do
-    local radius = belt and (28 + math.random() * 36) or (30 + math.random() * 40)
+    local radius = belt and randomQuantizedRadius(28, 64) or randomQuantizedRadius(30, 70)
     local x, y
+    local placed = true
     if belt then
-      -- Retries a handful of times to find a spot that isn't
-      -- overlapping an already-placed belt planetoid (including ones
-      -- from earlier in this same batch — they're inserted into
-      -- state.planetoids immediately below, so beltPlanetoidTooClose
-      -- sees them too). Falls back to the last-tried spot if a clean
-      -- one isn't found — a packed cell shouldn't hang cell generation
-      -- or leave a planetoid unplaced, just occasionally still overlap
-      -- in the rare worst case.
-      local attempts = 0
-      repeat
+      -- Retries until it finds a spot BELT_PLANETOID_MIN_GAP clear of
+      -- every other planetoid (including ones from earlier in this same
+      -- batch — they're inserted into state.planetoids immediately
+      -- below, so beltPlanetoidTooClose sees them too). If none turns
+      -- up, this one planetoid is left out — a packed cell ends up a
+      -- planetoid or two short rather than with two crammed together.
+      placed = false
+      for _ = 1, BELT_PLACEMENT_ATTEMPTS do
         x, y = randomPointInCellBelt(col, row, radius)
-        attempts = attempts + 1
-      until not beltPlanetoidTooClose(x, y, radius) or attempts >= 20
+        if not beltPlanetoidTooClose(x, y, radius) then
+          placed = true
+          break
+        end
+      end
     else
       x, y = randomPointInCell(col, row, radius)
+      -- (Its fallback, after every try failed, can still be in a clear
+      -- lane — left out, rather than put in the way.)
+      placed = not worldGen.isInClearLane(x, y, radius)
     end
-    local p = Planetoid.new(x, y, radius, randomColor())
-    p:createRingCanvas()
-    if belt then
-      applyBeltOrbit(p)
+    if placed then
+      local p = Planetoid.new(x, y, radius, randomColor())
+      if belt then
+        applyBeltOrbit(p)
+      end
+      table.insert(state.planetoids, p)
+      table.insert(created, p)
     end
-    table.insert(state.planetoids, p)
-    table.insert(created, p)
   end
   return created
 end
@@ -539,15 +765,19 @@ local function createAsteroidsInCell(col, row, count)
   for i = 1, count do
     local radius = 16 + math.random() * 30
     local x, y = randomPointInCell(col, row, radius) -- also steers clear of the sky dome, see isNearSkyDome
-    table.insert(state.asteroids, Asteroid.new(x, y, radius))
+    if not worldGen.isInClearLane(x, y, radius) then
+      table.insert(state.asteroids, Asteroid.new(x, y, radius))
+    end
   end
 end
 
 local function createCoinsForPlanetoids(planetoids)
   for _, planet in ipairs(planetoids) do
-    local numCoins = COINS_PER_PLANET_BASE + math.floor(planet.radius / 10)
+    local numCoins
     if planet.isBeltPlanetoid then
-      numCoins = math.max(1, math.floor(numCoins / 2))
+      numCoins = randomBeltCoinCount()
+    else
+      numCoins = COINS_PER_PLANET_BASE + math.floor(planet.radius / 10)
     end
     for i = 1, numCoins do
       local coin = Coin.new(planet)
@@ -565,17 +795,36 @@ local function generateCell(col, row)
   if state.activeCells[key] then return end
   state.activeCells[key] = true
 
-  -- The dome's exterior footprint straddles more than one cell (see
-  -- worldGen.cellIntersectsSkyDome) — any cell it touches at all is
-  -- left completely empty rather than generating its usual planetoids/
-  -- asteroids/fire bars, so nothing clutters the area right around
-  -- where the player starts. Deliberately checked BEFORE the belt
-  -- check below: the dome doesn't currently overlap the belt ring, but
-  -- if it ever did, staying dome-free should win.
-  if worldGen.cellIntersectsSkyDome(col, row) then return end
-
   local belt = worldGen.cellIntersectsBelt(col, row)
+
+  -- The dome's exterior footprint straddles more than one cell (see
+  -- worldGen.cellIntersectsSkyDome) — a REGULAR cell touched at all by
+  -- it is left completely empty rather than generating its usual
+  -- planetoids/asteroids/fire bars, so nothing clutters the area right
+  -- around where the player starts. Belt cells are exempt from this:
+  -- belt planetoids orbit out in open space rather than sitting on the
+  -- ground near the dome's own silhouette, so there's no clutter to
+  -- avoid — and skipping them left the belt permanently empty in a
+  -- one-cell-wide band immediately next to the dome, only ever filled
+  -- in by slow drift/drip from neighboring, non-excluded cells instead
+  -- of its own burst. randomPointInCellBelt still steers individual
+  -- points clear of the dome's own footprint (see its isNearSkyDome
+  -- check), so this doesn't risk planetoids landing ON the dome art.
+  --
+  -- Same exemption/reasoning extends to worldGen.cellIntersectsWaterPlanet
+  -- (see its own comment) — any regular cell a WaterPlanet's own
+  -- footprint touches is likewise left empty, purely to keep the extra
+  -- gravity/collision/draw overhead of planetoids the player could
+  -- never actually reach off the frame budget.
+  if not belt and (worldGen.cellIntersectsSkyDome(col, row) or worldGen.cellIntersectsWaterPlanet(col, row)
+      or worldGen.cellIntersectsLandmark(col, row)) then return end
+
   local planetCount = belt and BELT_PLANETOIDS_PER_CELL or PLANETOIDS_PER_CELL
+  if belt and worldGen.BELT_CELL_BURST_RESPECTS_CAP then
+    -- See BELT_CELL_BURST_RESPECTS_CAP's own comment.
+    local room = worldGen.BELT_MAX_TOTAL_PLANETOIDS - countBeltPlanetoids()
+    planetCount = math.max(0, math.min(planetCount, room))
+  end
   local regulars = createPlanetoidsInCell(col, row, planetCount, belt)
 
   if not belt then
@@ -586,32 +835,27 @@ local function generateCell(col, row)
   generateFireBarsForCell(col, row)
 end
 
-local function cullDistantObjects(activeCellKeys)
-  local playerX = state.player and state.player.pos.x
-  local playerY = state.player and state.player.pos.y
+local function cullDistantObjects(activeCellKeys, focusX, focusY)
   local beltCullRadius = worldGen.BELT_CULL_RADIUS_CELLS * worldGen.CELL_SIZE
 
-  for i = #state.planetoids, 1, -1 do
-    local p = state.planetoids[i]
-    if not p.isPermanent then
-      if p.isBeltPlanetoid then
-        -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
-        -- comment above for why cell membership doesn't work here.
-        if playerX then
-          local dx, dy = p.pos.x - playerX, p.pos.y - playerY
-          if dx * dx + dy * dy > beltCullRadius * beltCullRadius then
-            table.remove(state.planetoids, i)
-          end
-        end
-      else
-        local cell = worldGen.cellCoordFor(p.pos.x, p.pos.y)
-        local key = worldGen.cellKey(cell.col, cell.row)
-        if not activeCellKeys[key] then
-          table.remove(state.planetoids, i)
-        end
-      end
-    end
+  -- Is (x, y) in a cell that's no longer active?
+  local function inInactiveCell(x, y)
+    local cell = worldGen.cellCoordFor(x, y)
+    return not activeCellKeys[worldGen.cellKey(cell.col, cell.row)]
   end
+
+  -- (Each list culled in one pass — see utils.removeWhere.)
+  utils.removeWhere(state.planetoids, function(p)
+    if p.isPermanent then return false end
+    if p.isBeltPlanetoid then
+      -- Distance-based, not cell-based -- see BELT_CULL_RADIUS_CELLS
+      -- comment above for why cell membership doesn't work here.
+      if not focusX then return false end
+      local dx, dy = p.pos.x - focusX, p.pos.y - focusY
+      return dx * dx + dy * dy > beltCullRadius * beltCullRadius
+    end
+    return inInactiveCell(p.pos.x, p.pos.y)
+  end)
 
   local survivingPlanetoids = {}
   for _, p in ipairs(state.planetoids) do
@@ -619,60 +863,47 @@ local function cullDistantObjects(activeCellKeys)
   end
 
   if state.asteroids then
-    for i = #state.asteroids, 1, -1 do
-      local a = state.asteroids[i]
-      local cell = worldGen.cellCoordFor(a.pos.x, a.pos.y)
-      local key = worldGen.cellKey(cell.col, cell.row)
-      if not activeCellKeys[key] then
-        table.remove(state.asteroids, i)
-      end
-    end
+    -- (Not a cannon gauntlet's: they're laid well ahead of him, out in
+    -- cells not yet active, and cleared away by the cannon itself once
+    -- the ride's over — see lua/world/Cannon.lua.)
+    utils.removeWhere(state.asteroids, function(a)
+      return not a.isGauntlet and inInactiveCell(a.pos.x, a.pos.y)
+    end)
   end
 
   if state.coins then
-    for i = #state.coins, 1, -1 do
-      local c = state.coins[i]
-      if not c.planet or not survivingPlanetoids[c.planet] then
-        table.remove(state.coins, i)
-      elseif not c.planet.isBeltPlanetoid then
-        -- Belt-planetoid coins are covered by survivingPlanetoids
-        -- above -- their planet already went through the distance
-        -- based cull, not this cell-based one.
-        local cell = worldGen.cellCoordFor(c.planet.pos.x, c.planet.pos.y)
-        local key = worldGen.cellKey(cell.col, cell.row)
-        if not activeCellKeys[key] then
-          table.remove(state.coins, i)
-        end
-      end
-    end
+    utils.removeWhere(state.coins, function(c)
+      if not c.planet or not survivingPlanetoids[c.planet] then return true end
+      -- Belt-planetoid coins are covered by survivingPlanetoids
+      -- above -- their planet already went through the distance
+      -- based cull, not this cell-based one.
+      return not c.planet.isBeltPlanetoid and inInactiveCell(c.planet.pos.x, c.planet.pos.y)
+    end)
   end
 
   if state.fireBars then
     state.activeFireBarIds = state.activeFireBarIds or {}
-    for i = #state.fireBars, 1, -1 do
-      local bar = state.fireBars[i]
-      local cell = worldGen.cellCoordFor(bar.pos.x, bar.pos.y)
-      local key = worldGen.cellKey(cell.col, cell.row)
-      if not activeCellKeys[key] then
-        if bar.fireBarId then
-          state.activeFireBarIds[bar.fireBarId] = nil
-        end
-        table.remove(state.fireBars, i)
+    utils.removeWhere(state.fireBars, function(bar)
+      if not inInactiveCell(bar.pos.x, bar.pos.y) then return false end
+      if bar.fireBarId then
+        state.activeFireBarIds[bar.fireBarId] = nil
       end
-    end
+      return true
+    end)
   end
 end
 
 function worldGen.updateActiveCells()
-  if not state.player then return end
+  local fx, fy = worldGen.streamFocus()
+  if not fx then return end
 
-  local playerCell = worldGen.cellCoordFor(state.player.pos.x, state.player.pos.y)
+  local focusCell = worldGen.cellCoordFor(fx, fy)
   local activeCellKeys = {}
 
   for dRow = -1, 1 do
     for dCol = -1, 1 do
-      local col = playerCell.col + dCol
-      local row = playerCell.row + dRow
+      local col = focusCell.col + dCol
+      local row = focusCell.row + dRow
       if col >= 0 and col < worldGen.GRID_SIZE and row >= 0 and row < worldGen.GRID_SIZE then
         local key = worldGen.cellKey(col, row)
         activeCellKeys[key] = true
@@ -687,7 +918,7 @@ function worldGen.updateActiveCells()
     end
   end
 
-  cullDistantObjects(activeCellKeys)
+  cullDistantObjects(activeCellKeys, fx, fy)
 end
 
 function worldGen.initWorldSize()

@@ -1,0 +1,198 @@
+-- lua/world/Sign.lua
+--
+-- A ground-mounted signpost, drawn from img/sign.png.
+-- Placed on the ground the same way Lever/Crank are (see main.lua's
+-- own spawn loop — the Tiled object's point is raycast straight down
+-- onto whatever TerrainShape surface sits below it, landing self.pos
+-- exactly on that surface rather than needing pixel-perfect placement
+-- in Tiled itself). self.pos.x is the sign's own horizontal center —
+-- the post rises straight up from it, so the plank sits directly
+-- above self.pos.x regardless of post/plank size.
+--
+-- Reading it shows its own "message" Tiled custom property, split on
+-- "|" into however many separate messages the level designer wrote
+-- (one sign can have several unrelated things to say) — each message
+-- is independently word-wrapped/paginated the same way RobotButler/
+-- Fisherman's own single dialogueText already is. Pressing Enter/
+-- Circle pages through the CURRENT message first, then — once that
+-- one's own pages are exhausted — moves on to the next message, then
+-- closes once every message has been shown.
+--
+-- Dialogue box rendering/pagination is shared with every other NPC —
+-- see lua/ui/DialogueBox.lua.
+
+local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
+local Vector2 = require("lua.vector2")
+local DialogueBox = require("lua.ui.DialogueBox")
+local InteractPrompt = require("lua.ui.InteractPrompt")
+
+local Sign = {}
+Sign.__index = Sign
+
+-- img/sign.png (state.signTexture, see assetLoading.lua) is 40x48 pixel
+-- art, drawn at the same 2x the terrain tiles use — 80x96 world units,
+-- bottom-center anchored on self.pos.
+local SPRITE_SCALE = 2
+local SPRITE_WIDTH = 40
+local SPRITE_HEIGHT = 48
+local SIGN_HEIGHT = SPRITE_HEIGHT * SPRITE_SCALE
+
+-- Splits the raw "message" Tiled custom property on "|" into however
+-- many separate messages it names, trimming stray whitespace around
+-- each (easy to pick up typing in Tiled's own property editor) and
+-- always returning at least one (possibly empty) entry so callers
+-- never have to special-case a sign with no messages at all.
+local function splitMessages(raw)
+  local messages = {}
+  if raw and raw ~= "" then
+    for piece in (raw .. "|"):gmatch("(.-)|") do
+      table.insert(messages, piece:match("^%s*(.-)%s*$"))
+    end
+  end
+  if #messages == 0 then messages = { "" } end
+  return messages
+end
+
+-- x, y: world position of the sign's own ground anchor (where the
+-- post meets the ground) — same "sits exactly on the ground"
+-- convention Ooomba/Lever/Crank use for their own center-bottom
+-- anchor. rawMessage: the Tiled object's own "message" custom
+-- property, pipe-delimited (see splitMessages above).
+--
+-- options (all optional):
+--   texture  the image to draw instead of img/sign.png — same 40x48
+--            size and 2x scale (e.g. img/sign-planet.png).
+--   up       unit Vector2 pointing the way the sign stands, away from
+--            the ground it's planted in. Straight up the screen by
+--            default, which is right for terrain; a sign planted
+--            somewhere round a planetoid passes the direction out from
+--            that planetoid's center, and is drawn turned to match.
+function Sign.new(x, y, rawMessage, options)
+  options = options or {}
+  local self = setmetatable({}, Sign)
+
+  self.pos = Vector2.new(x, y)
+  self.texture = options.texture
+  self.up = options.up or Vector2.new(0, -1)
+
+  self.messages = splitMessages(rawMessage)
+  self.messageIndex = 1
+
+  self.interactRadius = 140
+  self.playerNearby = false
+
+  self.dialogueActive = false
+  self.dialoguePages = nil
+  self.dialoguePageIndex = 1
+
+  return self
+end
+
+Sign.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
+
+-- Paginates whichever message self.messageIndex currently points at
+-- and opens the dialogue box on its first page — shared by :tryInteract
+-- (starting fresh) and itself again (moving on to the NEXT message
+-- once the current one's own pages run out).
+function Sign:showCurrentMessage()
+  self.dialogueActive = true
+  self.dialoguePageIndex = 1
+  self.dialoguePages = DialogueBox.paginateForBox(self.messages[self.messageIndex])
+end
+
+-- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
+-- both just call this unconditionally on their own press; it's the one
+-- place that actually decides whether the player's close enough to
+-- reach it.
+function Sign:tryInteract(player)
+  if self.dialogueActive then
+    if self.dialoguePageIndex < #self.dialoguePages then
+      self.dialoguePageIndex = self.dialoguePageIndex + 1
+      return
+    end
+    if self.messageIndex < #self.messages then
+      self.messageIndex = self.messageIndex + 1
+      self:showCurrentMessage()
+    else
+      self.dialogueActive = false
+      self.dialoguePages = nil
+      self.dialoguePageIndex = 1
+      self.messageIndex = 1 -- next read starts over from the first message
+    end
+    return
+  end
+
+  if not self:isPlayerNear(player) then return end
+  self:showCurrentMessage()
+end
+
+function Sign:update()
+  self.playerNearby = self:isPlayerNear(state.player)
+
+  -- Safety net only, not the normal way out: the player's own movement
+  -- is frozen for the whole conversation (see state.dialogueActive in
+  -- main.lua/Player.lua), so this shouldn't normally be reachable —
+  -- but if he somehow ends up out of range anyway, don't leave the
+  -- conversation stuck open forever.
+  if self.dialogueActive and not self.playerNearby then
+    self.dialogueActive = false
+    self.dialoguePages = nil
+    self.dialoguePageIndex = 1
+    self.messageIndex = 1
+  end
+end
+
+function Sign:draw()
+  love.graphics.setColor(1, 1, 1, 1)
+  -- Origin at the sprite's own bottom-center, so it lands exactly on
+  -- self.pos. Floored so the 2x pixels stay on whole world units.
+  -- Turned so its post points along self.up — no rotation at all for
+  -- the ordinary upright case.
+  local rotation = math.atan2(self.up.y, self.up.x) + math.pi / 2
+  love.graphics.draw(self.texture or state.signTexture, math.floor(self.pos.x), math.floor(self.pos.y), rotation,
+    SPRITE_SCALE, SPRITE_SCALE, SPRITE_WIDTH / 2, SPRITE_HEIGHT)
+end
+
+local TOOLTIP_GAP_ABOVE = 26
+local TOOLTIP_PILL_HEIGHT = 30 -- InteractPrompt.lua's own pill is about this tall (text height + its padding)
+
+-- World-space "you can interact with this" hint — same convention
+-- Lever.lua/Crank.lua's own :drawTooltip already use, call from inside
+-- the same camera-transformed push() block everything else in the
+-- scene draws from. Not shown while curled into a ball (Player.lua's
+-- own isBall) — a ball can't read it at all (see the input-handler
+-- guards in InputHandlers.lua/GamePadInput.lua), so advertising the
+-- prompt then would just be misleading.
+function Sign:drawTooltip()
+  if not self.playerNearby or self.dialogueActive then return end
+  if state.player and state.player.isBall then return end
+
+  -- Just beyond the far end of the sign from the ground, whichever way
+  -- that is (self.up). The pill itself always reads upright and hangs
+  -- ABOVE the y it's given, so for a sign pointing down the screen it's
+  -- nudged a pill's height further out to clear the sign instead of
+  -- sitting on top of it — zero extra for an ordinary upright sign.
+  local reach = SIGN_HEIGHT + TOOLTIP_GAP_ABOVE
+  local pillHeightNudge = TOOLTIP_PILL_HEIGHT * (1 + self.up.y) / 2
+  InteractPrompt.draw(self.pos.x + self.up.x * reach, self.pos.y + self.up.y * reach + pillHeightNudge)
+end
+
+-- Screen-space dialogue box — call AFTER the camera transform is
+-- popped (see main.lua's love.draw, alongside the minimap/HUD/VatsCursor
+-- reticle), so it stays fixed relative to the WINDOW rather than the
+-- world underneath it, matching how a dialogue box behaves in basically
+-- every game that has one. Rendering itself (box art, text, the "more"
+-- corner indicator) is shared — see lua/ui/DialogueBox.lua. hasMore is
+-- true whenever pressing on would advance to another page OR another
+-- message — i.e. whenever this ISN'T the very last page of the very
+-- last message.
+function Sign:drawDialogue()
+  if not self.dialogueActive then return end
+  local pageText = (self.dialoguePages and self.dialoguePages[self.dialoguePageIndex]) or ""
+  local hasMorePages = self.dialoguePages and self.dialoguePageIndex < #self.dialoguePages
+  local hasMoreMessages = self.messageIndex < #self.messages
+  DialogueBox.draw(pageText, hasMorePages or hasMoreMessages)
+end
+
+return Sign

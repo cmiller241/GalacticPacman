@@ -103,11 +103,25 @@ function VatsOverlay.draw()
   if progress <= 0 then return end
 
   local cam = state.camera or { x = 0, y = 0 }
-  local vw = state.visibleWidth or 0
-  local vh = state.visibleHeight or 0
-  if vw <= 0 or vh <= 0 then return end
+  local zoom = state.zoom or 1
 
-  local layer = getOverlayLayer(vw, vh)
+  -- Built at real SCREEN pixel dimensions, NOT world units (an earlier
+  -- version sized this canvas as state.visibleWidth/Height, i.e.
+  -- screenWidth/zoom — the visible WORLD span at the current zoom).
+  -- That span grows without bound as the player zooms out (screen
+  -- pixels stay fixed; the world area needed to cover them grows as
+  -- 1/zoom), eventually requesting a texture wider than the GPU's own
+  -- max size — "pixel width of 19200 is too large for this system" was
+  -- exactly that. Screen pixels are bounded by the actual display/
+  -- window resolution regardless of zoom, so this can never overflow
+  -- that way. See the composite draw at the bottom of this function for
+  -- the other half of this fix (an explicit 1/zoom scale, to counteract
+  -- now no longer sharing the outer transform's 1-world-unit-per-texel
+  -- convention).
+  local sw, sh = love.graphics.getWidth(), love.graphics.getHeight()
+  if sw <= 0 or sh <= 0 then return end
+
+  local layer = getOverlayLayer(sw, sh)
   local tile = getScanlineTile()
   local lw, lh = layer:getWidth(), layer:getHeight()
 
@@ -150,9 +164,15 @@ function VatsOverlay.draw()
   -- alpha-blending a 0-alpha color would otherwise no-op).
   local target = state.player and state.player.lockedTarget
   if target then
-    local localX = target.pos.x - cam.x
-    local localY = target.pos.y - cam.y
-    local radius = utils.boundingRadius(target) + CUTOUT_PADDING
+    -- Converted from world units to THIS layer's own screen-pixel space
+    -- via the same (world - cam) * zoom relationship the outer camera
+    -- transform itself uses — this layer no longer shares that
+    -- transform's 1-world-unit-per-texel convention (see this
+    -- function's own top comment), so world-space coordinates need this
+    -- explicit conversion now instead of lining up for free.
+    local localX = (target.pos.x - cam.x) * zoom
+    local localY = (target.pos.y - cam.y) * zoom
+    local radius = (utils.boundingRadius(target) + CUTOUT_PADDING) * zoom
 
     love.graphics.setBlendMode("replace", "premultiplied")
     love.graphics.setColor(0, 0, 0, 0)
@@ -165,14 +185,18 @@ function VatsOverlay.draw()
 
   -- Composite the finished overlay onto the main framebuffer with
   -- normal blending, scaled by the overall V.A.T.S. fade progress.
-  -- Already under the same zoom/translate transform as everything
-  -- else in this draw pass (see love.draw()), so drawing at
-  -- (cam.x, cam.y) — the same world-space point this layer's own
-  -- (0,0) represents — lines up automatically; the layer's pixel
-  -- dimensions were built equal to vw/vh (world units) in the first
-  -- place, so no extra scale is needed either.
+  -- Still under the same outer zoom/translate transform as everything
+  -- else in this draw pass (see love.draw()) — drawing at (cam.x,
+  -- cam.y) lines the layer's own (0,0) pixel up with real screen (0,0)
+  -- (the same world point the outer transform itself maps there), and
+  -- the explicit 1/zoom draw-scale CANCELS that outer transform's own
+  -- scale(zoom, zoom) — needed now that this layer is built at
+  -- screen-pixel size instead of the outer transform's usual
+  -- 1-world-unit-per-texel convention; without it, an already
+  -- screen-accurate layer would get scaled by zoom a second time,
+  -- covering only a fraction of the screen at any zoom other than 1.
   love.graphics.setColor(1, 1, 1, progress)
-  love.graphics.draw(layer, cam.x, cam.y)
+  love.graphics.draw(layer, cam.x, cam.y, 0, 1 / zoom, 1 / zoom)
   love.graphics.setColor(1, 1, 1, 1)
 end
 

@@ -1,0 +1,424 @@
+-- lua/entities/RobotButler.lua
+--
+-- A decorative NPC beside the astronaut's shelter: paces back and forth
+-- along a fixed stretch of the sky dome's own flat deck, walking right
+-- to the far end of its patrol range, then back left to its own home
+-- point, forever. Purely background flavor, same role SpaceShelter.lua
+-- itself plays — no collision, not a lock-on/pull target, doesn't
+-- appear in state.ooombas (that list's own patrol logic walks a
+-- TerrainShape's arc length; this one just walks a fixed X range on
+-- flat ground, which doesn't need any of that machinery).
+--
+-- Sprite sheet (img/Robot2.png, loaded as state.robotTexture): 4000x1200,
+-- four 1000x1200 walking frames in a single row. The art faces LEFT by
+-- default — walking right mirrors it horizontally, same convention
+-- Ooomba.lua's own sprite already uses.
+
+local state = require("lua.state")
+local Interactable = require("lua.world.Interactable")
+local Vector2 = require("lua.vector2")
+local DustPuff = require("lua.effects.DustPuff")
+local Script = require("lua.systems.Script")
+local CameraDirector = require("lua.systems.CameraDirector")
+local worldGen = require("lua.setup.WorldGen")
+local DialogueBox = require("lua.ui.DialogueBox")
+local InteractPrompt = require("lua.ui.InteractPrompt")
+
+local RobotButler = {}
+RobotButler.__index = RobotButler
+
+local FRAME_COUNT = 4
+
+-- 100ms per animation frame, expressed in 60fps-baseline ticks (this
+-- project's own convention — see main.lua's own frameNorm/timeScale
+-- comment) rather than raw milliseconds, so it advances correctly
+-- whether the game (and V.A.T.S.'s own slow-mo) is running at normal
+-- speed or not: 0.1s * 60 ticks/s = 6.
+local FRAME_TICKS = 6
+
+-- Odds of spawning a dust puff on any given 60fps-baseline tick while
+-- moving (see the continuous-trickle comment in :update below) — not a
+-- probability per real second, so it scales correctly with timeScale
+-- the same way every other per-tick rate in this codebase does.
+local DUST_SPAWN_CHANCE = 0.3
+
+-- Baked once, shared by every RobotButler instance (there's only ever
+-- one right now, but no reason to re-slice the sheet if that changes) —
+-- same "bake once, draw many" precedent as Ooomba.lua's own
+-- ensureFrameQuads.
+local frameQuads = nil
+local sheetFrameW, sheetFrameH = nil, nil
+
+local function ensureFrameQuads(img)
+  if frameQuads then return end
+  local fullW, fullH = img:getDimensions()
+  sheetFrameW, sheetFrameH = fullW / FRAME_COUNT, fullH
+  frameQuads = {}
+  for i = 0, FRAME_COUNT - 1 do
+    frameQuads[i + 1] = love.graphics.newQuad(i * sheetFrameW, 0, sheetFrameW, sheetFrameH, fullW, fullH)
+  end
+end
+
+-- Keyed into state.scriptsCompleted (see main.lua's own setup) — true
+-- once the one-time welcome/tour sequence below has played all the way
+-- through, so every interaction after that just gets :startDialogue's
+-- plain "Hello again!" instead.
+local INTRO_SCRIPT_ID = "robotButlerIntro"
+
+-- The one-time welcome/tour sequence (see Script.lua/CameraDirector.lua)
+-- played the FIRST time the player ever talks to him. Built lazily, not
+-- at require-time, since it reads state.skyDomePlanet/state.beams —
+-- neither exists yet when this file is first required, both do by the
+-- time the player can actually walk up and interact.
+local function buildIntroScript()
+  local dome = state.skyDomePlanet
+  local beam = state.beams and state.beams[1] -- homeBeam — sits just left of the shelter, on the dome's own deck
+  local screenW = love.graphics.getWidth()
+
+  local beats = { { text = "Welcome to a demo of Asteroid Bob!" } }
+
+  if dome then
+    -- Zoomed out until the whole dome's width fits on screen, with a
+    -- little breathing room either side, centered on the dome itself
+    -- rather than wherever the player happens to be standing in it.
+    local fitZoom = screenW / (dome.halfWidth * 2 * 1.35)
+    table.insert(beats, {
+      text = "Right now you're standing in a domed playground",
+      camera = { { x = dome.pos.x, y = dome:domeAnchorY(), zoom = fitZoom, duration = 2.5 } },
+    })
+
+    -- A slow pan across the deck — left end, dome center, right end —
+    -- reading as a tour THROUGH the dome rather than just holding on
+    -- one static view of it. cameraLoop = true: this keeps repeating
+    -- for as long as this line is up, instead of playing once and
+    -- holding on the last waypoint — only the player's own next
+    -- Enter/Circle press (advancing to the NEXT beat) stops it.
+    local deckY = dome:trueSurfaceY()
+    local panZoom = 1
+    table.insert(beats, {
+      text = "It's a perfect place for showcasing Bob's abilities!",
+      camera = {
+        { x = dome.pos.x - dome.halfWidth * 0.6, y = deckY,                     zoom = panZoom, duration = 2.0 },
+        { x = dome.pos.x - dome.halfWidth * 0.3, y = deckY - dome.halfWidth * 0.2, zoom = panZoom, duration = 2.5 },
+        { x = dome.pos.x + dome.halfWidth * 0.3, y = deckY - dome.halfWidth * 0.2, zoom = 0.6,     duration = 2.5 },
+      },
+      cameraLoop = true,
+    })
+  else
+    table.insert(beats, { text = "Right now you're standing in a domed playground" })
+    table.insert(beats, { text = "It's a perfect place for showcasing Bob's abilities!" })
+  end
+
+  table.insert(beats, {
+    text = "Or you can teleport out of the dome and explore the galaxy.",
+    camera = beam and { { x = beam.pos.x, y = beam.pos.y, zoom = 1.3, duration = 2.0 } } or nil,
+  })
+
+  -- A short tour — the sun, then a sweep across the asteroid belt
+  -- ring, then the water planets — all under one line of dialogue.
+  -- cameraLoop = true, same as beat 3: it keeps cycling through this
+  -- whole tour for as long as this line is up, only stopping once the
+  -- player actually presses on. worldGen.streamFocus() follows state.camera (see its own
+  -- comment), which is what's actually driving generation/culling of
+  -- the belt's planetoids/fire bars — panning the camera out here is
+  -- what makes that ring stream in ahead of actually arriving there on
+  -- foot, rather than revealing empty space that hasn't spawned yet.
+  local tourWaypoints = {}
+
+  local sun = state.sun
+  if sun then
+    local sunZoom = screenW / (sun.radius * 2 * 1.5)
+    table.insert(tourWaypoints, { x = sun.pos.x, y = sun.pos.y, zoom = sunZoom, duration = 2.0 })
+  end
+
+  do
+    local sunX, sunY = worldGen.sunPos()
+    local inner, outer = worldGen.beltRadii()
+    local midR = (inner + outer) / 2
+    local beltZoom = 0.5
+    table.insert(tourWaypoints, { x = sunX + midR, y = sunY, zoom = beltZoom, duration = 5 })
+    table.insert(tourWaypoints, { x = sunX, y = sunY - midR, zoom = beltZoom, duration = 5 })
+  end
+
+  for _, waterPlanet in ipairs({ state.waterPlanet, state.waterPlanet2 }) do
+    if waterPlanet then
+      local waterZoom = screenW / (waterPlanet.radius * 2 * 1.6)
+      table.insert(tourWaypoints, { x = waterPlanet.pos.x, y = waterPlanet.pos.y, zoom = waterZoom * .5, duration = 5})
+    end
+  end
+
+  table.insert(beats, {
+    text = "There's a fair amount of things you can see, even for this demo.",
+    camera = #tourWaypoints > 0 and tourWaypoints or nil,
+    cameraLoop = true,
+  })
+
+  return beats
+end
+
+-- homeX: the LEFT end of the patrol range (and the robot's starting
+-- position) — "adjacent right of the space shelter" in practice means
+-- passing the shelter's own right edge plus a gap here. groundY: the
+-- deck surface it stands on (SkyDomePlanetoid:trueSurfaceY()).
+function RobotButler.new(homeX, groundY, options)
+  options = options or {}
+  local self = setmetatable({}, RobotButler)
+
+  local img = state.robotTexture
+  local sheetW, sheetH
+  if img then
+    sheetW, sheetH = img:getDimensions()
+  else
+    sheetW, sheetH = 4000, 1200
+  end
+  local frameW, frameH = sheetW / FRAME_COUNT, sheetH
+
+  -- Draw size in world units — same convention as Ooomba.lua's own
+  -- drawHeight/drawWidth: a flat default height, width derived from the
+  -- source frame's own aspect ratio (1000x1200, not square).
+  self.drawHeight = options.drawHeight or 120
+  self.drawWidth = options.drawWidth or (self.drawHeight * frameW / frameH)
+  self.halfWidth = self.drawWidth / 2
+  self.halfHeight = self.drawHeight / 2
+
+  self.homeX = homeX
+  self.groundY = groundY
+  self.patrolWidth = options.patrolWidth or 350 -- how far right of homeX he walks before turning back
+  self.speed = options.speed or 1.5             -- world units per 60fps-baseline tick
+
+  -- Starts walking right (direction = 1) — the art's own default-left
+  -- facing means this is also the frame he first needs flipping for.
+  self.direction = 1
+
+  -- Center-bottom anchor, same convention Ooomba/Player use: self.pos
+  -- sits HALF the draw height above the true ground line, so drawing
+  -- centered on it lands the sprite's feet exactly on groundY.
+  self.pos = Vector2.new(homeX, groundY - self.halfHeight)
+
+  self.frameIndex = 1
+  self.frameTimer = 0
+
+  -- Interaction (Enter / gamepad Circle — see InputHandlers.lua and
+  -- GamePadInput.lua) — see :tryInteract and :drawTooltip/:drawDialogue
+  -- below. World-units radius, not tied to drawWidth/drawHeight, since
+  -- "close enough to talk to him" is a bigger, more forgiving zone than
+  -- his own visual silhouette.
+  self.interactRadius = options.interactRadius or 220
+  -- The ordinary one-line greeting — shown by :startDialogue, which now
+  -- only runs AFTER the one-time intro script (see buildIntroScript/
+  -- :showScriptBeat/INTRO_SCRIPT_ID) has already played out once.
+  self.dialogueText = "Hello again!"
+  self.playerNearby = false
+  self.dialogueActive = false
+  -- The in-progress intro Script instance, while it's playing; nil the
+  -- rest of the time (including after it finishes — see :tryInteract).
+  self.activeScript = nil
+  -- Set by :startDialogue or :showScriptBeat, paginated to fit the
+  -- textbox (see DialogueBox.paginateForBox) — a list of already-wrapped page
+  -- strings, and which one is currently showing. Advancing past the
+  -- last page is what actually closes the dialogue (see
+  -- :advanceDialoguePage) or advances to the next beat (see
+  -- :tryInteract) — there's no time-based auto-dismiss.
+  self.dialoguePages = nil
+  self.dialoguePageIndex = 1
+
+  return self
+end
+
+RobotButler.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua)
+
+function RobotButler:startDialogue()
+  self.dialogueActive = true
+  self.dialoguePageIndex = 1
+  self.dialoguePages = DialogueBox.paginateForBox(self.dialogueText)
+end
+
+-- Advances to the next page, or — once already on the last one — this
+-- is what actually closes the dialogue (see this file's own header
+-- comment on why there's no timer doing that anymore).
+function RobotButler:advanceDialoguePage()
+  if not self.dialoguePages then return end
+  if self.dialoguePageIndex < #self.dialoguePages then
+    self.dialoguePageIndex = self.dialoguePageIndex + 1
+  else
+    self.dialogueActive = false
+    self.dialoguePages = nil
+    self.dialoguePageIndex = 1
+  end
+end
+
+-- Shows one beat of self.activeScript: pages its text through the exact
+-- same box/pagination machinery :startDialogue uses (so it looks and
+-- turns pages identically to an ordinary line of dialogue), then kicks
+-- off that beat's own camera move, if it has one.
+function RobotButler:showScriptBeat(beat)
+  self.dialogueActive = true
+  self.dialoguePageIndex = 1
+  self.dialoguePages = DialogueBox.paginateForBox(beat.text)
+  if beat.camera then
+    CameraDirector.run(beat.camera, { loop = beat.cameraLoop })
+  end
+end
+
+-- Called from InputHandlers.lua (Enter) and GamePadInput.lua (Circle) —
+-- both just call this unconditionally on their own press. While a
+-- conversation is already showing, the SAME button now advances/closes
+-- it instead of re-checking distance (the player can't have walked away
+-- anyway — see :update's own comment on why movement is frozen for the
+-- whole conversation).
+function RobotButler:tryInteract(player)
+  if self.dialogueActive then
+    if self.activeScript then
+      -- Still mid-beat (more wrapped pages left on THIS line) — just
+      -- turn the page, same as an ordinary dialogue. Only once the
+      -- beat's own pages are exhausted does the press advance the
+      -- SCRIPT itself to its next beat (or, past the last one, finish
+      -- it and hand the camera back).
+      if self.dialoguePageIndex < #self.dialoguePages then
+        self.dialoguePageIndex = self.dialoguePageIndex + 1
+        return
+      end
+      local nextBeat = self.activeScript:advance()
+      if nextBeat then
+        self:showScriptBeat(nextBeat)
+      else
+        self.dialogueActive = false
+        self.dialoguePages = nil
+        self.dialoguePageIndex = 1
+        self.activeScript = nil
+        state.scriptsCompleted[INTRO_SCRIPT_ID] = true
+        CameraDirector.release()
+      end
+      return
+    end
+    self:advanceDialoguePage()
+    return
+  end
+
+  if not self:isPlayerNear(player) then return end
+
+  if not state.scriptsCompleted[INTRO_SCRIPT_ID] then
+    self.activeScript = Script.new(buildIntroScript())
+    self:showScriptBeat(self.activeScript:start())
+    return
+  end
+
+  self:startDialogue()
+end
+
+function RobotButler:update()
+  local timeScale = state.timeScale or 1
+  local ds = 0
+
+  -- Patrol/animation/dust are all skipped outright while talking to the
+  -- player — he stands still and stays on whichever walk frame he was
+  -- already on for the whole conversation, matching the player's own
+  -- movement lock (see Player.lua's own state.dialogueActive check) so
+  -- neither one drifts out of sync with the other mid-chat.
+  if not self.dialogueActive then
+    ds = self.direction * self.speed * timeScale
+
+    local minX, maxX = self.homeX, self.homeX + self.patrolWidth
+    local desiredX = self.pos.x + ds
+    if desiredX > maxX then
+      desiredX = maxX
+      self.direction = -1
+    elseif desiredX < minX then
+      desiredX = minX
+      self.direction = 1
+    end
+    self.pos.x = desiredX
+
+    -- Walk-cycle animation frame: fixed 100ms cadence regardless of
+    -- speed (see FRAME_TICKS's own comment) — separate from the dust
+    -- timing below, which is driven by actual distance covered instead.
+    self.frameTimer = self.frameTimer + timeScale
+    if self.frameTimer >= FRAME_TICKS then
+      self.frameTimer = self.frameTimer - FRAME_TICKS
+      self.frameIndex = (self.frameIndex % FRAME_COUNT) + 1
+    end
+
+    -- Dust: a steady per-frame trickle instead of Player.lua/Ooomba.lua's
+    -- own footstep-timed "just planted" pulse — those are built around a
+    -- LEG actually planting on a walk cycle, which this robot doesn't
+    -- have, so there's no discrete footfall to time dust against.
+    -- Rolling the dice every tick he's actually moving (same "chance
+    -- per 60fps-baseline tick" pattern FireBar.lua's own ember spawning
+    -- already uses) instead gives continuous dust that scales naturally
+    -- with speed/timeScale rather than a periodic burst.
+    if ds ~= 0 and math.random() < DUST_SPAWN_CHANCE * timeScale then
+      local downDir = Vector2.new(0, 1)
+      local feetPos = Vector2.new(self.pos.x, self.groundY)
+      local sideDir = Vector2.new(1, 0)
+      DustPuff.spawn(feetPos, downDir, sideDir, 1 + math.floor(math.random() * 2), 2.5, 0.2, 0.6)
+    end
+  end
+
+  self.playerNearby = self:isPlayerNear(state.player)
+  -- Safety net only, not the normal way out anymore: the player's own
+  -- movement is frozen for the entire conversation (see
+  -- state.dialogueActive in main.lua/Player.lua), so this shouldn't
+  -- normally be reachable — but if he somehow ends up out of range
+  -- anyway (e.g. this NPC itself gets relocated), don't leave the
+  -- conversation stuck open forever.
+  if self.dialogueActive and not self.playerNearby then
+    self.dialogueActive = false
+    self.dialoguePages = nil
+    self.dialoguePageIndex = 1
+    if self.activeScript then
+      self.activeScript = nil
+      CameraDirector.release()
+    end
+  end
+end
+
+function RobotButler:draw()
+  local img = state.robotTexture
+  if not img then return end
+  ensureFrameQuads(img)
+
+  local quad = frameQuads[self.frameIndex]
+
+  -- Sprite faces LEFT by default — moving right needs a horizontal
+  -- flip. Same negative-scaleX-with-centered-origin trick Ooomba.lua
+  -- uses, for the same reason: keeps the sprite centered on self.pos
+  -- with no separate offset needed for the mirrored case.
+  local scaleX = self.drawWidth / sheetFrameW
+  if self.direction > 0 then scaleX = -scaleX end
+  local scaleY = self.drawHeight / sheetFrameH
+
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.draw(img, quad, self.pos.x, self.pos.y, 0, scaleX, scaleY, sheetFrameW / 2, sheetFrameH / 2)
+end
+
+local TOOLTIP_GAP_ABOVE_HEAD = 26 -- world units between his head and the pill's own bottom edge
+
+-- World-space "you can interact with him" hint — call from inside the
+-- same camera-transformed push() block everything else in the scene
+-- draws from (see main.lua's love.draw). Only shown while he's actually
+-- in range, not already mid-conversation (see :drawDialogue), and not
+-- while curled into a ball (Player.lua's own isBall) — a ball can't
+-- interact with him at all (see the input-handler guards in
+-- InputHandlers.lua/GamePadInput.lua), so advertising the prompt then
+-- would just be misleading.
+function RobotButler:drawTooltip()
+  if not self.playerNearby or self.dialogueActive then return end
+  if state.player and state.player.isBall then return end
+
+  InteractPrompt.draw(self.pos.x, self.pos.y - self.halfHeight - TOOLTIP_GAP_ABOVE_HEAD)
+end
+
+-- Screen-space dialogue box — call AFTER the camera transform is
+-- popped (see main.lua's love.draw, alongside the minimap/HUD/VatsCursor
+-- reticle), so it stays fixed relative to the WINDOW rather than the
+-- world underneath it, matching how a dialogue box behaves in basically
+-- every game that has one. Rendering itself (box art, text, the "more"
+-- corner indicator) is shared — see lua/ui/DialogueBox.lua.
+function RobotButler:drawDialogue()
+  if not self.dialogueActive then return end
+  local pageText = (self.dialoguePages and self.dialoguePages[self.dialoguePageIndex]) or self.dialogueText
+  local hasMore = self.dialoguePages and self.dialoguePageIndex < #self.dialoguePages
+  DialogueBox.draw(pageText, hasMore)
+end
+
+return RobotButler
