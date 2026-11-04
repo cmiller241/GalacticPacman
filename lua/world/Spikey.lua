@@ -46,15 +46,14 @@ local ORB_COLORS = {
 local SPIKE_COLOR = { 0.94, 0.93, 0.90, 1 } -- bright off-white, standing out sharply against the dark core
 local SPIKE_HEIGHT = 18
 local SPIKE_SPACING = 6
--- Radians per baseline (60fps) frame's worth of shared time — same
--- units/scaling convention WaterPlanet.lua's own WAVE_SPEED uses.
+-- Radians per baseline (60fps) frame's worth of shared time.
 local SPIKE_ROTATION_SPEED = 0.02
 
 ----------------------------------------------------------------------
 -- Shared spin clock — one value read by every Spikey's own :draw(),
--- same "advance explicitly once per frame from main.lua" convention
--- WaterPlanet.lua/Lava.lua already use for their own shared clocks
--- (see main.lua's own updateSharedClock calls), rather than each
+-- advanced explicitly once per frame (the same convention Lava.lua
+-- uses for its shared clock — see WorldObjects.lua's updateSharedClocks),
+-- rather than each
 -- instance needing its own :update() wired up just to advance a
 -- private timer — nothing else about a stationary landmark like this
 -- one ever needs per-instance updating.

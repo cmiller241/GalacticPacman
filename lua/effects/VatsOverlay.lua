@@ -105,19 +105,14 @@ function VatsOverlay.draw()
   local cam = state.camera or { x = 0, y = 0 }
   local zoom = state.zoom or 1
 
-  -- Built at real SCREEN pixel dimensions, NOT world units (an earlier
-  -- version sized this canvas as state.visibleWidth/Height, i.e.
-  -- screenWidth/zoom — the visible WORLD span at the current zoom).
-  -- That span grows without bound as the player zooms out (screen
-  -- pixels stay fixed; the world area needed to cover them grows as
-  -- 1/zoom), eventually requesting a texture wider than the GPU's own
-  -- max size — "pixel width of 19200 is too large for this system" was
-  -- exactly that. Screen pixels are bounded by the actual display/
-  -- window resolution regardless of zoom, so this can never overflow
-  -- that way. See the composite draw at the bottom of this function for
-  -- the other half of this fix (an explicit 1/zoom scale, to counteract
-  -- now no longer sharing the outer transform's 1-world-unit-per-texel
-  -- convention).
+  -- Built at real SCREEN pixel dimensions, NOT world units: the visible
+  -- WORLD span (state.visibleWidth/Height) grows as 1/zoom when zooming
+  -- out, and would eventually ask for a texture wider than the GPU's max
+  -- ("pixel width of 19200 is too large for this system"). Screen pixels
+  -- are bounded by the window, whatever the zoom. The composite draw at
+  -- the bottom of this function scales by 1/zoom to match, since this
+  -- canvas doesn't use the outer transform's 1-world-unit-per-texel
+  -- convention.
   local sw, sh = love.graphics.getWidth(), love.graphics.getHeight()
   if sw <= 0 or sh <= 0 then return end
 
@@ -166,10 +161,9 @@ function VatsOverlay.draw()
   if target then
     -- Converted from world units to THIS layer's own screen-pixel space
     -- via the same (world - cam) * zoom relationship the outer camera
-    -- transform itself uses — this layer no longer shares that
-    -- transform's 1-world-unit-per-texel convention (see this
-    -- function's own top comment), so world-space coordinates need this
-    -- explicit conversion now instead of lining up for free.
+    -- transform itself uses — this layer doesn't share that transform's
+    -- 1-world-unit-per-texel convention (see this function's own top
+    -- comment), so world-space coordinates need this explicit conversion.
     local localX = (target.pos.x - cam.x) * zoom
     local localY = (target.pos.y - cam.y) * zoom
     local radius = (utils.boundingRadius(target) + CUTOUT_PADDING) * zoom

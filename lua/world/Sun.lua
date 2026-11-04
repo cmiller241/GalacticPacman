@@ -24,12 +24,10 @@ local RADIUS              = 800
 -- the plasma shader below rather than a flat color.
 local CORE_DIAMETER       = 3500
 local CORE_RADIUS         = CORE_DIAMETER / 2
--- A fraction of CORE_RADIUS rather than a fixed pixel count — a flat
--- 50px band used to be only ~1.4% of the core's own diameter, so almost
--- the entire disc was flat-edged texture right up until a razor-thin
--- fade kicked in, reading as a mottled circle pasted onto the glow
--- behind it rather than one continuous object. Wider lets the
--- granulated surface actually dissolve into the corona.
+-- A fraction of CORE_RADIUS rather than a fixed pixel count: a band of
+-- a few pixels is a razor-thin fade on a disc this big, which reads as a
+-- mottled circle pasted onto the glow behind it. A wide band lets the
+-- granulated surface dissolve into the corona.
 local CORE_EDGE_BLUR_FRAC = 0.16
 local CORE_EDGE_BLUR      = CORE_RADIUS * CORE_EDGE_BLUR_FRAC  -- px of soft fade at the core's edge
 -- Fraction of the core's own radius that stays fully solid before the
@@ -330,10 +328,9 @@ function Sun.new(x, y, radius)
 end
 
 function Sun:update()
-  -- state.timeScale now already includes real elapsed time (normalized to
-  -- a 60fps baseline) as well as the VATS slow-mo multiplier — dividing
-  -- back out the baseline recovers real seconds, same as this used to get
-  -- from `dt * timeScale` when timeScale was VATS-only. Kept as its own
+  -- state.timeScale includes real elapsed time (normalized to a 60fps
+  -- baseline) as well as the VATS slow-mo multiplier — dividing back out
+  -- the baseline gives (slowed) real seconds. Kept as its own
   -- local rather than switched to reading state.timeScale directly at each
   -- use site so PULSE_SPEED's tuning (real seconds/cycle) stays meaningful.
   local scaledDt = (state.timeScale or 1) / 60
@@ -402,16 +399,12 @@ function Sun:draw()
   -- visual static once its cell count is packed into too few screen
   -- pixels at low zoom / far camera distance).
   --
-  -- Uses CORE_RADIUS (stable), NOT coreR (the pulsing one) — coreR here
-  -- previously made sizeFactor, and therefore plasmaScale/spotScale
-  -- below, breathe in sync with the pulse every cycle. Since that
-  -- frequency multiplies directly against the already-scrolled uv
-  -- coordinate, a small RELATIVE wobble in frequency produced a growing
-  -- ABSOLUTE positional swing the further the scroll had already
-  -- drifted — this was the actual, precisely pulse-synced cause of the
-  -- granulation appearing to lurch backward on every pulse, worse over
-  -- time as the scroll term it was multiplying against grew. Matching
-  -- baseRadius's own stability here removes that coupling entirely.
+  -- Uses CORE_RADIUS (stable), NOT coreR (the pulsing one): with coreR,
+  -- plasmaScale/spotScale below would breathe with the pulse, and since
+  -- that frequency multiplies the already-scrolled uv coordinate, a small
+  -- relative wobble becomes a growing positional swing as the scroll
+  -- drifts — the granulation would lurch backward on every pulse, worse
+  -- over time.
   local screenRadius = math.max(1, CORE_RADIUS * zoom)
   local sizeFactor = math.max(PLASMA_MIN_SCALE_FACTOR, math.min(1, screenRadius / PLASMA_REFERENCE_SCREEN_RADIUS))
   plasmaShader:send("plasmaScale", PLASMA_SCALE * sizeFactor)

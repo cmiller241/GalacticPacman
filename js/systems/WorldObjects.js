@@ -27,7 +27,6 @@ import state from '../state.js';
 import utils from '../utils.js';
 import Beam from '../world/Beam.js';
 import Lava from '../world/Lava.js';
-import WaterPlanet from '../world/WaterPlanet.js';
 import Spikey from '../world/Spikey.js';
 import MissileOutpost from '../world/MissileOutpost.js';
 import PortalGun from './PortalGun.js';
@@ -246,7 +245,6 @@ function updateMissileOutposts() {
 }
 
 function updateSharedClocks() {
-  WaterPlanet.updateSharedClock();
   Spikey.updateSharedClock();
 }
 

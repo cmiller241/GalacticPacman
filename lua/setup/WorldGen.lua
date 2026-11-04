@@ -46,9 +46,9 @@ worldGen.BELT_MAX_TOTAL_PLANETOIDS = 500
 -- generated (generateCell) counts against BELT_MAX_TOTAL_PLANETOIDS
 -- too, not just the drip. true: a new region only adds as many as the
 -- cap still has room for, so the belt genuinely tops out at the cap.
--- false: the old behavior — every new belt cell adds its full
--- BELT_PLANETOIDS_PER_CELL regardless, which let the belt climb to
--- 700-900 planetoids after a minute or so of moving around it.
+-- false: every new belt cell adds its full BELT_PLANETOIDS_PER_CELL
+-- regardless, which lets the belt climb to 700-900 planetoids after a
+-- minute or so of moving around it.
 worldGen.BELT_CELL_BURST_RESPECTS_CAP = true
 local BELT_SPAWN_ARC_SPACING = 300      -- target arc-length (world units) between consecutive drip spawns
 local BELT_DRIFT_RADIUS_MIN = 28
@@ -80,12 +80,10 @@ local ASTEROIDS_PER_CELL  = 2
 local COINS_PER_PLANET_BASE = 4
 
 -- Belt planetoids are dense (up to BELT_MAX_TOTAL_PLANETOIDS=500 of them
--- alive at once) and every coin is its own per-frame Coin:update() call
--- -- the old radius-scaled density formula (same as regular planets,
--- just halved) meant a large, steady coin population out there for no
--- real gameplay reason. A small random count instead -- some belt
--- planetoids bare, none with more than BELT_COIN_MAX -- cuts that
--- per-frame population substantially. Shared by both belt coin spawn
+-- alive at once) and every coin is its own per-frame Coin:update() call,
+-- so belt planetoids get a small random count instead of the regular
+-- planets' radius-scaled one -- some bare, none with more than
+-- BELT_COIN_MAX -- to keep that per-frame population down. Shared by both belt coin spawn
 -- sites below (the cell-generation burst and the ongoing drip spawn)
 -- so the range only needs tuning in one place.
 local BELT_COIN_MAX = 2
@@ -357,17 +355,11 @@ end
 
 -- Radius is sampled uniformly across the belt's FULL width, not
 -- jittered around the player's own current distance from the sun.
--- An earlier version jittered around the player's (clamped) distance,
--- which looked fine once the player was actually inside the ring --
--- but the moment they approached from outside it (e.g. coming from
--- the sky dome, well inside the inner edge), that clamp pinned every
--- spawn's reference radius to the same boundary value, and jitter
--- alone couldn't spread them back out: any offset that undershot the
--- clamp just got clamped straight back to it. The result was a dense
--- streak of planetoids piled up right on the inner (or outer) edge,
--- tracking the player's angular position, with the belt's middle left
--- empty until the player was fully inside it. Sampling the full width
--- has no boundary to pile up against.
+-- Jittering round the player's (clamped) distance would pile spawns up
+-- in a dense streak on the belt's inner (or outer) edge whenever he
+-- approached from outside the ring (from the sky dome, say), leaving
+-- the middle empty. Sampling the full width has no boundary to pile up
+-- against.
 --
 -- "Uniform across the full width" means uniform in r itself here, which
 -- is subtly wrong for uniform-DENSITY coverage of an annulus: a thin
@@ -651,29 +643,15 @@ end
 -- Plain rejection sampling: pick (x,y) uniformly in the cell's own
 -- rectangle, keep it only if it's genuinely inside the belt annulus too
 -- -- every accepted point is trivially inside the cell, by construction.
+-- (Sampling a valid radius directly and pairing it with an independent
+-- angle doesn't work for a cell that only clips a thin sliver of the
+-- ring: a Monte Carlo check put ~70% of such points outside the cell.)
 --
--- An earlier version of this function tried to be clever when a cell
--- only clips a thin sliver of the ring (its farthest corner barely past
--- the inner radius, say): it sampled a valid RADIUS directly from the
--- band the cell can reach, but kept the ANGLE from an independently
--- random point in the rectangle. That decoupling was wrong -- measured
--- with a Monte Carlo check against the actual thin-sliver cell next to
--- the dome, ~70% of the resulting points landed OUTSIDE that cell's own
--- rectangle entirely (a point sampled near the cell's NEAR corner, then
--- pushed out to a radius only valid near the FAR corner, walks into
--- neighboring territory). That's a worse bug than the one it replaced:
--- planetoids weren't stacking anymore, but most of them weren't
--- landing anywhere near where they were supposed to either.
---
--- The actual fix for the original stacking bug is just a much higher
--- retry budget: measured against that same real sliver cell, a random
--- rectangle point has roughly an 8.7% chance of landing in the belt
--- annulus, so 40 tries (the old count) had a ~2.7% chance of exhausting
--- -- rare, but landing on the SAME fixed fallback point every time it
--- did happen is what let multiple planetoids in one 36-planetoid batch
--- pile on each other. 200 tries drops that exhaustion chance to roughly
--- 1 in 10^8, and generation only runs once per cell activation, so the
--- extra tries cost nothing that matters.
+-- Hence the large retry budget: for the thin sliver cell next to the
+-- dome, a random rectangle point has roughly an 8.7% chance of landing
+-- in the belt annulus, so 40 tries would run out ~2.7% of the time.
+-- 200 tries makes that roughly 1 in 10^8, and generation only runs once
+-- per cell activation, so the extra tries cost nothing that matters.
 local function randomPointInCellBelt(col, row, radius)
   local x0, y0 = col * worldGen.CELL_SIZE, row * worldGen.CELL_SIZE
   for _ = 1, 200 do
@@ -688,9 +666,8 @@ local function randomPointInCellBelt(col, row, radius)
   -- near the sky dome -- shouldn't happen for any cell generateCell has
   -- already confirmed intersects the belt (see cellIntersectsBelt), but
   -- re-rolls a fresh point and just clamps ITS radius onto the nearest
-  -- belt boundary rather than using one fixed coordinate every time --
-  -- keeps this from ever becoming a new shared stacking point the way
-  -- the old fallback was.
+  -- belt boundary rather than using one fixed coordinate every time,
+  -- so planetoids that reach it don't all stack on the same point.
   local sx, sy = worldGen.sunPos()
   local inner, outer = worldGen.beltRadii()
   local x = x0 + radius + math.random() * (worldGen.CELL_SIZE - 2 * radius)

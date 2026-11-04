@@ -35,7 +35,7 @@ RoundedRectPlanetoid.__index = RoundedRectPlanetoid
 
 -- x, y: world center. halfWidth/halfHeight: half-extents of the core
 -- box (before rounding). cornerRadius: clamped to never exceed either
--- half-extent, same guard the JS original uses. color: {r,g,b,a} 0..1,
+-- half-extent. color: {r,g,b,a} 0..1,
 -- multiplied against the shared rocky planetTexture the same way every
 -- other Planetoid-family body tints it.
 function RoundedRectPlanetoid.new(x, y, halfWidth, halfHeight, cornerRadius, color)
@@ -55,8 +55,7 @@ function RoundedRectPlanetoid.new(x, y, halfWidth, halfHeight, cornerRadius, col
   -- planet-vs-planet bouncing. This planet genuinely participates in
   -- that momentum-conserving bounce; it's just bouncing off this
   -- circular approximation rather than the exact rounded-rect
-  -- silhouette there — same tradeoff the JS original's own header
-  -- comment describes. Gravity/landing/walking/pull-targeting all use
+  -- silhouette there. Gravity/landing/walking/pull-targeting all use
   -- :nearestSurfacePoint/the arc-position methods below instead, never
   -- this.
   self.radius = math.sqrt(halfWidth * halfWidth + halfHeight * halfHeight)
@@ -428,8 +427,7 @@ function RoundedRectPlanetoid:drawSunShading()
   local distToSun = math.sqrt(toSunX * toSunX + toSunY * toSunY)
   local worldAngleToSun = math.atan2(toSunY, toSunX)
   -- Subtracting rotationAngle keeps the gradient pointed at the true
-  -- sun regardless of this planet's own current spin, same reasoning
-  -- the JS original's own localAngle has.
+  -- sun regardless of this planet's own current spin.
   local localAngle = worldAngleToSun - self.rotationAngle
   local hx, hy = math.cos(localAngle), math.sin(localAngle)
 

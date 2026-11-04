@@ -8,24 +8,16 @@
 -- paired up as a simple two-way link by whichever code spawns them (see
 -- main.lua's own comment on its current home<->belt pair).
 --
--- Visually ported from the old JS game's js/world/BeamPlanetoid.js (the
--- beam itself, and its "particles drift from the base toward the tip,
--- fading as they go" stream) — deliberately WITHOUT the maze/platform
--- "interior" concept that version tied a beam to (this is just a
--- point-to-point teleporter between two ordinary world positions, not an
--- entrance into a separate scene, so none of that machinery is needed
--- here), and WITHOUT that version's separate radial "portal" particle
--- burst at the tip — the teleport moment itself now gets its own
--- feedback from Player:getTransporterState's transporter shimmer instead (see
--- that function's own header comment), so the beam itself only ever
--- needs the one steady, ambient stream.
+-- The beam is a stream of particles drifting from the base toward the
+-- tip, fading as they go. It's a point-to-point teleporter between two
+-- world positions, not an entrance into a separate scene. The teleport
+-- moment itself gets its feedback from Player:getTransporterState's
+-- transporter shimmer, so the beam only needs the one steady stream.
 --
--- The beam's own glow also fades smoothly from the planted base to
--- nothing at the tip (a gradient, same as the JS original's own
--- ctx.createLinearGradient) rather than stopping with a hard edge —
--- LÖVE has no direct equivalent to a Canvas2D gradient stroke, so this
--- is approximated with many short segments of linearly decreasing alpha
--- (see drawFadingLine below) instead.
+-- The beam's own glow fades smoothly from the planted base to nothing
+-- at the tip rather than stopping with a hard edge. LÖVE has no gradient
+-- stroke, so this is many short segments of linearly decreasing alpha
+-- (see drawFadingLine below).
 
 local state = require("lua.state")
 local Interactable = require("lua.world.Interactable")
