@@ -80,19 +80,35 @@ class Beam {
   // Called from InputHandlers.js (Enter) and GamePadInput.js (Circle).
   tryInteract(player) {
     if (!this.destination) return;
+    if (!this.isShown()) return;
     if (!this.isPlayerNear(player)) return;
     if (player.isTeleporting) return;
     player.startTeleport(this, this.destination);
   }
 
+  // A beam can be shown only some of the time: this.showWhen, when set,
+  // is asked every frame (the maze planet's beam is hidden while he's
+  // inside the maze — see MazePlanet.js). It fades out and back in over
+  // FADE_TICKS, and can't be used, or make particles, unless shown.
+  isShown() {
+    return !this.showWhen || this.showWhen();
+  }
+
   update() {
     const ts = state.timeScale ?? 1;
-    this.playerNearby = this.isPlayerNear(state.player);
+    const target = this.isShown() ? 1 : 0;
+    let fade = this.fade ?? 1;
+    if (fade < target) fade = Math.min(target, fade + ts / FADE_TICKS);
+    else if (fade > target) fade = Math.max(target, fade - ts / FADE_TICKS);
+    this.fade = fade;
+    this.playerNearby = target === 1 && this.isPlayerNear(state.player);
 
     // Ambient beam particles: small motes spawned at the planted base,
     // drifting toward the tip with a little sideways scatter, fading out
     // as their own life runs down.
-    if (Math.random() < 0.6) {
+    // (The roll is made even while hidden, so hiding a beam doesn't change
+    // the random numbers anything after it gets.)
+    if (Math.random() < 0.6 && target === 1) {
       const dirX = Math.cos(this.angle), dirY = Math.sin(this.angle);
       const sideX = -dirY, sideY = dirX;
       const sideAmt = (Math.random() - 0.5) * 1.5;
@@ -116,6 +132,8 @@ class Beam {
   // A few progressively wider, dimmer additive passes under a bright
   // core stroke, each faded base-to-tip.
   draw() {
+    const fade = this.fade ?? 1;
+    if (fade <= 0) return;
     const dirX = Math.cos(this.angle), dirY = Math.sin(this.angle);
     const startX = this.pos.x, startY = this.pos.y;
     const endX = startX + dirX * Beam.LENGTH, endY = startY + dirY * Beam.LENGTH;
@@ -123,13 +141,13 @@ class Beam {
 
     love.graphics.setBlendMode('add');
     for (let i = 3; i >= 1; i--) {
-      drawFadingLine(startX, startY, endX, endY, Beam.WIDTH + i * 10, r, g, b, 0.10 * i);
+      drawFadingLine(startX, startY, endX, endY, Beam.WIDTH + i * 10, r, g, b, 0.10 * i * fade);
     }
-    drawFadingLine(startX, startY, endX, endY, Beam.WIDTH, r, g, b, 0.9);
-    drawFadingLine(startX, startY, endX, endY, 4, 1, 1, 1, 0.8);
+    drawFadingLine(startX, startY, endX, endY, Beam.WIDTH, r, g, b, 0.9 * fade);
+    drawFadingLine(startX, startY, endX, endY, 4, 1, 1, 1, 0.8 * fade);
 
     for (const p of this.beamParticles) {
-      const alpha = p.life / p.maxLife;
+      const alpha = p.life / p.maxLife * fade;
       love.graphics.setColor(1, 1, 1, alpha);
       love.graphics.circle('fill', p.pos.x, p.pos.y, Beam.PARTICLE_RADIUS);
     }
@@ -154,6 +172,9 @@ class Beam {
     InteractPrompt.draw(topX, topY - TOOLTIP_GAP_ABOVE);
   }
 }
+
+// How long a hidden beam takes to fade out, or back in (ticks).
+const FADE_TICKS = 20;
 
 Beam.LENGTH = 140;
 Beam.WIDTH = 14;

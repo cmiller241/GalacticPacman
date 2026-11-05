@@ -262,7 +262,7 @@ end
 
 local function canSpray(player)
   return player and (player.mode == "space" or player.mode == "platform")
-    and not (player.isBall or player.isTeleporting or player.isDying or player.inPinball
+    and not (player.isBall or player.isTeleporting or player.isDying or player.inInterior
       or player.portalTransit or state.vatsActive or state.introLocked or state.titleScreen)
 end
 

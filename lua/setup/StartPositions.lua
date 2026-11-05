@@ -82,7 +82,13 @@ local PLACES = {
   pinball = function()
     if not state.pinballPlanet then return false end
     local portal = state.pinballPlanet.interior:getPortalPosition()
-    return { x = portal.x, y = portal.y, pinball = state.pinballPlanet.interior }
+    return { x = portal.x, y = portal.y, interior = state.pinballPlanet.interior }
+  end,
+
+  maze = function()
+    if not state.mazePlanet then return false end
+    local start = state.mazePlanet.interior:getPortalPosition()
+    return { x = start.x, y = start.y, interior = state.mazePlanet.interior }
   end,
 
   expressway = function()
@@ -109,6 +115,7 @@ local TELEPORT_PLACES = {
   { key = "tunnel", label = "SKY DOME BALL TUNNEL" },
   { key = "pinball", label = "PINBALL TABLE" },
   { key = "expressway", label = "EXPRESSWAY" },
+  { key = "maze", label = "MAZE PLANET" },
 }
 
 -- Called by love.load once every planet exists.

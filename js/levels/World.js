@@ -36,6 +36,7 @@ import BeltLanding from './BeltLanding.js';
 import MiningPlanet from './MiningPlanet.js';
 import DomeInterior from './DomeInterior.js';
 import Expressway from './Expressway.js';
+import MazePlanet from './MazePlanet.js';
 
 const World = {};
 
@@ -46,6 +47,7 @@ World.SHOW = {
   tiledPlanet: true,     // needs crackedPlanet (it's placed below it)
   expressway: true,      // the expressway and its entries/exits
   missileOutposts: true,
+  mazePlanet: true,      // the maze planet and its entry beam
 };
 
 World.HOME_CELL_COL = SkyDome.HOME_CELL_COL;
@@ -104,6 +106,7 @@ World.build = function () {
 
   const expresswayEntry = SHOW.expressway ? Expressway.build() : null;
   if (SHOW.missileOutposts) buildMissileOutposts();
+  if (SHOW.mazePlanet) MazePlanet.addEntryBeam(MazePlanet.build());
 
   return { dome, expresswayEntry };
 };

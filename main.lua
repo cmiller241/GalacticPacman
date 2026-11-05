@@ -66,6 +66,7 @@ local Profiler = require("lua.debug.Profiler")
 --   "tunnel"      on the sky dome's ground just left of Level1's ball
 --                 tunnel (curl into a ball to roll through it)
 --   "pinball"     on the pinball table's plunger, already a ball
+--   "maze"        at the maze planet's start, already a ball
 --   "expressway"  on the expressway's entry planet, beside its cannon
 --                 (needs World.SHOW.expressway — see lua/levels/World.lua)
 --
@@ -121,6 +122,7 @@ local function resetWorldState()
   state.zoomWindows, state.deathZones = nil, nil
   state.pinballPlanet, state.waterPlanet, state.waterCore, state.roundedRectPlanet = nil, nil, nil, nil
   state.crackedPlanet, state.tiledPlanet = nil, nil
+  state.mazePlanet = nil
   state.beltLandingPlanet = nil
   state.miningPlanet = nil
   state.cannons, state.clearLanes = nil, nil
@@ -362,7 +364,7 @@ local function movePlayer(player)
     player:move(TitleScreen.getKeys())
     return
   end
-  local noSteering = state.introLocked or player.inPinball or state.vatsActive
+  local noSteering = state.introLocked or player.inInterior or state.vatsActive
     or player.inCannon or player.cannonFlight
   -- Standing, he can't walk or run into a gap lower than he is tall — a
   -- ball tunnel (see TiledTerrain.lua's Level:headroomAt) — unless he's
@@ -429,9 +431,9 @@ local function updatePlayer(player, fire)
   -- Inside the pinball table its own ball physics replace gravity and
   -- planet collision (see lua/interiors/PinballInterior.lua). No gravity
   -- in a cannon or on a cannon shot either.
-  if player.inPinball then
+  if player.inInterior then
     local jumpHeld = state.keys[' '] or state.gamepadJumpHeld or false
-    player.inPinball:updateBall(player, state.timeScale, jumpHeld)
+    player.inInterior:updateBall(player, state.timeScale, jumpHeld)
   elseif player.pullTarget then
     player:applyPullForce()
   elseif not (player.inCannon or player.cannonFlight) then
@@ -455,7 +457,7 @@ local function updatePlayer(player, fire)
   -- first (see PortalGun.tryEnter).
   PortalGun.tryEnter(player)
 
-  if not player.inPinball and not player.inCannon then
+  if not player.inInterior and not player.inCannon then
     collisionSystem:handlePlayerPlanetCollisions(player)
   end
 
@@ -705,9 +707,13 @@ local function drawTerrain()
     -- The dome already drew above. Water planets draw after the player,
     -- so he looks submerged in them.
     if p ~= state.skyDomePlanet and not p.isWaterPlanet and utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50) then
-      p:draw()
-      FireBarGlow.drawOnto(p)
-      -- (The pinball planet's table — see lua/interiors/PinballInterior.lua.)
+      -- (Not while its interior stands in for it: the maze cube mid-turn —
+      -- see MazeInterior:hidesPlanet.)
+      if not (p.interior and p.interior.hidesPlanet and p.interior:hidesPlanet()) then
+        p:draw()
+        FireBarGlow.drawOnto(p)
+      end
+      -- (The pinball table, the maze — see lua/interiors/.)
       if p.interior then
         p.interior:draw()
       end

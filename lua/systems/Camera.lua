@@ -40,6 +40,7 @@ local PORTAL_CAMERA_SETTLED = 1
 -- Back to a new game's camera: no position yet, zoom 1, nothing easing.
 function Camera.reset()
   state.camera = nil
+  state.interiorFramed, state.interiorZoomReturn = nil, nil
   state.zoom = 1
   state.zoomMax = ZOOM_MAX
   state.zoomMin = ZOOM_MIN
@@ -62,14 +63,23 @@ function Camera.pointAtPlayer()
   }
 end
 
+-- The interior he's in, if it frames itself (the maze's faces: see
+-- MazeInterior:cameraView), or nil.
+local function framingInterior()
+  local inside = state.player and state.player.inInterior
+  return inside and inside.cameraView and inside or nil
+end
+
 -- Once a frame, at the end of love.update, after everything has moved.
 function Camera.update(dt)
+  local framing = framingInterior()
   -- Manual zoom input is ignored while CameraDirector.lua is actively
   -- directing (a scripted sequence — see RobotButler.lua's own intro
   -- script) — fighting a scripted camera move with +/- would just look
   -- broken, and it releases control back on its own once the sequence
   -- ends anyway.
-  if not CameraDirector.isActive() then
+  -- (Nor inside an interior that frames itself: its zoom is set below.)
+  if not CameraDirector.isActive() and not framing then
     if state.keys['+'] or state.keys['='] then
       state.zoom = math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME)
       state.zoomTarget = nil
@@ -140,6 +150,17 @@ function Camera.update(dt)
     state.zoomTarget = ZOOM_MIN
   end
 
+  -- Inside an interior that frames itself: eased to its zoom; back to the
+  -- zoom he had once he's out.
+  if framing then
+    if not state.interiorZoomReturn then state.interiorZoomReturn = state.zoomTarget or state.zoom end
+    local _, _, zoom = framing:cameraView(love.graphics.getWidth(), love.graphics.getHeight())
+    state.zoomTarget = zoom
+  elseif state.interiorZoomReturn then
+    state.zoomTarget = state.interiorZoomReturn
+    state.interiorZoomReturn = nil
+  end
+
   if state.zoomTarget and not CameraDirector.isActive() then
     local target = math.min(ZOOM_MAX, math.max(ZOOM_MIN, state.zoomTarget))
     state.zoom = state.zoom + (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME
@@ -174,6 +195,19 @@ function Camera.update(dt)
       state.portalCameraGlide = prev
         and { x = prev.x + visibleWidth / 2, y = prev.y + visibleHeight / 2 }
         or { x = focusX, y = focusY }
+    end
+    -- Inside an interior that frames itself, it's what's looked at. Going
+    -- in or coming out, the camera glides over (the same glide as after a
+    -- portal) rather than cutting.
+    if framing then
+      focusX, focusY = framing:cameraView(love.graphics.getWidth(), love.graphics.getHeight())
+    end
+    if (framing ~= nil) ~= (state.interiorFramed or false) then
+      state.interiorFramed = framing ~= nil
+      local prev = state.camera
+      if prev then
+        state.portalCameraGlide = { x = prev.x + visibleWidth / 2, y = prev.y + visibleHeight / 2 }
+      end
     end
     local glide = state.portalCameraGlide
     if glide and transit then

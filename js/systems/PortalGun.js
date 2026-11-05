@@ -404,7 +404,7 @@ function bodyReach(player, down, dx, dy, headPad) {
 }
 
 function canTravel(player) {
-  return !(player.inPinball || player.isTeleporting || player.isDying || player.morphState
+  return !(player.inInterior || player.isTeleporting || player.isDying || player.morphState
     || state.titleScreen || state.introLocked);
 }
 

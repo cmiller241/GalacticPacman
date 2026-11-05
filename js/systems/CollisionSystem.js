@@ -765,16 +765,6 @@ class CollisionSystem {
     }
     return [hitFireballs, toBreakAsteroids, planetHits];
   }
-
-  handlePlayerMazeGhostCollisions(player, ghosts) {
-    if (!ghosts) return;
-    for (const g of ghosts) {
-      if (player.mazeCol === g.mazeCol && player.mazeRow === g.mazeRow) {
-        player.startDeath();
-        return;
-      }
-    }
-  }
 }
 
 export default CollisionSystem;

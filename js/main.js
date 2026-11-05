@@ -71,6 +71,7 @@ import Profiler from './debug/Profiler.js';
 //   'tunnel'      on the sky dome's ground just left of Level1's ball
 //                 tunnel (curl into a ball to roll through it)
 //   'pinball'     on the pinball table's plunger, already a ball
+//   'maze'        at the maze planet's start, already a ball
 //   'expressway'  on the expressway's entry planet, beside its cannon
 //                 (needs World.SHOW.expressway)
 //
@@ -121,6 +122,7 @@ function resetWorldState() {
   state.zoomWindows = null; state.deathZones = null;
   state.pinballPlanet = null; state.waterPlanet = null; state.waterCore = null; state.roundedRectPlanet = null;
   state.crackedPlanet = null; state.tiledPlanet = null;
+  state.mazePlanet = null;
   state.beltLandingPlanet = null;
   state.miningPlanet = null;
   state.cannons = null; state.clearLanes = null;
@@ -342,7 +344,7 @@ function movePlayer(player) {
     player.move(TitleScreen.getKeys());
     return;
   }
-  const noSteering = state.introLocked || player.inPinball || state.vatsActive
+  const noSteering = state.introLocked || player.inInterior || state.vatsActive
     || player.inCannon || player.cannonFlight;
   // Standing, he can't walk or run into a gap lower than he is tall — a
   // ball tunnel (see TiledTerrain.js's Level.headroomAt) — unless he's
@@ -401,9 +403,9 @@ function updatePlayer(player, fire) {
 
   // Inside the pinball table its own ball physics replace gravity and
   // planet collision. No gravity in a cannon or on a cannon shot either.
-  if (player.inPinball) {
+  if (player.inInterior) {
     const jumpHeld = !!(state.keys[' '] || state.gamepadJumpHeld);
-    player.inPinball.updateBall(player, state.timeScale, jumpHeld);
+    player.inInterior.updateBall(player, state.timeScale, jumpHeld);
   } else if (player.pullTarget) {
     player.applyPullForce();
   } else if (!(player.inCannon || player.cannonFlight)) {
@@ -421,7 +423,7 @@ function updatePlayer(player, fire) {
   // Before collision, so landing on a floor portal doesn't stop his fall first.
   PortalGun.tryEnter(player);
 
-  if (!player.inPinball && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
+  if (!player.inInterior && !player.inCannon) collisionSystem.handlePlayerPlanetCollisions(player);
 
   // shootFireball / shootIceBolt throttle the fire rate themselves.
   if (fire) {
@@ -623,8 +625,12 @@ function drawTerrain() {
   for (const p of state.planetoids) {
     // (The dome drew above; water planets draw after the player.)
     if (p !== state.skyDomePlanet && !p.isWaterPlanet && utils.isOnScreen(p.pos.x, p.pos.y, p.radius, 50)) {
-      p.draw();
-      FireBarGlow.drawOnto(p);
+      // (Not while its interior stands in for it: the maze cube mid-turn —
+      // see MazeInterior.hidesPlanet.)
+      if (!(p.interior && p.interior.hidesPlanet && p.interior.hidesPlanet())) {
+        p.draw();
+        FireBarGlow.drawOnto(p);
+      }
       if (p.interior) p.interior.draw();
     }
   }

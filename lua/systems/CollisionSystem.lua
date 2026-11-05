@@ -1109,14 +1109,4 @@ function CollisionSystem:handleFireballCollisions(fireballs, planetoids, asteroi
   return hitFireballs, toBreakAsteroids, planetHits
 end
 
-function CollisionSystem:handlePlayerMazeGhostCollisions(player, ghosts)
-  if not ghosts then return end
-  for _, g in ipairs(ghosts) do
-    if player.mazeCol == g.mazeCol and player.mazeRow == g.mazeRow then
-      player:startDeath()
-      return
-    end
-  end
-end
-
 return CollisionSystem

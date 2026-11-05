@@ -32,6 +32,7 @@ local BeltLanding = require("lua.levels.BeltLanding")
 local MiningPlanet = require("lua.levels.MiningPlanet")
 local DomeInterior = require("lua.levels.DomeInterior")
 local Expressway = require("lua.levels.Expressway")
+local MazePlanet = require("lua.levels.MazePlanet")
 
 local World = {}
 
@@ -42,6 +43,7 @@ World.SHOW = {
   tiledPlanet = true,     -- needs crackedPlanet (it's placed below it)
   expressway = false,     -- the expressway and its entries/exits
   missileOutposts = true,
+  mazePlanet = true,      -- the maze planet and its entry beam
 }
 
 World.HOME_CELL_COL = SkyDome.HOME_CELL_COL
@@ -103,6 +105,7 @@ function World.build()
 
   local expresswayEntry = SHOW.expressway and Expressway.build() or nil
   if SHOW.missileOutposts then buildMissileOutposts() end
+  if SHOW.mazePlanet then MazePlanet.addEntryBeam(MazePlanet.build()) end
 
   return { dome = dome, expresswayEntry = expresswayEntry }
 end

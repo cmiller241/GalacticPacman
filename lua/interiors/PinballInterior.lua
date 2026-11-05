@@ -640,7 +640,7 @@ end
 
 function PinballInterior:onEnter(player)
   player:forceBallMode()
-  player.inPinball = self
+  player.inInterior = self
   player.vel.x, player.vel.y = 0, 0
   player.ballSpin = 0
   self.ballAngle = self:rotationAngle()
@@ -658,7 +658,7 @@ end
 -- next to the entry beam (self.exitPosition, set by main.lua), or at
 -- the top-middle if nothing set one.
 function PinballInterior:exitBall(player)
-  player.inPinball = nil
+  player.inInterior = nil
   player.vel.x, player.vel.y = 0, 0
   if player.isBall then player:exitBallMode() end
   local p = self.planetoid
@@ -774,7 +774,7 @@ local function bounceOffFlipper(f, player)
 end
 
 -- Replaces normal gravity and planet collision entirely while
--- player.inPinball is set (see main.lua's own update loop).
+-- player.inInterior is set (see main.lua's own update loop).
 -- jumpHeld: whether the jump button is down right now — keeps raised
 -- flippers up, as in real pinball.
 --
@@ -791,7 +791,7 @@ function PinballInterior:updateBall(player, ts, jumpHeld)
   player.vel.x, player.vel.y = rotateVector(player.vel.x, player.vel.y, -from)
   self:updateBallInTable(player, ts, jumpHeld)
   -- Draining (exitBall) already put him in world space, on the planet's top.
-  if player.inPinball == self then
+  if player.inInterior == self then
     player.pos.x, player.pos.y = self:tableToWorld(player.pos.x, player.pos.y, a)
     player.vel.x, player.vel.y = rotateVector(player.vel.x, player.vel.y, a)
     self.ballAngle = a

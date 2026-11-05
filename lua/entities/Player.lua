@@ -94,7 +94,7 @@ function Player.new(x, y)
   -- entirely, and InputHandlers.lua/GamePadInput.lua check it to route
   -- the jump button to PinballInterior:triggerJumpAction instead of an
   -- ordinary jump.
-  self.inPinball = nil
+  self.inInterior = nil
   self.ballRollAngle = 0
   -- nil | "toBall" | "toHuman" — see Player:enterBallMode/exitBallMode/
   -- updateBallMorph. morphElapsed is in baseline (60fps) ticks, counted
@@ -407,7 +407,7 @@ end
 function Player:exitBallMode()
   if not self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
-  if self.inPinball then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inPinball first)
+  if self.inInterior then return end -- he's the pinball until he drains (PinballInterior:exitBall clears inInterior first)
   if self:isCannonRiding() then return end -- curled up for the whole ride, barrel and flight (see lua/world/Cannon.lua)
   -- No room to stand up (in a ball tunnel — see CrackedPlanetoid:standingRoomAt).
   local planet = self.currentPlanet or self.lastInfluencePlanet
@@ -668,7 +668,7 @@ function Player:update()
     end
   end
   -- ...or in a pool of sprayed water (see lua/systems/WaterSystem.lua).
-  if not self.submergedIn and not self.inPinball then
+  if not self.submergedIn and not self.inInterior then
     self.submergedIn = WaterSystem.submergedAt(self)
   end
 
@@ -740,7 +740,7 @@ function Player:update()
   -- moved him this frame, with its own collision. Moving him again here
   -- (with no collision at all, plus space drag) pushed the ball into the
   -- table's walls at speed — e.g. off the top curve, back down the lane.
-  if not self.onSurface and not self.inPinball then
+  if not self.onSurface and not self.inInterior then
     -- Wall slide: touchingWall/wallContactNormal reflect contact as of
     -- the END of last frame's collision pass (CollisionSystem resets and
     -- rechecks them once per frame in main.lua) — one frame behind, same
@@ -958,11 +958,11 @@ function Player:respawn()
   self.deathTimer = 0
   self.invincibleTimer = INVINCIBLE_TICKS
 
-  -- A respawn point can name a pinball table (point.pinball, a
-  -- PinballInterior) to put him straight onto its plunger as a ball.
-  self.inPinball = nil
-  if point and point.pinball then
-    point.pinball:onEnter(self)
+  -- A respawn point can name a planet's interior (point.interior: the
+  -- pinball table or the maze) to put him straight into it as a ball.
+  self.inInterior = nil
+  if point and point.interior then
+    point.interior:onEnter(self)
   end
 end
 

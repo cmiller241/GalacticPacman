@@ -88,7 +88,7 @@ function getShader() {
 CharacterShadows.prepare = function () {
   anyCaster = false;
   const player = state.player;
-  const drawPlayer = player && !player.isDying && !player.portalTransit && !player.inPinball
+  const drawPlayer = player && !player.isDying && !player.portalTransit && !player.inInterior
     && !player.inCannon;
   const hasOoombas = state.ooombas && state.ooombas.length > 0;
   if (!(drawPlayer || hasOoombas)) return;

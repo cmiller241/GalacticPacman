@@ -731,7 +731,7 @@ class Cannon {
       return;
     }
     if (player.pullTarget || player.portalTransit || player.isDying
-        || player.isTeleporting || player.inPinball || player.inCannon) {
+        || player.isTeleporting || player.inInterior || player.inCannon) {
       player.cannonFlight = null;
       return;
     }

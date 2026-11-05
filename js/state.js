@@ -11,7 +11,7 @@ state.sceneHeight = 0;
 
 state.player = null;
 
-state.planetoids = []; // includes regular, spikey, and maze planets
+state.planetoids = []; // every planet: regular, spikey, landmarks
 state.asteroids = [];
 state.enemies = [];    // ghosts
 state.coins = [];

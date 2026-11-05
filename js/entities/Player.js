@@ -90,7 +90,7 @@ class Player {
     // to swap out normal gravity/collision for PinballInterior.updateBall,
     // and the input handlers route the jump button to
     // PinballInterior.triggerJumpAction instead of an ordinary jump.
-    this.inPinball = null;
+    this.inInterior = null;
     // null | "toBall" | "toHuman" — see enterBallMode/exitBallMode/
     // updateBallMorph. morphElapsed is in baseline (60fps) ticks.
     this.morphState = null;
@@ -304,7 +304,7 @@ class Player {
   exitBallMode() {
     if (!this.isBall || this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) return;
     if (state.vatsActive) return;
-    if (this.inPinball) return; // he's the pinball until he drains
+    if (this.inInterior) return; // he's the pinball until he drains
     if (this.isCannonRiding()) return; // curled up for the whole ride
     // No room to stand up (in a ball tunnel — see CrackedPlanetoid.standingRoomAt).
     const planet = this.currentPlanet ?? this.lastInfluencePlanet;
@@ -502,7 +502,7 @@ class Player {
       }
     }
     // ...or in a pool of sprayed water (see js/systems/WaterSystem.js).
-    if (!this.submergedIn && !this.inPinball) {
+    if (!this.submergedIn && !this.inInterior) {
       this.submergedIn = WaterSystem.submergedAt(this) ?? null;
     }
 
@@ -545,7 +545,7 @@ class Player {
 
     // Not while on a pinball table: PinballInterior.updateBall already
     // moved him this frame, with its own collision.
-    if (!this.onSurface && !this.inPinball) {
+    if (!this.onSurface && !this.inInterior) {
       // Wall slide: only caps a fall that's already faster than the slide
       // speed, and only while the direction key into that wall is held.
       // Facing is forced AWAY from the wall for the whole slide.
@@ -734,10 +734,10 @@ class Player {
     this.deathTimer = 0;
     this.invincibleTimer = INVINCIBLE_TICKS;
 
-    // A respawn point can name a pinball table (point.pinball, a
-    // PinballInterior) to put him straight onto its plunger as a ball.
-    this.inPinball = null;
-    if (point && point.pinball) point.pinball.onEnter(this);
+    // A respawn point can name a planet's interior (point.interior: the
+    // pinball table or the maze) to put him straight into it as a ball.
+    this.inInterior = null;
+    if (point && point.interior) point.interior.onEnter(this);
   }
 }
 

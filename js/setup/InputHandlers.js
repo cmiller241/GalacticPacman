@@ -151,18 +151,19 @@ function attachInputHandlers() {
     const riding = state.player && state.player.isCannonRiding();
 
     if (key === ' ' && !riding) {
-      if (state.player && state.player.inPinball) {
-        state.player.inPinball.triggerJumpAction(state.player);
-      } else if (state.player && state.player.mode !== 'maze' && !state.introLocked) {
+      if (state.player && state.player.inInterior) {
+        state.player.inInterior.triggerJumpAction(state.player);
+      } else if (state.player && !state.introLocked) {
         state.player.pressJump();
       }
     }
 
-    // Morph ball: ArrowDown curls up, ArrowUp stands back up.
-    if (key === 'ArrowDown' && !isrepeat && !riding && state.player && state.player.mode !== 'maze' && !state.introLocked) {
+    // Morph ball: ArrowDown curls up, ArrowUp stands back up (inside a
+    // planet he stays a ball).
+    if (key === 'ArrowDown' && !isrepeat && !riding && state.player && !state.introLocked) {
       state.player.enterBallMode();
     }
-    if (key === 'ArrowUp' && !isrepeat && !riding && state.player && state.player.mode !== 'maze') {
+    if (key === 'ArrowUp' && !isrepeat && !riding && state.player) {
       state.player.exitBallMode();
     }
 

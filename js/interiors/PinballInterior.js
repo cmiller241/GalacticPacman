@@ -655,7 +655,7 @@ class PinballInterior {
 
   onEnter(player) {
     player.forceBallMode();
-    player.inPinball = this;
+    player.inInterior = this;
     player.vel.x = 0; player.vel.y = 0;
     player.ballSpin = 0;
     this.ballAngle = this.rotationAngle();
@@ -668,7 +668,7 @@ class PinballInterior {
   }
 
   exitBall(player) {
-    player.inPinball = null;
+    player.inInterior = null;
     player.vel.x = 0; player.vel.y = 0;
     if (player.isBall) player.exitBallMode();
     const p = this.planetoid;
@@ -732,7 +732,7 @@ class PinballInterior {
     [player.pos.x, player.pos.y] = this.worldToTable(player.pos.x, player.pos.y, from);
     [player.vel.x, player.vel.y] = rotateVector(player.vel.x, player.vel.y, -from);
     this.updateBallInTable(player, ts, jumpHeld);
-    if (player.inPinball === this) {
+    if (player.inInterior === this) {
       [player.pos.x, player.pos.y] = this.tableToWorld(player.pos.x, player.pos.y, a);
       [player.vel.x, player.vel.y] = rotateVector(player.vel.x, player.vel.y, a);
       this.ballAngle = a;

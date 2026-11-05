@@ -1185,7 +1185,7 @@ function Cannon.updateFlight(player, ts)
     return
   end
   if player.pullTarget or player.portalTransit or player.isDying
-      or player.isTeleporting or player.inPinball or player.inCannon then
+      or player.isTeleporting or player.inInterior or player.inCannon then
     player.cannonFlight = nil
     return
   end

@@ -221,11 +221,12 @@ local function attachInputHandlers()
     local riding = state.player and state.player:isCannonRiding()
 
     if key == ' ' and not riding then
-      if state.player and state.player.inPinball then
-        -- Plunger/flippers instead of an ordinary jump while inside
-        -- the pinball planet — see PinballInterior:triggerJumpAction.
-        state.player.inPinball:triggerJumpAction(state.player)
-      elseif state.player and state.player.mode ~= "maze" and not state.introLocked then
+      if state.player and state.player.inInterior then
+        -- Inside a planet (the pinball table, the maze), the interior
+        -- decides: the plunger/flippers, or nothing (see each one's
+        -- triggerJumpAction).
+        state.player.inInterior:triggerJumpAction(state.player)
+      elseif state.player and not state.introLocked then
         -- A jump (grounded launch, wall-jump kick, or swim stroke) when
         -- there's something to jump off — or, in mid-air, coyote time,
         -- a buffered jump, or the ground pound. Player:pressJump decides.
@@ -233,45 +234,12 @@ local function attachInputHandlers()
       end
     end
 
-    if key == 'ArrowDown' and not riding and state.player and state.player.mode ~= "maze" then
-      -- MazeInterior/BeamPlanetoid aren't ported yet — lua/world/BeamPlanetoid.lua
-      -- and lua/interiors/ don't exist at all, only their old JS
-      -- originals (js/world/BeamPlanetoid.js etc). require() throws
-      -- immediately when a module genuinely doesn't exist (unlike, say,
-      -- a nil global), so a plain lazy require here still crashed the
-      -- very first time this branch actually ran (ArrowDown pressed) —
-      -- pcall keeps that crash from reaching the player: since
-      -- state.player.currentPlanet can never actually BE a BeamPlanetoid
-      -- instance right now anyway (nothing in this codebase creates
-      -- one), skipping the whole branch when the require fails changes
-      -- nothing about actual behavior — it'll just start working
-      -- correctly, with no changes needed here, once BeamPlanetoid is
-      -- eventually ported.
-      local okBeam, BeamPlanetoid = pcall(require, "lua.world.BeamPlanetoid")
-      local okMaze, MazeInterior = pcall(require, "lua.interiors.MazeInterior")
-      local okUtils, angleDiff = pcall(function() return require("lua.utils").angleDiff end)
-
-      if okBeam and okMaze and okUtils and
-         state.player.onSurface and state.player.currentPlanet and
-         getmetatable(state.player.currentPlanet) == BeamPlanetoid then
-        local diff = angleDiff(state.player.angle, state.player.currentPlanet.beamAngle)
-        if diff < math.pi / 5 then
-          local mode = (getmetatable(state.player.currentPlanet.interior) == MazeInterior) and "maze" or "platform"
-          state.player:startTeleport(mode)
-        end
-      end
-    end
-
     -- Morph ball: ArrowDown curls up, ArrowUp stands back up (see
-    -- Player:enterBallMode/exitBallMode) — a separate, one-shot
-    -- (not isrepeat) check from the beam-teleport ArrowDown handling
-    -- just above, which only ever fires under its own much narrower
-    -- condition (standing on a BeamPlanetoid, facing its beam), so the
-    -- two don't meaningfully conflict in practice.
-    if key == 'ArrowDown' and not isrepeat and not riding and state.player and state.player.mode ~= "maze" and not state.introLocked then
+    -- Player:enterBallMode/exitBallMode; inside a planet he stays a ball).
+    if key == 'ArrowDown' and not isrepeat and not riding and state.player and not state.introLocked then
       state.player:enterBallMode()
     end
-    if key == 'ArrowUp' and not isrepeat and not riding and state.player and state.player.mode ~= "maze" then
+    if key == 'ArrowUp' and not isrepeat and not riding and state.player then
       state.player:exitBallMode()
     end
 

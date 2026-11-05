@@ -86,14 +86,30 @@ Beam.isPlayerNear = Interactable.isPlayerNear -- (see lua/world/Interactable.lua
 -- state change itself.
 function Beam:tryInteract(player)
   if not self.destination then return end
+  if not self:isShown() then return end
   if not self:isPlayerNear(player) then return end
   if player.isTeleporting then return end
   player:startTeleport(self, self.destination)
 end
 
+-- A beam can be shown only some of the time: self.showWhen, when set, is
+-- asked every frame (the maze planet's beam is hidden while he's inside
+-- the maze — see MazePlanet.lua). It fades out and back in over
+-- FADE_TICKS, and can't be used, or make particles, unless shown.
+local FADE_TICKS = 20
+
+function Beam:isShown()
+  return not self.showWhen or self.showWhen()
+end
+
 function Beam:update()
   local ts = state.timeScale or 1
-  self.playerNearby = self:isPlayerNear(state.player)
+  local target = self:isShown() and 1 or 0
+  local fade = self.fade or 1
+  if fade < target then fade = math.min(target, fade + ts / FADE_TICKS)
+  elseif fade > target then fade = math.max(target, fade - ts / FADE_TICKS) end
+  self.fade = fade
+  self.playerNearby = target == 1 and self:isPlayerNear(state.player)
 
   -- Ambient beam particles: small motes spawned at the planted base,
   -- drifting along the beam's own length toward the tip with a little
@@ -101,7 +117,9 @@ function Beam:update()
   -- they travel at roughly constant speed, that's also roughly "the
   -- further toward the tip, the more transparent") — same per-tick
   -- spawn-chance approach BeamPlanetoid.js's own spawnBeamParticles used.
-  if math.random() < 0.6 then
+  -- (The roll is made even while hidden, so hiding a beam doesn't change
+  -- the random numbers anything after it gets.)
+  if math.random() < 0.6 and target == 1 then
     local dirX, dirY = math.cos(self.angle), math.sin(self.angle)
     local sideX, sideY = -dirY, dirX
     local sideAmt = (math.random() - 0.5) * 1.5
@@ -148,6 +166,8 @@ end
 -- GlowOrb.lua's own rim uses), under a bright core stroke on top, each
 -- one individually faded base-to-tip via drawFadingLine above.
 function Beam:draw()
+  local fade = self.fade or 1
+  if fade <= 0 then return end
   local dirX, dirY = math.cos(self.angle), math.sin(self.angle)
   local startX, startY = self.pos.x, self.pos.y
   local endX, endY = startX + dirX * Beam.LENGTH, startY + dirY * Beam.LENGTH
@@ -155,13 +175,13 @@ function Beam:draw()
 
   love.graphics.setBlendMode("add")
   for i = 3, 1, -1 do
-    drawFadingLine(startX, startY, endX, endY, Beam.WIDTH + i * 10, r, g, b, 0.10 * i)
+    drawFadingLine(startX, startY, endX, endY, Beam.WIDTH + i * 10, r, g, b, 0.10 * i * fade)
   end
-  drawFadingLine(startX, startY, endX, endY, Beam.WIDTH, r, g, b, 0.9)
-  drawFadingLine(startX, startY, endX, endY, 4, 1, 1, 1, 0.8)
+  drawFadingLine(startX, startY, endX, endY, Beam.WIDTH, r, g, b, 0.9 * fade)
+  drawFadingLine(startX, startY, endX, endY, 4, 1, 1, 1, 0.8 * fade)
 
   for _, p in ipairs(self.beamParticles) do
-    local alpha = p.life / p.maxLife
+    local alpha = p.life / p.maxLife * fade
     love.graphics.setColor(1, 1, 1, alpha)
     love.graphics.circle("fill", p.pos.x, p.pos.y, Beam.PARTICLE_RADIUS)
   end

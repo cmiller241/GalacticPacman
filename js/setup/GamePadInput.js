@@ -55,6 +55,8 @@ let lastTrianglePressed = false;
 
 let gamepadHeldLeft = false;
 let gamepadHeldRight = false;
+let gamepadHeldUp = false;
+let gamepadHeldDown = false;
 let gamepadHeldZoomIn = false;
 let gamepadHeldZoomOut = false;
 
@@ -155,6 +157,24 @@ function pollGamepad(dt) {
     if (gamepadHeldRight) { state.keys['ArrowRight'] = false; gamepadHeldRight = false; }
   }
 
+  // Left stick up/down: nothing outside the maze (too easy to nudge while
+  // walking). Inside it (an interior with fourWayInput, see
+  // MazeInterior.js), it rolls him up and down.
+  const fourWay = state.player && state.player.inInterior && state.player.inInterior.fourWayInput;
+  const leftY = fourWay ? axis('lefty') : 0;
+  if (leftY < -STICK_DEADZONE) {
+    state.keys['ArrowUp'] = true;
+    gamepadHeldUp = true;
+    if (gamepadHeldDown) { state.keys['ArrowDown'] = false; gamepadHeldDown = false; }
+  } else if (leftY > STICK_DEADZONE) {
+    state.keys['ArrowDown'] = true;
+    gamepadHeldDown = true;
+    if (gamepadHeldUp) { state.keys['ArrowUp'] = false; gamepadHeldUp = false; }
+  } else {
+    if (gamepadHeldUp) { state.keys['ArrowUp'] = false; gamepadHeldUp = false; }
+    if (gamepadHeldDown) { state.keys['ArrowDown'] = false; gamepadHeldDown = false; }
+  }
+
   // D-pad up/down: zoom in/out.
   const dpadUpPressed = gp.isGamepadDown(BUTTON_DPAD_UP);
   const dpadDownPressed = gp.isGamepadDown(BUTTON_DPAD_DOWN);
@@ -183,9 +203,9 @@ function pollGamepad(dt) {
   // X (Cross): jump — or the plunger/flippers in the pinball planet.
   const xPressed = gp.isGamepadDown(BUTTON_X_CROSS);
   if (xPressed && !lastXPressed && state.player && !riding) {
-    if (state.player.inPinball) {
-      state.player.inPinball.triggerJumpAction(state.player);
-    } else if (state.player.mode !== 'maze' && !state.introLocked) {
+    if (state.player.inInterior) {
+      state.player.inInterior.triggerJumpAction(state.player);
+    } else if (!state.introLocked) {
       state.player.pressJump();
     }
   }
@@ -230,7 +250,7 @@ function pollGamepad(dt) {
     state.vatsActive = false;
   }
   if (trianglePressed && !lastTrianglePressed && state.player && !riding
-      && state.player.mode !== 'space' && state.player.mode !== 'maze' && !state.introLocked) {
+      && state.player.mode !== 'space' && !state.introLocked) {
     if (state.player.isBall) state.player.exitBallMode(); else state.player.enterBallMode();
   }
   lastTrianglePressed = trianglePressed;
@@ -243,7 +263,7 @@ function pollGamepad(dt) {
     if (lastSquareTapTime != null && now - lastSquareTapTime <= SQUARE_DOUBLE_TAP_SECONDS) {
       lastSquareTapTime = null;
       const player = state.player;
-      if (player && player.mode !== 'maze' && !player.inPinball && !riding) {
+      if (player && !player.inInterior && !riding) {
         if (player.isBall) player.exitBallMode();
         else if (!state.introLocked) player.enterBallMode();
       }

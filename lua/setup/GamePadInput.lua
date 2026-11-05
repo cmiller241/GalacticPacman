@@ -124,6 +124,8 @@ local lastTrianglePressed = false
 -- bookkeeping and same reasoning as the original.
 local gamepadHeldLeft = false
 local gamepadHeldRight = false
+local gamepadHeldUp = false
+local gamepadHeldDown = false
 local gamepadHeldZoomIn = false
 local gamepadHeldZoomOut = false
 
@@ -251,10 +253,26 @@ local function pollGamepad(dt)
     if gamepadHeldRight then state.keys['ArrowRight'] = false; gamepadHeldRight = false end
   end
 
-  -- The left stick's vertical axis deliberately does NOTHING. It used
-  -- to toggle the morph ball (down = curl up, up = stand), but it's far
-  -- too easy to nudge a stick down while just walking — the ball is a
-  -- double-tap of Square now instead (see "Square" further down).
+  -- The left stick's vertical axis deliberately does NOTHING outside the
+  -- maze. It used to toggle the morph ball (down = curl up, up = stand),
+  -- but it's far too easy to nudge a stick down while just walking — the
+  -- ball is a double-tap of Square now instead (see "Square" further
+  -- down). Inside the maze (an interior with fourWayInput, see
+  -- MazeInterior.lua), it rolls him up and down.
+  local fourWay = state.player and state.player.inInterior and state.player.inInterior.fourWayInput
+  local leftY = fourWay and (gp:getGamepadAxis("lefty") or 0) or 0
+  if leftY < -STICK_DEADZONE then
+    state.keys['ArrowUp'] = true
+    gamepadHeldUp = true
+    if gamepadHeldDown then state.keys['ArrowDown'] = false; gamepadHeldDown = false end
+  elseif leftY > STICK_DEADZONE then
+    state.keys['ArrowDown'] = true
+    gamepadHeldDown = true
+    if gamepadHeldUp then state.keys['ArrowUp'] = false; gamepadHeldUp = false end
+  else
+    if gamepadHeldUp then state.keys['ArrowUp'] = false; gamepadHeldUp = false end
+    if gamepadHeldDown then state.keys['ArrowDown'] = false; gamepadHeldDown = false end
+  end
 
   -- --- D-pad up/down: zoom in/out ---
   local dpadUpPressed = gp:isGamepadDown(BUTTON_DPAD_UP)
@@ -283,8 +301,8 @@ local function pollGamepad(dt)
   lastDpadLeftPressed, lastDpadRightPressed = dpadLeftPressed, dpadRightPressed
 
   -- --- X (Cross): jump / wall jump / swim stroke / ground pound —
-  -- or, while inside the pinball planet (state.player.inPinball), the
-  -- plunger/flippers instead (see PinballInterior:triggerJumpAction) ---
+  -- or, inside a planet (state.player.inInterior), whatever it does
+  -- instead: the pinball table's plunger/flippers, nothing in the maze ---
   -- Player:jump() itself branches on grounded-launch vs. wall-jump kick
   -- vs. swim stroke (see Player.lua) — routed here together the same way
   -- InputHandlers.lua routes the keyboard Space key, since all three are
@@ -292,9 +310,9 @@ local function pollGamepad(dt)
   -- fallback for mid-air with nothing to jump off of (or swim in).
   local xPressed = gp:isGamepadDown(BUTTON_X_CROSS)
   if xPressed and not lastXPressed and state.player and not riding then
-    if state.player.inPinball then
-      state.player.inPinball:triggerJumpAction(state.player)
-    elseif state.player.mode ~= "maze" and not state.introLocked then
+    if state.player.inInterior then
+      state.player.inInterior:triggerJumpAction(state.player)
+    elseif not state.introLocked then
       -- (Jump, coyote time, a buffered jump, or the ground pound — see
       -- Player:pressJump.)
       state.player:pressJump()
@@ -356,7 +374,7 @@ local function pollGamepad(dt)
     state.vatsActive = false
   end
   if trianglePressed and not lastTrianglePressed and state.player and not riding
-     and state.player.mode ~= "space" and state.player.mode ~= "maze" and not state.introLocked then
+     and state.player.mode ~= "space" and not state.introLocked then
     if state.player.isBall then state.player:exitBallMode() else state.player:enterBallMode() end
   end
   lastTrianglePressed = trianglePressed
@@ -377,7 +395,7 @@ local function pollGamepad(dt)
     if lastSquareTapTime and now - lastSquareTapTime <= SQUARE_DOUBLE_TAP_SECONDS then
       lastSquareTapTime = nil
       local player = state.player
-      if player and player.mode ~= "maze" and not player.inPinball and not riding then
+      if player and not player.inInterior and not riding then
         if player.isBall then
           player:exitBallMode()
         elseif not state.introLocked then

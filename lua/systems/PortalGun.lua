@@ -503,7 +503,7 @@ local function bodyReach(player, down, dx, dy, headPad)
 end
 
 local function canTravel(player)
-  return not (player.inPinball or player.isTeleporting or player.isDying or player.morphState
+  return not (player.inInterior or player.isTeleporting or player.isDying or player.morphState
     or state.titleScreen or state.introLocked)
 end
 

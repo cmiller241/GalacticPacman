@@ -195,7 +195,7 @@ WaterSystem.submergedAt = function (player) {
 
 function canSpray(player) {
   return player && (player.mode === 'space' || player.mode === 'platform')
-    && !(player.isBall || player.isTeleporting || player.isDying || player.inPinball
+    && !(player.isBall || player.isTeleporting || player.isDying || player.inInterior
       || player.portalTransit || state.vatsActive || state.introLocked || state.titleScreen);
 }
 

@@ -38,6 +38,7 @@ const PORTAL_CAMERA_SETTLED = 1;
 // Back to a new game's camera: no position yet, zoom 1, nothing easing.
 Camera.reset = function () {
   state.camera = null;
+  state.interiorFramed = false; state.interiorZoomReturn = null;
   state.zoom = 1;
   state.zoomMax = ZOOM_MAX;
   state.zoomMin = ZOOM_MIN;
@@ -60,10 +61,19 @@ Camera.pointAtPlayer = function () {
 };
 
 // Once a frame, at the end of love.update, after everything has moved.
+// The interior he's in, if it frames itself (the maze's faces: see
+// MazeInterior.cameraView), or null.
+function framingInterior() {
+  const inside = state.player && state.player.inInterior;
+  return inside && inside.cameraView ? inside : null;
+}
+
 Camera.update = function (dt) {
   const player = state.player;
-  // Manual zoom (ignored while a scripted camera is directing).
-  if (!CameraDirector.isActive()) {
+  const framing = framingInterior();
+  // Manual zoom (ignored while a scripted camera is directing, or inside
+  // an interior that frames itself: its zoom is set below).
+  if (!CameraDirector.isActive() && !framing) {
     if (state.keys['+'] || state.keys['=']) {
       state.zoom = Math.min(ZOOM_MAX, state.zoom + ZOOM_STEP_PER_FRAME);
       state.zoomTarget = null;
@@ -109,6 +119,16 @@ Camera.update = function (dt) {
 
   if (!CameraDirector.isActive() && state.zoomTarget == null && state.zoom < ZOOM_MIN) state.zoomTarget = ZOOM_MIN;
 
+  // Inside an interior that frames itself: eased to its zoom; back to the
+  // zoom he had once he's out.
+  if (framing) {
+    if (state.interiorZoomReturn == null) state.interiorZoomReturn = state.zoomTarget ?? state.zoom;
+    state.zoomTarget = framing.cameraView(love.graphics.getWidth(), love.graphics.getHeight())[2];
+  } else if (state.interiorZoomReturn != null) {
+    state.zoomTarget = state.interiorZoomReturn;
+    state.interiorZoomReturn = null;
+  }
+
   if (state.zoomTarget != null && !CameraDirector.isActive()) {
     const target = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoomTarget));
     state.zoom += (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME;
@@ -132,6 +152,15 @@ Camera.update = function (dt) {
       state.portalCameraGlide = prev
         ? { x: prev.x + visibleWidth / 2, y: prev.y + visibleHeight / 2 }
         : { x: focusX, y: focusY };
+    }
+    // Inside an interior that frames itself, it's what's looked at. Going
+    // in or coming out, the camera glides over (the same glide as after a
+    // portal) rather than cutting.
+    if (framing) [focusX, focusY] = framing.cameraView(love.graphics.getWidth(), love.graphics.getHeight());
+    if (!!framing !== !!state.interiorFramed) {
+      state.interiorFramed = !!framing;
+      const prev = state.camera;
+      if (prev) state.portalCameraGlide = { x: prev.x + visibleWidth / 2, y: prev.y + visibleHeight / 2 };
     }
     const glide = state.portalCameraGlide;
     if (glide && transit) {

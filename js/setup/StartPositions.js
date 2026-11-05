@@ -80,7 +80,13 @@ const PLACES = {
   pinball() {
     if (!state.pinballPlanet) return null;
     const portal = state.pinballPlanet.interior.getPortalPosition();
-    return { x: portal.x, y: portal.y, pinball: state.pinballPlanet.interior };
+    return { x: portal.x, y: portal.y, interior: state.pinballPlanet.interior };
+  },
+
+  maze() {
+    if (!state.mazePlanet) return null;
+    const start = state.mazePlanet.interior.getPortalPosition();
+    return { x: start.x, y: start.y, interior: state.mazePlanet.interior };
   },
 
   expressway() {
@@ -107,6 +113,7 @@ const TELEPORT_PLACES = [
   { key: 'tunnel', label: 'SKY DOME BALL TUNNEL' },
   { key: 'pinball', label: 'PINBALL TABLE' },
   { key: 'expressway', label: 'EXPRESSWAY' },
+  { key: 'maze', label: 'MAZE PLANET' },
 ];
 
 const StartPositions = {};
