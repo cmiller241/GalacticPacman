@@ -299,11 +299,15 @@ local DRAW_LAYERS = {
   -- Over the outposts' missiles; behind the portals and the player
   -- (beams go last so he stands in front of one he's at).
   actors = { "robotButler", "fisherman", "coins", "fireBars", "beams" },
+  -- His blaster's shots: just before him, so they come out from behind
+  -- the blaster's barrel (drawn side-on, the muzzle out of sight — see
+  -- lua/entities/player/Sprite.lua).
+  shots = { "fireballs", "iceBolts" },
   -- After the player and before the water's top layer, so the water (or
   -- lava) covers them, reading as submerged.
   submerged = { "fish", "lavas" },
   -- Over everything else in the world.
-  effects = { "fireballs", "iceBolts", "particles", "elementPieces", "explosions", "wallContactPulses" },
+  effects = { "particles", "elementPieces", "explosions", "wallContactPulses" },
 }
 
 -- Characters with conversations, in the order their textboxes draw.
@@ -389,7 +393,15 @@ end
 -- interactive. Not while he's curled into a ball — no talking to NPCs or
 -- pulling levers as a ball.
 function WorldObjects.interact(player)
-  if not player or player.isBall then return end
+  if not player then return end
+  -- Inside a planet, only what it offers (the maze's way out: see
+  -- MazeInterior:tryInteract).
+  local inside = player.inInterior
+  if inside then
+    if inside.tryInteract then inside:tryInteract(player) end
+    return
+  end
+  if player.isBall then return end
   for _, key in ipairs(INTERACTIVE_KINDS) do
     eachItem(key, function(item) item:tryInteract(player) end)
   end
@@ -399,11 +411,24 @@ function WorldObjects.drawDialogues()
   for _, key in ipairs(DIALOGUE_KINDS) do
     eachItem(key, function(item) item:drawDialogue() end)
   end
+  -- (And whatever he's inside, if it talks: the ship's Bible.)
+  local inside = state.player and state.player.inInterior
+  if inside and inside.drawDialogue then inside:drawDialogue() end
+end
+
+-- An arrow pressed while a textbox is asking a question (dir -1 for
+-- left/up, 1 for right/down): moves its cursor. Only what he's inside
+-- asks questions so far (the ship's Bible: see lua/ui/Conversation.lua).
+function WorldObjects.moveChoice(dir)
+  local inside = state.player and state.player.inInterior
+  if inside and inside.moveChoice then inside:moveChoice(dir) end
 end
 
 -- Recomputed fresh every frame (never a flag some NPC sets and might
 -- forget to clear) from whichever characters have a textbox open now.
 function WorldObjects.anyDialogueActive()
+  local inside = state.player and state.player.inInterior
+  if inside and inside.dialogueActive then return true end
   for _, key in ipairs(DIALOGUE_KINDS) do
     local value = state[key]
     if value ~= nil then

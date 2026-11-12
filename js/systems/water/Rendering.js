@@ -915,7 +915,14 @@ WaterSystem.draw = function () {
     if (pg.lava.size > 0) drawPlanetWater(pg, LAVA);
   }
   drawLavaEmbers();
+  g.setColor(1, 1, 1, 1);
+};
 
+// The water blaster's spray (and anything else flying loose — a portal's
+// jet), and its splashes. Drawn before Bob, not over him with the water
+// (see main.js), so it comes out from behind his blaster's barrel.
+WaterSystem.drawSpray = function () {
+  const g = love.graphics;
   g.setLineWidth(2.5);
   for (const d of shared.droplets) {
     const speed = Math.sqrt(d.vx * d.vx + d.vy * d.vy);

@@ -8,13 +8,18 @@ import love from '../love/index.js';
 import state from '../state.js';
 import AudioManager from '../AudioManager.js';
 
+// Bob's posable rig (his wall slide, ground pound, curling into a ball —
+// see js/entities/player/Rendering.js): each part of img/astronaut2.svg on
+// its own, with its normal map, made by tools/bob-sprite-export.html. (His
+// walking, standing and jumping come from sprite sheets instead: see
+// js/entities/player/Sprite.js.)
 const CHARACTER_IMAGE_SOURCES = {
-  body: 'img/body.png',
-  head: 'img/head.png',
-  leftarm: 'img/leftarm.png',
-  rightarm: 'img/rightarm.png',
-  leftboot: 'img/leftboot.png',
-  rightboot: 'img/rightboot.png',
+  body: ['img/bob-rig-body.png', 'img/bob-rig-body_normal.png'],
+  head: ['img/bob-rig-head.png', 'img/bob-rig-head_normal.png'],
+  leftarm: ['img/bob-rig-leftarm.png', 'img/bob-rig-leftarm_normal.png'],
+  rightarm: ['img/bob-rig-rightarm.png', 'img/bob-rig-rightarm_normal.png'],
+  leftboot: ['img/bob-rig-leftboot.png', 'img/bob-rig-leftboot_normal.png'],
+  rightboot: ['img/bob-rig-rightboot.png', 'img/bob-rig-rightboot_normal.png'],
 };
 
 function smooth(img) {
@@ -83,8 +88,12 @@ function loadAssets(onComplete) {
     line: smooth(g.newImage('img/Fisherman-Line.png')),
   };
 
-  for (const [key, src] of Object.entries(CHARACTER_IMAGE_SOURCES)) {
-    state.characterImages[key] = g.newImage(src);
+  // (Each drawn far smaller than it is, so mipmapped; its normal map under
+  // the same key in state.characterNormals.)
+  state.characterNormals = {};
+  for (const [key, [src, normalSrc]] of Object.entries(CHARACTER_IMAGE_SOURCES)) {
+    state.characterImages[key] = smooth(g.newImage(src, { mipmaps: true }));
+    state.characterNormals[key] = smooth(g.newImage(normalSrc, { mipmaps: true }));
   }
   state.bootImage = state.characterImages.leftboot;
 

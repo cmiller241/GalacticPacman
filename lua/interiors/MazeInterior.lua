@@ -4,8 +4,10 @@
 -- square maze areas, joined the way a cube's faces are. Like the pinball
 -- table (lua/interiors/PinballInterior.lua), he plays it as a ball: the
 -- planet's entry beam drops him in the middle of the front face
--- (:onEnter), and the exit portal in the middle of the back face puts him
--- back on the planet's top (:exitBall). While he's in here the camera
+-- (:onEnter). The exit portal in the middle of the back face holds him
+-- when he rolls into it, and offers him the way out, like the beam does
+-- the way in: the interact button beams him back up onto the planet's
+-- top (:tryInteract), rolling away keeps him in. While he's in here the camera
 -- frames the face he's on, whole (see :cameraView and Camera.lua).
 --
 -- Rolling: along the middle of the corridors, one tile at a time, until a
@@ -39,6 +41,7 @@
 
 local state = require("lua.state")
 local Vector2 = require("lua.vector2")
+local InteractPrompt = require("lua.ui.InteractPrompt")
 
 local MazeInterior = {}
 MazeInterior.__index = MazeInterior
@@ -214,8 +217,13 @@ local GLOW_WIDTH = 14
 local COLOR_DOT = { 1.00, 0.92, 0.70, 1 }
 local DOT_RADIUS = 6
 local BIG_DOT_RADIUS = 14
-local COLOR_EXIT = { 0.95, 0.35, 0.95 }
-local EXIT_RADIUS = 26
+-- The exit portal: a swirling vortex (see :drawExitPortal).
+local COLOR_EXIT = { 0.95, 0.35, 0.95 } -- also the transporter shimmer's, leaving
+local PORTAL_RADIUS = 64
+local PORTAL_COLORS = { { 0.95, 0.35, 0.95 }, { 0.45, 0.55, 1.00 }, { 0.35, 0.95, 0.95 } }
+local PORTAL_ARMS = 5
+local PORTAL_SPARKS = 28
+local PROMPT_GAP = 30 -- world units between the ball's top and the "press to leave" pill
 local POPUP_TICKS = 50
 
 -- Directions by arrow key, in the order they're checked when several are held.
@@ -411,6 +419,7 @@ function MazeInterior:onEnter(player)
   player.vel.x, player.vel.y = 0, 0
   self:resetView()
   self.scroll = nil
+  self.atExit, self.exitHold = false, false
   self.col, self.row = self.startCol, self.startRow
   player.pos.x, player.pos.y = self:tileCenter(self.col, self.row)
   player.prevPos = player.pos:clone()
@@ -419,19 +428,38 @@ function MazeInterior:onEnter(player)
   self.wantX, self.wantY = 0, 0
 end
 
--- The exit: he stands back up on top of the planet, beside the entry
+-- Where leaving puts him: standing on top of the planet, beside the entry
 -- beam (self.exitPosition, set by MazePlanet.lua), or at the top-middle.
--- The planet shows its front face again.
-function MazeInterior:exitBall(player)
-  player.inInterior = nil
-  player.vel.x, player.vel.y = 0, 0
-  if player.isBall then player:exitBallMode() end
-  self.scroll = nil
-  self:resetView()
+function MazeInterior:outsideSpot()
   local p = self.planetoid
-  local exitX = self.exitPosition and self.exitPosition.x or p.pos.x
-  player.pos.x, player.pos.y = exitX, p.pos.y - p.halfHeight - player.radius - 2
+  return self.exitPosition and self.exitPosition.x or p.pos.x, p.pos.y - p.halfHeight
+end
+
+-- The interact button (see WorldObjects.interact) while he's sitting in
+-- the exit portal: he's beamed out, with the same transporter shimmer as
+-- the beams, and comes back standing on the planet's top.
+function MazeInterior:tryInteract(player)
+  if not self.atExit or self.scroll or player.isTeleporting then return end
+  local x, topY = self:outsideSpot()
+  player:startTeleport({ color = COLOR_EXIT }, {
+    pos = Vector2.new(x, topY),
+    angle = -math.pi / 2,
+    color = COLOR_EXIT,
+    onArrive = function(p) self:arriveOutside(p) end,
+  })
+end
+
+-- The moment the transporter puts him outside: standing, not a ball, out
+-- of the maze, and the planet showing its front face again.
+function MazeInterior:arriveOutside(player)
+  player.inInterior = nil
+  player:forceStandMode()
+  player.vel.x, player.vel.y = 0, 0
+  local x, topY = self:outsideSpot()
+  player.pos.x, player.pos.y = x, topY - player.radius - 2
   player.prevPos = player.pos:clone()
+  self.atExit, self.exitHold, self.scroll = false, false, nil
+  self:resetView()
 end
 
 -- (The jump button does nothing in here.)
@@ -455,14 +483,24 @@ end
 -- Called every frame he's in here, in place of gravity and collision.
 function MazeInterior:updateBall(player, ts)
   self:updatePopups(ts)
+  -- (Being beamed out: held still for it.)
+  if player.isTeleporting then return end
   if self.scroll then
     self:updateScroll(player, ts)
     return
   end
 
+  local held = false
   for _, d in ipairs(DIRECTIONS) do
-    if state.keys[d.key] then self.wantX, self.wantY = d.dx, d.dy; break end
+    if state.keys[d.key] then
+      held = true
+      -- (Sitting in the exit, a direction still held from rolling in
+      -- doesn't count: only one pressed after letting go.)
+      if not self.exitHold then self.wantX, self.wantY = d.dx, d.dy end
+      break
+    end
   end
+  if not held then self.exitHold = false end
 
   -- Back the way he came: at once.
   if self.wantX == -self.dirX and self.wantY == -self.dirY and (self.dirX ~= 0 or self.dirY ~= 0) then
@@ -489,6 +527,7 @@ function MazeInterior:updateBall(player, ts)
       -- Standing still on a tile's middle: off as soon as there's a way.
       if self:canGo(self.wantX, self.wantY) then
         self.dirX, self.dirY = self.wantX, self.wantY
+        self.atExit = false
       else
         break
       end
@@ -509,7 +548,11 @@ function MazeInterior:updateBall(player, ts)
       player.pos.x, player.pos.y = tx, ty
       left = left - dist
       self.col, self.row = nextCol, nextRow
-      if self:arriveAt(player) then return end
+      if self:arriveAt(player) then
+        -- (The exit: he stops in it.)
+        self.dirX, self.dirY = 0, 0
+        break
+      end
       -- At a tile's middle: turn the way he wants if he can, else carry
       -- on, else stop against the wall.
       if (self.wantX ~= self.dirX or self.wantY ~= self.dirY) and self:canGo(self.wantX, self.wantY) then
@@ -615,13 +658,16 @@ function MazeInterior:hidesPlanet()
   return self.scroll ~= nil
 end
 
--- Reached the middle of a tile: picks up its dot, or leaves by the exit.
--- Returns true when he's left.
+-- Reached the middle of a tile: picks up its dot, or, at the exit, stops
+-- him in it (returns true): it offers him the way out (see :tryInteract),
+-- and holds him until he picks a direction again.
 function MazeInterior:arriveAt(player)
   local face = self.face
   local fc, fr = self:faceTile(self.col, self.row)
   if face.name == self.exitFace and fc == self.exitCol and fr == self.exitRow then
-    self:exitBall(player)
+    self.atExit = true
+    self.exitHold = true
+    self.wantX, self.wantY = 0, 0
     return true
   end
   local kind = face.dots[fr][fc]
@@ -682,21 +728,67 @@ function MazeInterior:drawFace(face, m, cx, cy, t)
     end
   end
 
-  -- The exit: a pulsing ring with a swirl of light inside.
   if face.name == self.exitFace then
-    local ex, ey = (self.exitCol - MID) * TILE, (self.exitRow - MID) * TILE
-    local pulse = (math.sin(t * 4) + 1) / 2
-    love.graphics.setColor(COLOR_EXIT[1], COLOR_EXIT[2], COLOR_EXIT[3], 0.25 + 0.2 * pulse)
-    love.graphics.circle("fill", ex, ey, EXIT_RADIUS + 10 + pulse * 6)
-    love.graphics.setColor(COLOR_EXIT[1], COLOR_EXIT[2], COLOR_EXIT[3], 0.9)
-    love.graphics.setLineWidth(4)
-    love.graphics.circle("line", ex, ey, EXIT_RADIUS + pulse * 4)
-    for k = 0, 2 do
-      local a = t * 3 + k * 2 * math.pi / 3
-      love.graphics.arc("line", "open", ex, ey, EXIT_RADIUS * 0.6, a, a + 1.2)
-    end
-    love.graphics.setLineWidth(1)
+    self:drawExitPortal((self.exitCol - MID) * TILE, (self.exitRow - MID) * TILE, t)
   end
+  love.graphics.pop()
+end
+
+-- The exit portal at (x, y): a vortex of light, all added on (additive),
+-- turning: a soft violet glow, spiral arms sweeping round, two dashed
+-- rings turning opposite ways, sparks falling in toward a pulsing white
+-- core. Brighter while he's sitting in it.
+function MazeInterior:drawExitPortal(x, y, t)
+  local boost = self.atExit and 1.3 or 1
+  local R = PORTAL_RADIUS * (1 + 0.04 * math.sin(t * 3))
+  love.graphics.push("all")
+  love.graphics.setBlendMode("add")
+
+  for i = 6, 1, -1 do
+    love.graphics.setColor(0.6, 0.25, 0.9, 0.06 * boost)
+    love.graphics.circle("fill", x, y, R * (0.4 + 0.9 * i / 6))
+  end
+
+  love.graphics.setLineWidth(3)
+  for arm = 0, PORTAL_ARMS - 1 do
+    local points = {}
+    local base = t * 2.2 + arm * 2 * math.pi / PORTAL_ARMS
+    for k = 0, 16 do
+      local f = k / 16
+      local r, a = R * (0.12 + 0.88 * f), base + f * 3.2 -- (swept back as it goes out)
+      points[#points + 1] = x + math.cos(a) * r
+      points[#points + 1] = y + math.sin(a) * r
+    end
+    local c = PORTAL_COLORS[arm % #PORTAL_COLORS + 1]
+    love.graphics.setColor(c[1], c[2], c[3], 0.55 * boost)
+    love.graphics.line(points)
+  end
+
+  love.graphics.setLineWidth(2.5)
+  for ring = 1, 2 do
+    local r = R * (ring == 1 and 1 or 0.72)
+    local spin = (ring == 1 and 1 or -1.6) * t
+    local c = PORTAL_COLORS[ring == 1 and 1 or 3]
+    love.graphics.setColor(c[1], c[2], c[3], 0.75 * boost)
+    for d = 0, 7 do
+      local a = spin + d * math.pi / 4
+      love.graphics.arc("line", "open", x, y, r, a, a + math.pi / 7)
+    end
+  end
+
+  for k = 1, PORTAL_SPARKS do
+    local phase = (t * 0.35 + k * 0.618) % 1 -- (0 at the rim, 1 at the core)
+    local r = R * 1.15 * (1 - phase)
+    local a = k * 2.39996 + phase * 5 + t * 0.8
+    love.graphics.setColor(1, 0.85, 1, 0.9 * phase * boost)
+    love.graphics.circle("fill", x + math.cos(a) * r, y + math.sin(a) * r, 1.5 + 2.5 * phase)
+  end
+
+  local pulse = (math.sin(t * 5) + 1) / 2
+  love.graphics.setColor(1, 0.6, 1, 0.5 * boost)
+  love.graphics.circle("fill", x, y, R * 0.28 + pulse * 4)
+  love.graphics.setColor(1, 1, 1, 0.85)
+  love.graphics.circle("fill", x, y, R * 0.12 + pulse * 2)
   love.graphics.pop()
 end
 
@@ -803,6 +895,12 @@ function MazeInterior:draw()
     love.graphics.rectangle("fill", p.pos.x - p.halfWidth, p.pos.y - p.halfHeight,
       p.halfWidth * 2, p.halfHeight * 2, p.cornerRadius, p.cornerRadius)
     self:drawFace(self.face, self.m, p.pos.x, p.pos.y, t)
+  end
+
+  -- Sitting in the exit: the way out, offered like the beam offers the way in.
+  local player = state.player
+  if self.atExit and not s and player and player.inInterior == self and not player.isTeleporting then
+    InteractPrompt.draw(player.pos.x, player.pos.y - player.radius - PROMPT_GAP, "leave")
   end
 
   for _, pop in ipairs(self.popups) do

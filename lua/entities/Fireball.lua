@@ -60,6 +60,11 @@ local function fireColor(t)
   return 0.75 + 0.25 * k, 0.12 + 0.43 * k, 0.03 + 0.09 * k
 end
 
+-- (Shared with the spaceship's engine, so its exhaust is the same fire —
+-- see lua/levels/Spaceship.lua.)
+Fireball.drawGlow = drawGlow
+Fireball.fireColor = fireColor
+
 function Fireball.new(x, y, angle)
   local self = setmetatable({}, Fireball)
   self.vel = Vector2.new(math.cos(angle), math.sin(angle)):multiply(FIREBALL_SPEED)

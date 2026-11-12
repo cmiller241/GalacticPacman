@@ -83,6 +83,12 @@ function AudioManager.new()
   -- Curling into a ball and back (made by tools/gen-morph-sounds.mjs).
   self.morphBallAudio = love.audio.newSource('sounds/morph-ball.wav', 'static')
   self.morphUnballAudio = love.audio.newSource('sounds/morph-unball.wav', 'static')
+  -- A Tetris planet row clearing (made by tools/gen-tetris-sounds.mjs).
+  self.tetrisClearAudio = love.audio.newSource('sounds/tetris-clear.wav', 'static')
+  -- The Zuma planet: balls popping and the cannon firing (made by
+  -- tools/gen-zuma-sounds.mjs).
+  self.zumaPopAudio = love.audio.newSource('sounds/zuma-pop.wav', 'static')
+  self.zumaShootAudio = love.audio.newSource('sounds/zuma-shoot.wav', 'static')
 
   self.sprayAudio = love.audio.newSource(SPRAY_PATH, 'static')
   self.sprayAudio:setLooping(true)
@@ -93,7 +99,8 @@ function AudioManager.new()
     self.eatDotAudio0, self.eatDotAudio1, self.deathAudio, self.jumpAudio,
     self.jumpSmallAudio, self.bangLarge, self.bangMedium, self.bangSmall,
     self.goombaStompAudio, self.fireballAudio, self.groundPoundAudio,
-    self.morphBallAudio, self.morphUnballAudio
+    self.morphBallAudio, self.morphUnballAudio, self.tetrisClearAudio,
+    self.zumaPopAudio, self.zumaShootAudio
   }
   for _, source in ipairs(allSources) do
     source:setVolume(0.5)
@@ -142,6 +149,25 @@ end
 
 function AudioManager:playMorphUnball()
   cloneAndPlay(self.morphUnballAudio)
+end
+
+-- chain: 1 for balls a shot cleared, 2 and up for each clear that set
+-- off another; each step up is pitched higher.
+function AudioManager:playZumaPop(chain)
+  local instance = self.zumaPopAudio:clone()
+  instance:setPitch(1 + 0.15 * ((chain or 1) - 1))
+  instance:play()
+end
+
+function AudioManager:playZumaShoot()
+  cloneAndPlay(self.zumaShootAudio)
+end
+
+-- rows: how many rows cleared at once; each one more pitches it up a step.
+function AudioManager:playTetrisClear(rows)
+  local instance = self.tetrisClearAudio:clone()
+  instance:setPitch(1 + 0.12 * ((rows or 1) - 1))
+  instance:play()
 end
 
 function AudioManager:playJumpSmall()

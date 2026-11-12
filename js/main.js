@@ -72,13 +72,16 @@ import Profiler from './debug/Profiler.js';
 //                 tunnel (curl into a ball to roll through it)
 //   'pinball'     on the pinball table's plunger, already a ball
 //   'maze'        at the maze planet's start, already a ball
+//   'ship'        inside Bob's spaceship, at its beam pad
+//   'tetris'      on top of the Tetris planet, beside its beam in
+//   'zuma'        on top of the Zuma planet, beside its beam in
 //   'expressway'  on the expressway's entry planet, beside its cannon
 //                 (needs World.SHOW.expressway)
 //
 // If the planet you pick is switched off, he starts at the shelter and
 // the console says why. T in game opens a list of the same places.
 // (Same switch as main.lua's.)
-const START_AT = 'shelter';
+const START_AT = 'tetris';
 const TILED_START_COLUMN = 5; // counting from 0, like Tiled
 
 let collisionSystem;
@@ -288,8 +291,33 @@ function updateTimeScale(dt) {
   state.timeScale = state.vatsMultiplier * frameNorm * Cannon.timeFactor();
 }
 
-// Drifting planetoids move and bounce off the edges of the world.
+// A drifting planetoid that's come up against a landmark's keep-out ring
+// (keepOutRadius round it — the Zuma planet's, round its whole game) is
+// put back on the ring and bounced off it, the way it bounces off the
+// world's edges.
+function bounceOffKeepOuts(p, keepOuts) {
+  for (const zone of keepOuts) {
+    const dx = p.pos.x - zone.pos.x, dy = p.pos.y - zone.pos.y;
+    const limit = zone.keepOutRadius + p.radius;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < limit * limit && d2 > 0) {
+      const d = Math.sqrt(d2);
+      const nx = dx / d, ny = dy / d;
+      p.pos.x = zone.pos.x + nx * limit;
+      p.pos.y = zone.pos.y + ny * limit;
+      const inward = p.vel.x * nx + p.vel.y * ny;
+      if (inward < 0) {
+        p.vel.x -= 2 * inward * nx;
+        p.vel.y -= 2 * inward * ny;
+      }
+    }
+  }
+}
+
+// Drifting planetoids move and bounce off the edges of the world (and off
+// any landmark's keep-out ring).
 function updatePlanetoidsPhysics() {
+  const keepOuts = state.planetoids.filter((p) => p.keepOutRadius);
   for (const p of state.planetoids) {
     if (p.recalling) {
       // (Rewinding: Recall.update moves it.)
@@ -301,6 +329,7 @@ function updatePlanetoidsPhysics() {
       if (p.pos.x + p.radius > state.sceneWidth) { p.pos.x = state.sceneWidth - p.radius; p.vel.x = -p.vel.x; }
       if (p.pos.y - p.radius < 0) { p.pos.y = p.radius; p.vel.y = -p.vel.y; }
       if (p.pos.y + p.radius > state.sceneHeight) { p.pos.y = state.sceneHeight - p.radius; p.vel.y = -p.vel.y; }
+      if (keepOuts.length > 0) bounceOffKeepOuts(p, keepOuts);
     }
   }
 }
@@ -348,10 +377,16 @@ function movePlayer(player) {
     || player.inCannon || player.cannonFlight;
   // Standing, he can't walk or run into a gap lower than he is tall — a
   // ball tunnel (see TiledTerrain.js's Level.headroomAt) — unless he's
-  // already somewhere that low.
+  // already somewhere that low. (Not while he's running round a wall climb's
+  // curve: the headroom check looks for his head straight up the screen,
+  // and on the wall it's off to the side — near the top, the ceiling cap
+  // above him read as no room, and he ran on the spot instead of round onto
+  // the ceiling. The curve keeps him clear itself.)
   const level = state.tiledLevels ? state.tiledLevels[0] : null;
   const px = player.pos.x, py = player.pos.y, parc = player.surfaceArcPos;
-  const hadRoom = level && player.onSurface && !player.isBall && level.headroomAt(px, py, player.radius);
+  const onWallClimb = player.currentPlanet && player.currentPlanet.isWallClimb;
+  const hadRoom = level && player.onSurface && !player.isBall && !onWallClimb
+    && level.headroomAt(px, py, player.radius);
   player.move(noSteering ? {} : state.keys);
   if (hadRoom && player.onSurface && !player.isBall && !level.headroomAt(player.pos.x, player.pos.y, player.radius)) {
     player.pos.x = px; player.pos.y = py; player.surfaceArcPos = parc;
@@ -680,6 +715,14 @@ function drawActors() {
 
   PortalGun.draw();
 
+  // His blaster's shots — fireballs, ice bolts, the water spray and the
+  // pull beam — behind him, so they come out from behind the blaster's
+  // barrel (it's drawn side-on, the muzzle out of sight: see
+  // js/entities/player/Sprite.js).
+  WorldObjects.draw('shots');
+  WaterSystem.drawSpray();
+  PullBeam.draw();
+
   Cannon.drawFlightTrail(state.player);
   PortalGun.drawPlayer(state.player);
 
@@ -707,10 +750,7 @@ function drawForeground() {
   // The shelter door, over him while it's still closed or opening.
   if (state.spaceShelter && !state.spaceShelter.playerInFront) state.spaceShelter.drawDoor();
 
-  PullBeam.draw();
-
-  // Fireballs, ice bolts, particles, element pieces, explosions,
-  // wall-jump rings.
+  // Particles, element pieces, explosions, wall-jump rings.
   WorldObjects.draw('effects');
 
   if (state.skyDomePlanet) state.skyDomePlanet.drawForegroundGlass();
@@ -736,8 +776,15 @@ function drawInterface() {
 
   // Blaster selector, lower-left (see js/ui/WeaponBar.js). Hidden while a
   // conversation textbox is up, so the box has the bottom of the screen
-  // to itself.
-  if (!state.dialogueActive) WeaponBar.draw();
+  // to itself, and while he's at a game planet's controls (see
+  // js/interiors/ControlRoom.js), so it doesn't cover the game.
+  const atControls = state.player?.inInterior?.controlling;
+  if (!state.dialogueActive && !atControls) WeaponBar.draw();
+
+  // Whatever he's inside may put something on the screen too (the Tetris
+  // planet's next shape: see ControlRoom.drawHud).
+  const inside = state.player?.inInterior;
+  if (inside?.drawHud) inside.drawHud();
 
   // Conversation textboxes — after the minimap, so the box covers it.
   WorldObjects.drawDialogues();

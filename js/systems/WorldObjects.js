@@ -282,11 +282,15 @@ const DRAW_LAYERS = {
   // Over the outposts' missiles; behind the portals and the player (beams
   // go last so he stands in front of one he's at).
   actors: ['robotButler', 'fisherman', 'coins', 'fireBars', 'beams'],
+  // His blaster's shots: just before him, so they come out from behind the
+  // blaster's barrel (drawn side-on, the muzzle out of sight — see
+  // js/entities/player/Sprite.js).
+  shots: ['fireballs', 'iceBolts'],
   // After the player and before the water's top layer, so the water (or
   // lava) covers them, reading as submerged.
   submerged: ['fish', 'lavas'],
   // Over everything else in the world.
-  effects: ['fireballs', 'iceBolts', 'particles', 'elementPieces', 'explosions', 'wallContactPulses'],
+  effects: ['particles', 'elementPieces', 'explosions', 'wallContactPulses'],
 };
 
 // Characters with conversations, in the order their textboxes draw.
@@ -361,17 +365,38 @@ WorldObjects.draw = function (layer) {
 // interactive. Not while he's curled into a ball — no talking to NPCs or
 // pulling levers as a ball.
 WorldObjects.interact = function (player) {
-  if (!player || player.isBall) return;
+  if (!player) return;
+  // Inside a planet, only what it offers (the maze's way out: see
+  // MazeInterior.tryInteract).
+  const inside = player.inInterior;
+  if (inside) {
+    if (inside.tryInteract) inside.tryInteract(player);
+    return;
+  }
+  if (player.isBall) return;
   for (const key of INTERACTIVE_KINDS) eachItem(key, (item) => item.tryInteract(player));
 };
 
 WorldObjects.drawDialogues = function () {
   for (const key of DIALOGUE_KINDS) eachItem(key, (item) => item.drawDialogue());
+  // (And whatever he's inside, if it talks: the ship's Bible.)
+  const inside = state.player?.inInterior;
+  if (inside?.drawDialogue) inside.drawDialogue();
+};
+
+// An arrow pressed while a textbox is asking a question (dir -1 for
+// left/up, 1 for right/down): moves its cursor. Only what he's inside
+// asks questions so far (the ship's Bible: see js/ui/Conversation.js).
+WorldObjects.moveChoice = function (dir) {
+  const inside = state.player?.inInterior;
+  if (inside?.moveChoice) inside.moveChoice(dir);
 };
 
 // Recomputed fresh every frame from whichever characters have a textbox
 // open now.
 WorldObjects.anyDialogueActive = function () {
+  const inside = state.player?.inInterior;
+  if (inside?.dialogueActive) return true;
   for (const key of DIALOGUE_KINDS) {
     const value = state[key];
     if (value == null) continue;

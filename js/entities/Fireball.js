@@ -194,4 +194,9 @@ class Fireball {
   }
 }
 
+// (Shared with the spaceship's engine, so its exhaust is the same fire —
+// see js/levels/Spaceship.js.)
+Fireball.drawGlow = drawGlow;
+Fireball.fireColor = fireColor;
+
 export default Fireball;

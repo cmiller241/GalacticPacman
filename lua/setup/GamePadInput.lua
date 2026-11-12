@@ -117,6 +117,9 @@ local lastStartPressed = false
 local lastMenuUp = false
 local lastMenuDown = false
 local MENU_STICK_THRESHOLD = 0.5 -- how far the left stick has to be pushed up/down to count as a menu move
+-- A textbox's question (see WorldObjects.moveChoice): the D-pad or stick held left/right last frame.
+local lastChoiceLeft = false
+local lastChoiceRight = false
 local lastTrianglePressed = false
 
 -- Tracked so the stick/d-pad can clear state.keys[...] on release
@@ -161,6 +164,7 @@ local function pollGamepad(dt)
     state.gamepadRunHeld = isShiftHeld()
     state.gamepadIsActiveDevice = false
     state.gamepadPullHeld = false
+    state.gamepadMoveX, state.gamepadMoveY = 0, 0
     return
   end
 
@@ -240,6 +244,9 @@ local function pollGamepad(dt)
 
   -- --- Left stick: walk left/right ---
   local leftX = gp:getGamepadAxis("leftx") or 0
+  -- (Both axes as they are, for flying Bob's spaceship by how far the
+  -- stick is pushed — see ShipInterior:fly.)
+  state.gamepadMoveX, state.gamepadMoveY = leftX, gp:getGamepadAxis("lefty") or 0
   if leftX < -STICK_DEADZONE then
     state.keys['ArrowLeft'] = true
     gamepadHeldLeft = true
@@ -296,8 +303,19 @@ local function pollGamepad(dt)
   -- same as Tab on the keyboard) ---
   local dpadLeftPressed = gp:isGamepadDown(BUTTON_DPAD_LEFT)
   local dpadRightPressed = gp:isGamepadDown(BUTTON_DPAD_RIGHT)
-  if dpadRightPressed and not lastDpadRightPressed and not riding then WeaponModes.cycle(1) end
-  if dpadLeftPressed and not lastDpadLeftPressed and not riding then WeaponModes.cycle(-1) end
+  -- (While a textbox is asking a question, the D-pad or the left stick
+  -- moves its cursor instead: see WorldObjects.moveChoice.)
+  local stickX = gp:getGamepadAxis("leftx") or 0
+  local choiceLeft = dpadLeftPressed or stickX < -MENU_STICK_THRESHOLD
+  local choiceRight = dpadRightPressed or stickX > MENU_STICK_THRESHOLD
+  if state.dialogueActive then
+    if choiceLeft and not lastChoiceLeft then WorldObjects.moveChoice(-1) end
+    if choiceRight and not lastChoiceRight then WorldObjects.moveChoice(1) end
+  else
+    if dpadRightPressed and not lastDpadRightPressed and not riding then WeaponModes.cycle(1) end
+    if dpadLeftPressed and not lastDpadLeftPressed and not riding then WeaponModes.cycle(-1) end
+  end
+  lastChoiceLeft, lastChoiceRight = choiceLeft, choiceRight
   lastDpadLeftPressed, lastDpadRightPressed = dpadLeftPressed, dpadRightPressed
 
   -- --- X (Cross): jump / wall jump / swim stroke / ground pound —

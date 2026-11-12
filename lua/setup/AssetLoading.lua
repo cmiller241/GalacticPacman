@@ -37,13 +37,18 @@
 local state = require("lua.state")
 local AudioManager = require("lua.AudioManager")
 
+-- Bob's posable rig (his wall slide, ground pound, curling into a ball —
+-- see lua/entities/player/Rendering.lua): each part of img/astronaut2.svg
+-- on its own, with its normal map, made by tools/bob-sprite-export.html.
+-- (His walking, standing and jumping come from sprite sheets instead: see
+-- lua/entities/player/Sprite.lua.)
 local CHARACTER_IMAGE_SOURCES = {
-  body = 'img/body.png',
-  head = 'img/head.png',
-  leftarm = 'img/leftarm.png',
-  rightarm = 'img/rightarm.png',
-  leftboot = 'img/leftboot.png',
-  rightboot = 'img/rightboot.png'
+  body = { 'img/bob-rig-body.png', 'img/bob-rig-body_normal.png' },
+  head = { 'img/bob-rig-head.png', 'img/bob-rig-head_normal.png' },
+  leftarm = { 'img/bob-rig-leftarm.png', 'img/bob-rig-leftarm_normal.png' },
+  rightarm = { 'img/bob-rig-rightarm.png', 'img/bob-rig-rightarm_normal.png' },
+  leftboot = { 'img/bob-rig-leftboot.png', 'img/bob-rig-leftboot_normal.png' },
+  rightboot = { 'img/bob-rig-rightboot.png', 'img/bob-rig-rightboot_normal.png' },
 }
 
 local function loadAssets(onComplete)
@@ -196,8 +201,16 @@ local function loadAssets(onComplete)
     img:setFilter("linear", "linear")
   end
 
+  -- (Each drawn far smaller than it is, so mipmapped; its normal map
+  -- under the same key in state.characterNormals.)
+  state.characterNormals = {}
   for key, src in pairs(CHARACTER_IMAGE_SOURCES) do
-    state.characterImages[key] = love.graphics.newImage(src)
+    for i, list in ipairs({ state.characterImages, state.characterNormals }) do
+      local img = love.graphics.newImage(src[i], { mipmaps = true })
+      img:setFilter("linear", "linear")
+      img:setMipmapFilter("linear")
+      list[key] = img
+    end
   end
 
   -- The compact single-boot rendering (maze/platform/death modes)

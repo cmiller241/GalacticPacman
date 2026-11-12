@@ -393,6 +393,14 @@ worldGen.cellIntersectsLandmark = function (col, row) {
   const x0 = col * worldGen.CELL_SIZE, y0 = row * worldGen.CELL_SIZE;
   const x1 = x0 + worldGen.CELL_SIZE, y1 = y0 + worldGen.CELL_SIZE;
   for (const p of state.planetoids) {
+    // (A landmark can keep whole cells clear too: its own and the ones
+    // within spawnExclusionCells of it — the Zuma planet, so nothing's
+    // made anywhere near its game. See ZumaPlanet.js.)
+    if (p.spawnExclusionCells) {
+      const pc = worldGen.cellCoordFor(p.pos.x, p.pos.y);
+      const n = p.spawnExclusionCells;
+      if (Math.abs(col - pc.col) <= n && Math.abs(row - pc.row) <= n) return true;
+    }
     if (!p.isSpawnExclusion) continue;
     let hw = p.halfWidth ?? p.radius, hh = p.halfHeight ?? p.radius;
     if ((p.rotationSpeed ?? 0) !== 0) {

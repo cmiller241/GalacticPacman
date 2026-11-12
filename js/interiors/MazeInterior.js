@@ -3,8 +3,10 @@
 // The maze inside the maze planet (see js/levels/MazePlanet.js): six square
 // maze areas, joined the way a cube's faces are. He plays it as a ball:
 // the planet's entry beam drops him in the middle of the front face
-// (onEnter), and the exit portal in the middle of the back face puts him
-// back on the planet's top (exitBall). While he's in here the camera
+// (onEnter). The exit portal in the middle of the back face holds him when
+// he rolls into it and offers the way out, like the beam offers the way
+// in: the interact button beams him back up onto the planet's top
+// (tryInteract), rolling away keeps him in. While he's in here the camera
 // frames the face he's on, whole (see cameraView and Camera.js). Port of
 // lua/interiors/MazeInterior.lua (tiles counted from 0 here) — see there
 // for how the cube's faces join and turn.
@@ -12,6 +14,7 @@
 import love from '../love/index.js';
 import state from '../state.js';
 import Vector2 from '../vector2.js';
+import InteractPrompt from '../ui/InteractPrompt.js';
 
 // #  wall      .  dot      o  big dot      S  the start      E  the exit
 // (space)  open, no dot.
@@ -170,8 +173,13 @@ const GLOW_WIDTH = 14;
 const COLOR_DOT = [1.00, 0.92, 0.70, 1];
 const DOT_RADIUS = 6;
 const BIG_DOT_RADIUS = 14;
-const COLOR_EXIT = [0.95, 0.35, 0.95];
-const EXIT_RADIUS = 26;
+// The exit portal: a swirling vortex (see drawExitPortal).
+const COLOR_EXIT = [0.95, 0.35, 0.95]; // also the transporter shimmer's, leaving
+const PORTAL_RADIUS = 64;
+const PORTAL_COLORS = [[0.95, 0.35, 0.95], [0.45, 0.55, 1.00], [0.35, 0.95, 0.95]];
+const PORTAL_ARMS = 5;
+const PORTAL_SPARKS = 28;
+const PROMPT_GAP = 30; // world units between the ball's top and the "press to leave" pill
 const POPUP_TICKS = 50;
 
 // Directions by arrow key, in the order they're checked when several are held.
@@ -350,6 +358,7 @@ class MazeInterior {
     player.vel.x = 0; player.vel.y = 0;
     this.resetView();
     this.scroll = null;
+    this.atExit = false; this.exitHold = false;
     this.col = this.startCol; this.row = this.startRow;
     [player.pos.x, player.pos.y] = this.tileCenter(this.col, this.row);
     player.prevPos = player.pos.clone();
@@ -358,19 +367,40 @@ class MazeInterior {
     this.wantX = 0; this.wantY = 0;
   }
 
-  // The exit: he stands back up on top of the planet, beside the entry
-  // beam (this.exitPosition, set by MazePlanet.js), or at the top-middle.
-  // The planet shows its front face again.
-  exitBall(player) {
-    player.inInterior = null;
-    player.vel.x = 0; player.vel.y = 0;
-    if (player.isBall) player.exitBallMode();
-    this.scroll = null;
-    this.resetView();
+  // Where leaving puts him: standing on top of the planet, beside the
+  // entry beam (this.exitPosition, set by MazePlanet.js), or at the
+  // top-middle. Returns [x, the planet's top].
+  outsideSpot() {
     const p = this.planetoid;
-    player.pos.x = this.exitPosition ? this.exitPosition.x : p.pos.x;
-    player.pos.y = p.pos.y - p.halfHeight - player.radius - 2;
+    return [this.exitPosition ? this.exitPosition.x : p.pos.x, p.pos.y - p.halfHeight];
+  }
+
+  // The interact button (see WorldObjects.interact) while he's sitting in
+  // the exit portal: he's beamed out, with the same transporter shimmer as
+  // the beams, and comes back standing on the planet's top.
+  tryInteract(player) {
+    if (!this.atExit || this.scroll || player.isTeleporting) return;
+    const [x, topY] = this.outsideSpot();
+    player.startTeleport({ color: COLOR_EXIT }, {
+      pos: new Vector2(x, topY),
+      angle: -Math.PI / 2,
+      color: COLOR_EXIT,
+      onArrive: (p) => this.arriveOutside(p),
+    });
+  }
+
+  // The moment the transporter puts him outside: standing, not a ball,
+  // out of the maze, and the planet showing its front face again.
+  arriveOutside(player) {
+    player.inInterior = null;
+    player.forceStandMode();
+    player.vel.x = 0; player.vel.y = 0;
+    const [x, topY] = this.outsideSpot();
+    player.pos.x = x;
+    player.pos.y = topY - player.radius - 2;
     player.prevPos = player.pos.clone();
+    this.atExit = false; this.exitHold = false; this.scroll = null;
+    this.resetView();
   }
 
   // (The jump button does nothing in here.)
@@ -394,11 +424,21 @@ class MazeInterior {
   // Called every frame he's in here, in place of gravity and collision.
   updateBall(player, ts) {
     this.updatePopups(ts);
+    // (Being beamed out: held still for it.)
+    if (player.isTeleporting) return;
     if (this.scroll) { this.updateScroll(player, ts); return; }
 
+    let held = false;
     for (const d of DIRECTIONS) {
-      if (state.keys[d.key]) { this.wantX = d.dx; this.wantY = d.dy; break; }
+      if (state.keys[d.key]) {
+        held = true;
+        // (Sitting in the exit, a direction still held from rolling in
+        // doesn't count: only one pressed after letting go.)
+        if (!this.exitHold) { this.wantX = d.dx; this.wantY = d.dy; }
+        break;
+      }
     }
+    if (!held) this.exitHold = false;
 
     // Back the way he came: at once.
     if (this.wantX === -this.dirX && this.wantY === -this.dirY && (this.dirX !== 0 || this.dirY !== 0)) {
@@ -421,7 +461,10 @@ class MazeInterior {
     for (let guard = 0; left > 0 && guard < 8; guard++) {
       if (this.dirX === 0 && this.dirY === 0) {
         // Standing still on a tile's middle: off as soon as there's a way.
-        if (this.canGo(this.wantX, this.wantY)) { this.dirX = this.wantX; this.dirY = this.wantY; } else break;
+        if (this.canGo(this.wantX, this.wantY)) {
+          this.dirX = this.wantX; this.dirY = this.wantY;
+          this.atExit = false;
+        } else break;
       }
       // Out of an edge opening: over to the next face.
       const nextCol = this.col + this.dirX, nextRow = this.row + this.dirY;
@@ -440,7 +483,11 @@ class MazeInterior {
         player.pos.x = tx; player.pos.y = ty;
         left -= dist;
         this.col = nextCol; this.row = nextRow;
-        if (this.arriveAt(player)) return;
+        if (this.arriveAt(player)) {
+          // (The exit: he stops in it.)
+          this.dirX = 0; this.dirY = 0;
+          break;
+        }
         // At a tile's middle: turn the way he wants if he can, else carry
         // on, else stop against the wall.
         if ((this.wantX !== this.dirX || this.wantY !== this.dirY) && this.canGo(this.wantX, this.wantY)) {
@@ -611,13 +658,16 @@ class MazeInterior {
     g.setLineWidth(1);
   }
 
-  // Reached the middle of a tile: picks up its dot, or leaves by the exit.
-  // Returns true when he's left.
+  // Reached the middle of a tile: picks up its dot, or, at the exit, stops
+  // him in it (returns true): it offers him the way out (see tryInteract),
+  // and holds him until he picks a direction again.
   arriveAt(player) {
     const face = this.face;
     const [fc, fr] = this.faceTile(this.col, this.row);
     if (face.name === this.exitFace && fc === this.exitCol && fr === this.exitRow) {
-      this.exitBall(player);
+      this.atExit = true;
+      this.exitHold = true;
+      this.wantX = 0; this.wantY = 0;
       return true;
     }
     const kind = face.dots[fr][fc];
@@ -673,21 +723,67 @@ class MazeInterior {
       }
     }
 
-    // The exit: a pulsing ring with a swirl of light inside.
     if (face.name === this.exitFace) {
-      const ex = (this.exitCol - MID) * TILE, ey = (this.exitRow - MID) * TILE;
-      const pulse = (Math.sin(t * 4) + 1) / 2;
-      g.setColor(COLOR_EXIT[0], COLOR_EXIT[1], COLOR_EXIT[2], 0.25 + 0.2 * pulse);
-      g.circle('fill', ex, ey, EXIT_RADIUS + 10 + pulse * 6);
-      g.setColor(COLOR_EXIT[0], COLOR_EXIT[1], COLOR_EXIT[2], 0.9);
-      g.setLineWidth(4);
-      g.circle('line', ex, ey, EXIT_RADIUS + pulse * 4);
-      for (let k = 0; k < 3; k++) {
-        const a = t * 3 + k * 2 * Math.PI / 3;
-        g.arc('line', 'open', ex, ey, EXIT_RADIUS * 0.6, a, a + 1.2);
-      }
-      g.setLineWidth(1);
+      this.drawExitPortal((this.exitCol - MID) * TILE, (this.exitRow - MID) * TILE, t);
     }
+    g.pop();
+  }
+
+  // The exit portal at (x, y): a vortex of light, all added on (additive),
+  // turning: a soft violet glow, spiral arms sweeping round, two dashed
+  // rings turning opposite ways, sparks falling in toward a pulsing white
+  // core. Brighter while he's sitting in it.
+  drawExitPortal(x, y, t) {
+    const g = love.graphics;
+    const boost = this.atExit ? 1.3 : 1;
+    const R = PORTAL_RADIUS * (1 + 0.04 * Math.sin(t * 3));
+    g.push('all');
+    g.setBlendMode('add');
+
+    for (let i = 6; i >= 1; i--) {
+      g.setColor(0.6, 0.25, 0.9, 0.06 * boost);
+      g.circle('fill', x, y, R * (0.4 + 0.9 * i / 6));
+    }
+
+    g.setLineWidth(3);
+    for (let arm = 0; arm < PORTAL_ARMS; arm++) {
+      const points = [];
+      const base = t * 2.2 + arm * 2 * Math.PI / PORTAL_ARMS;
+      for (let k = 0; k <= 16; k++) {
+        const f = k / 16;
+        const r = R * (0.12 + 0.88 * f), a = base + f * 3.2; // (swept back as it goes out)
+        points.push(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      }
+      const c = PORTAL_COLORS[arm % PORTAL_COLORS.length];
+      g.setColor(c[0], c[1], c[2], 0.55 * boost);
+      g.line(points);
+    }
+
+    g.setLineWidth(2.5);
+    for (let ring = 1; ring <= 2; ring++) {
+      const r = R * (ring === 1 ? 1 : 0.72);
+      const spin = (ring === 1 ? 1 : -1.6) * t;
+      const c = PORTAL_COLORS[ring === 1 ? 0 : 2];
+      g.setColor(c[0], c[1], c[2], 0.75 * boost);
+      for (let d = 0; d < 8; d++) {
+        const a = spin + d * Math.PI / 4;
+        g.arc('line', 'open', x, y, r, a, a + Math.PI / 7);
+      }
+    }
+
+    for (let k = 1; k <= PORTAL_SPARKS; k++) {
+      const phase = (t * 0.35 + k * 0.618) % 1; // (0 at the rim, 1 at the core)
+      const r = R * 1.15 * (1 - phase);
+      const a = k * 2.39996 + phase * 5 + t * 0.8;
+      g.setColor(1, 0.85, 1, 0.9 * phase * boost);
+      g.circle('fill', x + Math.cos(a) * r, y + Math.sin(a) * r, 1.5 + 2.5 * phase);
+    }
+
+    const pulse = (Math.sin(t * 5) + 1) / 2;
+    g.setColor(1, 0.6, 1, 0.5 * boost);
+    g.circle('fill', x, y, R * 0.28 + pulse * 4);
+    g.setColor(1, 1, 1, 0.85);
+    g.circle('fill', x, y, R * 0.12 + pulse * 2);
     g.pop();
   }
 
@@ -712,6 +808,12 @@ class MazeInterior {
       g.rectangle('fill', p.pos.x - p.halfWidth, p.pos.y - p.halfHeight,
         p.halfWidth * 2, p.halfHeight * 2, p.cornerRadius, p.cornerRadius);
       this.drawFace(this.face, this.m, p.pos.x, p.pos.y, t);
+    }
+
+    // Sitting in the exit: the way out, offered like the beam offers the way in.
+    const player = state.player;
+    if (this.atExit && !s && player && player.inInterior === this && !player.isTeleporting) {
+      InteractPrompt.draw(player.pos.x, player.pos.y - player.radius - PROMPT_GAP, 'leave');
     }
 
     for (const pop of this.popups) {

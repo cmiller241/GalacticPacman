@@ -51,6 +51,8 @@ let lastStartPressed = false;
 let lastMenuUp = false;
 let lastMenuDown = false;
 const MENU_STICK_THRESHOLD = 0.5;
+// A textbox's question (see WorldObjects.moveChoice): the D-pad or stick held left/right last frame.
+let lastChoiceLeft = false, lastChoiceRight = false;
 let lastTrianglePressed = false;
 
 let gamepadHeldLeft = false;
@@ -85,6 +87,7 @@ function pollGamepad(dt) {
     state.gamepadRunHeld = isShiftHeld();
     state.gamepadIsActiveDevice = false;
     state.gamepadPullHeld = false;
+    state.gamepadMoveX = 0; state.gamepadMoveY = 0;
     return;
   }
   const axis = (name) => gp.getGamepadAxis(name) ?? 0;
@@ -144,6 +147,9 @@ function pollGamepad(dt) {
 
   // Left stick: walk left/right.
   const leftX = axis('leftx');
+  // (Both axes as they are, for flying Bob's spaceship by how far the stick
+  // is pushed — see ShipInterior.fly.)
+  state.gamepadMoveX = leftX; state.gamepadMoveY = axis('lefty');
   if (leftX < -STICK_DEADZONE) {
     state.keys['ArrowLeft'] = true;
     gamepadHeldLeft = true;
@@ -196,8 +202,19 @@ function pollGamepad(dt) {
   // D-pad left/right: cycle weapon mode.
   const dpadLeftPressed = gp.isGamepadDown(BUTTON_DPAD_LEFT);
   const dpadRightPressed = gp.isGamepadDown(BUTTON_DPAD_RIGHT);
-  if (dpadRightPressed && !lastDpadRightPressed && !riding) WeaponModes.cycle(1);
-  if (dpadLeftPressed && !lastDpadLeftPressed && !riding) WeaponModes.cycle(-1);
+  // (While a textbox is asking a question, the D-pad or the left stick
+  // moves its cursor instead: see WorldObjects.moveChoice.)
+  const stickX = gp.getGamepadAxis('leftx') ?? 0;
+  const choiceLeft = dpadLeftPressed || stickX < -MENU_STICK_THRESHOLD;
+  const choiceRight = dpadRightPressed || stickX > MENU_STICK_THRESHOLD;
+  if (state.dialogueActive) {
+    if (choiceLeft && !lastChoiceLeft) WorldObjects.moveChoice(-1);
+    if (choiceRight && !lastChoiceRight) WorldObjects.moveChoice(1);
+  } else {
+    if (dpadRightPressed && !lastDpadRightPressed && !riding) WeaponModes.cycle(1);
+    if (dpadLeftPressed && !lastDpadLeftPressed && !riding) WeaponModes.cycle(-1);
+  }
+  lastChoiceLeft = choiceLeft; lastChoiceRight = choiceRight;
   lastDpadLeftPressed = dpadLeftPressed; lastDpadRightPressed = dpadRightPressed;
 
   // X (Cross): jump — or the plunger/flippers in the pinball planet.

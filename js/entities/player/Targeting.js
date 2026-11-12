@@ -21,6 +21,7 @@ class Targeting {
   trySelectPullTarget(explicitTarget) {
     if (this.mode !== 'space' || this.isBall || this.isTeleporting || this.isDying) return;
     if (this.isCannonRiding()) return;
+    if (this.inInterior) return; // (nothing to pull to from inside the spaceship)
 
     let best = null;
     if (explicitTarget) {
@@ -123,11 +124,23 @@ class Targeting {
   // both start here. Falls back to his own position before he has ever
   // been drawn. Returns [x, y].
   getMuzzlePosition() {
-    // Exact muzzle pixel within leftarm.png (602x256).
-    const MUZZLE_PX_X = 530, MUZZLE_PX_Y = 120;
+    // (Drawn as the posable rig — see Rendering.js — shots come from the end
+    // of his left arm's fist: this pixel of img/bob-rig-leftarm.png.)
+    const MUZZLE_PX_X = 476, MUZZLE_PX_Y = 139.8;
 
     let originX, originY;
-    if (this.aimShoulderPos) {
+    if (this.aimShoulderPos && this.spriteMuzzleX != null) {
+      // Drawn from the sprite sheets (see Rendering.js's drawSprite): the
+      // muzzle's offset from the shoulder was worked out as he was drawn.
+      // (The shoulder carried along by his move since, as below.)
+      let sx = this.aimShoulderPos.x, sy = this.aimShoulderPos.y;
+      if (this.aimAnchorPos) {
+        sx += this.pos.x - this.aimAnchorPos.x;
+        sy += this.pos.y - this.aimAnchorPos.y;
+      }
+      originX = sx + this.spriteMuzzleX;
+      originY = sy + this.spriteMuzzleY;
+    } else if (this.aimShoulderPos) {
       const cfg = this.bodyPartsConfig;
       const s = this.bodyScale;
       const dirSign = this.facingDirection < 0 ? -1 : 1;
@@ -172,6 +185,7 @@ class Targeting {
     if (this.isBall || this.isTeleporting || this.isDying) return;
     if (this.isCannonRiding()) return;
     if (state.vatsActive) return;
+    if (this.inInterior) return; // (no shooting inside the spaceship: the shots would fly out through its walls)
 
     const now = love.timer.getTime();
     this.lastShotTime = this.lastShotTime ?? 0;
@@ -196,6 +210,7 @@ class Targeting {
     if (this.isBall || this.isTeleporting || this.isDying) return;
     if (this.isCannonRiding()) return;
     if (state.vatsActive) return;
+    if (this.inInterior) return; // (see shootFireball)
 
     const now = love.timer.getTime();
     if (now - (this.lastShotTime ?? 0) < ICE_FIRE_COOLDOWN) return;

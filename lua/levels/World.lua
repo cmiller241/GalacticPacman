@@ -33,6 +33,9 @@ local MiningPlanet = require("lua.levels.MiningPlanet")
 local DomeInterior = require("lua.levels.DomeInterior")
 local Expressway = require("lua.levels.Expressway")
 local MazePlanet = require("lua.levels.MazePlanet")
+local Spaceship = require("lua.levels.Spaceship")
+local TetrisPlanet = require("lua.levels.TetrisPlanet")
+local ZumaPlanet = require("lua.levels.ZumaPlanet")
 
 local World = {}
 
@@ -41,9 +44,12 @@ World.SHOW = {
   pinballPlanet = true,   -- the pinball planet and its entry beam
   crackedPlanet = true,
   tiledPlanet = true,     -- needs crackedPlanet (it's placed below it)
-  expressway = false,     -- the expressway and its entries/exits
+  expressway = true,     -- the expressway and its entries/exits
   missileOutposts = true,
   mazePlanet = true,      -- the maze planet and its entry beam
+  spaceship = true,       -- Bob's spaceship and its two beams
+  tetrisPlanet = true,    -- the Tetris planet and its two beams
+  zumaPlanet = true,      -- the Zuma planet and its two beams
 }
 
 World.HOME_CELL_COL = SkyDome.HOME_CELL_COL
@@ -106,6 +112,9 @@ function World.build()
   local expresswayEntry = SHOW.expressway and Expressway.build() or nil
   if SHOW.missileOutposts then buildMissileOutposts() end
   if SHOW.mazePlanet then MazePlanet.addEntryBeam(MazePlanet.build()) end
+  if SHOW.spaceship then Spaceship.addBeams(Spaceship.build()) end
+  if SHOW.tetrisPlanet then TetrisPlanet.addBeams(TetrisPlanet.build()) end
+  if SHOW.zumaPlanet then ZumaPlanet.addBeams(ZumaPlanet.build()) end
 
   return { dome = dome, expresswayEntry = expresswayEntry }
 end

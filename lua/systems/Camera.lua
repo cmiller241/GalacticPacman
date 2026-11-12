@@ -18,6 +18,9 @@ local Camera = {}
 Camera.ZOOM_MIN = 0.6
 Camera.ZOOM_MAX = 2.5
 local ZOOM_MIN, ZOOM_MAX = Camera.ZOOM_MIN, Camera.ZOOM_MAX
+-- An interior that frames itself can ask to see more than the player can
+-- zoom out to on his own (the Tetris planet's whole field, the ship flying).
+local FRAMED_ZOOM_MIN = 0.2
 local ZOOM_STEP_PER_FRAME = 0.02
 -- Zoom easing (zoom windows, cannon shots): fraction of the remaining
 -- distance to the target zoom covered each frame, and how close counts
@@ -162,7 +165,7 @@ function Camera.update(dt)
   end
 
   if state.zoomTarget and not CameraDirector.isActive() then
-    local target = math.min(ZOOM_MAX, math.max(ZOOM_MIN, state.zoomTarget))
+    local target = math.min(ZOOM_MAX, math.max(framing and FRAMED_ZOOM_MIN or ZOOM_MIN, state.zoomTarget))
     state.zoom = state.zoom + (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME
     if math.abs(target - state.zoom) < ZOOM_WINDOW_SNAP then
       state.zoom = target

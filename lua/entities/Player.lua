@@ -293,17 +293,20 @@ function Player.new(x, y)
   self.armSwingScale = 0.5
   self.maxAimFromForward = (90 + 5) * math.pi / 180
   self.headLookScale = 0.6
-  self.headPivotFraction = 0.9
+  -- (The joints below and this are from tools/bob-sprite-export.html,
+  -- for the rig's images, img/bob-rig-*.png; the offsets are where the
+  -- old rig put each part, which every pose is written against.)
+  self.headPivotFraction = 0.8752
   self.blasterMuzzleLength = 300
   self.blasterAngleOffset = -5 * math.pi / 180
 
   self.bodyPartsConfig = {
     bodyY = 115,
     headY = -150,
-    leftArmX = 136, leftArmY = 9, leftArmJointX = 73, leftArmJointY = 199,
-    rightArmX = -186, rightArmY = -14, rightArmJointX = 119, rightArmJointY = 40,
-    leftBootX = 111, leftBootY = 241, leftBootJointX = 83, leftBootJointY = 15,
-    rightBootX = -142, rightBootY = 241, rightBootJointX = 77, rightBootJointY = 15
+    leftArmX = 136, leftArmY = 9, leftArmJointX = 57, leftArmJointY = 139.8,
+    rightArmX = -186, rightArmY = -14, rightArmJointX = 146.5, rightArmJointY = 63.1,
+    leftBootX = 111, leftBootY = 241, leftBootJointX = 119.7, leftBootJointY = 51.1,
+    rightBootX = -142, rightBootY = 241, rightBootJointX = 76.1, rightBootJointY = 51.1
   }
 
   -- How far above self.pos (world units) the very TOP of his visual
@@ -378,6 +381,7 @@ function Player:enterBallMode()
   if self.isBall or self.morphState or state.dialogueActive or self.isTeleporting or self.isDying then return end
   if self:isCannonRiding() then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
+  if self.inInterior then return end -- (already a ball in the maze and on the pinball table; on his feet in the spaceship, where Down drops through a floor)
   self.morphState = "toBall"
   self.morphElapsed = 0
   if state.audioManager then state.audioManager:playMorphBall() end
@@ -396,6 +400,17 @@ end
 function Player:forceBallMode()
   self.isBall = true
   self.radius = self.baseRadius * BALL_RADIUS_MULTIPLIER
+  self.morphState = nil
+  self.morphElapsed = 0
+end
+
+-- Instantly stands back up — the other way round from forceBallMode, for
+-- the one case where he should arrive somewhere already standing: beamed
+-- out of the maze (see MazeInterior:arriveOutside), from inside the
+-- teleport sequence, which the animated exitBallMode below won't run in.
+function Player:forceStandMode()
+  self.isBall = false
+  self.radius = self.baseRadius
   self.morphState = nil
   self.morphElapsed = 0
 end

@@ -243,6 +243,13 @@ local function attachInputHandlers()
       state.player:exitBallMode()
     end
 
+    -- The arrows move the cursor while a textbox is asking a question
+    -- (see WorldObjects.moveChoice).
+    if state.dialogueActive and not isrepeat then
+      if key == 'ArrowLeft' or key == 'ArrowUp' then WorldObjects.moveChoice(-1) end
+      if key == 'ArrowRight' or key == 'ArrowDown' then WorldObjects.moveChoice(1) end
+    end
+
     -- Interact: NPCs, levers, cranks, signs, beams (see
     -- lua/systems/WorldObjects.lua's WorldObjects.interact).
     if key == 'Enter' and not riding then

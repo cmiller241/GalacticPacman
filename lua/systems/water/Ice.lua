@@ -28,6 +28,8 @@ local planetGridAt = PlanetGrids.planetGridAt
 local Effects = require("lua.systems.water.Effects")
 local spawnSplash = Effects.spawnSplash
 local spawnSteam = Effects.spawnSteam
+local Oceans = require("lua.systems.water.Oceans")
+local depthOf = Oceans.depthOf
 local Obsidian = require("lua.systems.water.Obsidian")
 local removeFrom = Obsidian.removeFrom
 local planetTileCells = Obsidian.planetTileCells
@@ -53,6 +55,13 @@ local WaterSystem = {}
 --     so the lava turns to obsidian (see "Lava meeting water").
 --   * into an Ooomba: it's frozen in an ice cube (Ice.encase) — stock
 --     still and harmless, and on the level's terrain, a block to stand on.
+--   * into a round planet's water layer (a water planet's, or water sprayed
+--     onto any round planetoid — see Oceans.lua): an ice floe freezes there
+--     (Ice.freezeOcean), out of that much of the water — right where the
+--     bolt is, deep down if that's where it was shot — and floats up to the
+--     surface, to ride there a quarter of it out, bobbing. It's a raft: a walkable,
+--     slippery surface (in state.planetoids, like a level block's top) for
+--     as long as it lasts. One spot holds one floe.
 -- Ice floats: a block sunk in water rises a cell at a time (the water
 -- flowing in under it) until it's riding at the surface, a quarter of it
 -- out; with nothing at all under it, it drops. (On a dirt planet, a whole tile at a time — its tiles are a
@@ -64,6 +73,9 @@ local WaterSystem = {}
 --   kind = "level": c0, r0 (its top-left cell), x0, y0, size, wall;
 --   kind = "planet": g (the planet's grid), planet, ring, j (its tile);
 --   kind = "ooomba": o (the frozen Ooomba), size, and on the level a wall;
+--   kind = "ocean": owner (the planetoid whose water it's in), angle (where
+--     round it, out from its middle), phase (its bob), surface and wall (see
+--     Ice.freezeOcean), and top (how far out its top is, as of this frame);
 -- and water (cells' worth it'll melt back into).
 
 Ice.TUNING = {
@@ -75,6 +87,17 @@ Ice.TUNING = {
   CUBE_MARGIN = 16,      -- world units an Ooomba's cube is bigger than it
   CUBE_WATER = 2,        -- cells' worth of water a melted cube leaves
   ALPHA = 0.92,          -- how solid ice looks (its art's own see-through on top)
+  -- A floe on a planet's water: how many tiles wide it is (a tile thick),
+  -- how much of it floats above the water, and its bob (world units, and
+  -- radians a second).
+  FLOE_TILES = 2,
+  FLOE_ABOVE = 0.25,
+  FLOE_BOB = 3,
+  FLOE_BOB_SPEED = 1.6,
+  -- Floating up from where it froze: how fast it speeds up (world units a
+  -- second, each second) and its top speed.
+  FLOE_RISE_ACCEL = 140,
+  FLOE_RISE_MAX = 240,
 }
 
 do
@@ -260,6 +283,13 @@ function Ice.melt(e)
     local a = ring.offset + (e.j - 0.5) * ring.step + e.planet.rotationAngle
     upX, upY = math.cos(a), math.sin(a)
     cx, cy = e.planet.pos.x + upX * ring.mid, e.planet.pos.y + upY * ring.mid
+  elseif e.kind == "ocean" then
+    -- (Back into the water it froze out of, if that's still there.)
+    local o = shared.oceans[e.owner]
+    if o then o.volume = o.volume + e.water end
+    upX, upY = math.cos(e.angle), math.sin(e.angle)
+    local r = e.top or e.owner.radius
+    cx, cy = e.owner.pos.x + upX * r, e.owner.pos.y + upY * r
   else
     local o = e.o
     o.frozen, o.iceBlock = false, nil
@@ -433,9 +463,127 @@ function Ice.update()
         Ice.stepPlanetBlock(e)
       elseif e.kind == "ooomba" and e.o.isSquashing then
         Ice.melt(e)
+      elseif e.kind == "ocean" then
+        -- (Riding its water as it rises and falls; gone with it.)
+        if shared.oceans[e.owner] then Ice.placeFloe(e, (state.timeScale or 1) / 60) else Ice.melt(e) end
       end
     end
   end
+end
+
+----------------------------------------------------------------------
+-- Ice floes on a planet's water
+----------------------------------------------------------------------
+
+-- A floe's size: FLOE_TILES tiles wide, a tile thick.
+local function floeSize()
+  local tile = Ice.TUNING.SIZE * CELL
+  return Ice.TUNING.FLOE_TILES * tile, tile
+end
+
+-- Where floe e's top is when it's floating: FLOE_ABOVE of it out of its
+-- water, bobbing (never down into the planet itself, if the water's
+-- shallow).
+local function floatingTop(e)
+  local p, o = e.owner, shared.oceans[e.owner]
+  local _, thick = floeSize()
+  local surface = p.radius + depthOf(p, o.volume)
+  local bob = math.sin(shared.age * Ice.TUNING.FLOE_BOB_SPEED + e.phase) * Ice.TUNING.FLOE_BOB
+  return math.max(p.radius + thick, surface + thick * Ice.TUNING.FLOE_ABOVE + bob)
+end
+
+-- Puts floe e where it is now (dt: seconds since it was last put): rising
+-- from wherever it froze, faster and faster (up to FLOE_RISE_MAX), till
+-- it's afloat; then riding its water's surface. Its walkable top is a
+-- straight surface across it, square to the way out from the planet there.
+function Ice.placeFloe(e, dt)
+  local p = e.owner
+  local width = floeSize()
+  local float = floatingTop(e)
+  if not e.afloat and e.top < float then
+    e.riseSpeed = math.min(Ice.TUNING.FLOE_RISE_MAX, e.riseSpeed + Ice.TUNING.FLOE_RISE_ACCEL * dt)
+    e.top = math.min(float, e.top + e.riseSpeed * dt)
+  else
+    e.afloat, e.top = true, float
+  end
+  local top = e.top
+  local ux, uy = math.cos(e.angle), math.sin(e.angle)
+  local tx, ty = -uy, ux -- (along it: its open side is then out from the planet)
+  local cx, cy = p.pos.x + ux * top, p.pos.y + uy * top
+  local half = width / 2
+  e.surface:moveTo(cx - tx * half, cy - ty * half, cx + tx * half, cy + ty * half)
+end
+
+-- An ice bolt's reached planetoid p's water layer (o) at (x, y): a floe
+-- freezes there, out of that much of its water, and starts floating up —
+-- unless the water's too shallow to float one, or there's a floe that way
+-- already. Returns whether it froze one.
+function Ice.freezeOcean(p, o, x, y)
+  local width, thick = floeSize()
+  local depth = depthOf(p, o.volume)
+  local angle = math.atan2(y - p.pos.y, x - p.pos.x)
+  local surfaceRadius = p.radius + depth
+  if depth < thick then
+    Ice.iceBurst(p.pos.x + math.cos(angle) * surfaceRadius, p.pos.y + math.sin(angle) * surfaceRadius, 10)
+    return false
+  end
+  for _, other in ipairs(Ice.blocks) do
+    if other.kind == "ocean" and other.owner == p then
+      local apart = math.abs((angle - other.angle + math.pi) % (2 * math.pi) - math.pi)
+      if apart * surfaceRadius < width then return false end
+    end
+  end
+
+  local water = width * thick / (CELL * CELL)
+  o.volume = math.max(0, o.volume - water)
+  -- Its top: a surface he lands on and walks along (turned to the
+  -- planet, not kept upright like level ground), slippery, and melted by
+  -- a fireball that hits it (see WaterSystem.fireHitsWall).
+  local TiledTerrain = require("lua.world.TiledTerrain")
+  local s = TiledTerrain.newMovingSurface(0, 0, 1, 0)
+  s.forceUprightJump = false
+  s.isIce = true
+  local e = { kind = "ocean", owner = p, angle = angle, water = water, phase = math.random() * math.pi * 2, surface = s,
+    riseSpeed = 0, afloat = false }
+  -- (Its middle where it froze — as far down as that is, but not into the
+  -- planet, nor above where it'll float.)
+  local hitR = math.sqrt((x - p.pos.x) ^ 2 + (y - p.pos.y) ^ 2)
+  e.top = math.min(floatingTop(e), math.max(p.radius + thick, hitR + thick / 2))
+  e.wall = { surface = s, ice = e }
+  s.blockWall = e.wall
+  s.draw = function() Ice.drawFloe(e) end
+  -- (Placed twice: the first time leaves it looking as if it had just
+  -- moved there, which a landing check would take for motion.)
+  Ice.placeFloe(e, 0)
+  Ice.placeFloe(e, 0)
+  state.planetoids = state.planetoids or {}
+  table.insert(state.planetoids, s)
+  Ice.blocks[#Ice.blocks + 1] = e
+  Ice.iceBurst(x, y, 22)
+  return true
+end
+
+-- A floe: FLOE_TILES of the ice tile side by side, turned to the planet
+-- (drawn with the planetoids, under the water, so what's under its
+-- surface looks under it).
+function Ice.drawFloe(e)
+  if not e.top then return end
+  local width, thick = floeSize()
+  local image = Ice.getImage()
+  local p = e.owner
+  local ux, uy = math.cos(e.angle), math.sin(e.angle)
+  local tx, ty = -uy, ux
+  local mid = e.top - thick / 2
+  local n = Ice.TUNING.FLOE_TILES
+  local sx, sy = thick / image:getWidth(), thick / image:getHeight()
+  love.graphics.setColor(1, 1, 1, Ice.TUNING.ALPHA)
+  for k = 1, n do
+    local along = (k - 0.5) * thick - width / 2
+    local x = p.pos.x + ux * mid + tx * along
+    local y = p.pos.y + uy * mid + ty * along
+    love.graphics.draw(image, x, y, e.angle + math.pi / 2, sx, sy, image:getWidth() / 2, image:getHeight() / 2)
+  end
+  love.graphics.setColor(1, 1, 1, 1)
 end
 
 -- Ice bolt b (see lua/entities/IceBolt.lua) reaching water or lava this
@@ -451,6 +599,23 @@ function WaterSystem.iceBoltHit(b)
   local steps = math.max(1, math.ceil(dist / (CELL * 0.5)))
   for s = 0, steps do
     local x, y = x0 + (x1 - x0) * s / steps, y0 + (y1 - y0) * s / steps
+    -- A round planet's water layer: a floe freezes there (if there's room
+    -- for one — the bolt's spent either way).
+    for p, o in pairs(shared.oceans) do
+      if not p.isRoundedRect then
+        local dx, dy = x - p.pos.x, y - p.pos.y
+        if math.sqrt(dx * dx + dy * dy) - p.radius < depthOf(p, o.volume) then
+          -- (Half a floe on along the bolt's way: shot from under water, it
+          -- forms just past the blaster, not round it.)
+          local speed = math.sqrt(b.vel.x * b.vel.x + b.vel.y * b.vel.y)
+          local ahead = Ice.TUNING.SIZE * CELL * 0.6
+          local fx, fy = x, y
+          if speed > 0 then fx, fy = x + b.vel.x / speed * ahead, y + b.vel.y / speed * ahead end
+          Ice.freezeOcean(p, o, fx, fy)
+          return true
+        end
+      end
+    end
     local pg = planetGridAt(x, y)
     if pg then
       local c, r = planetCellOf(pg, x, y)

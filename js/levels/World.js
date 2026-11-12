@@ -37,6 +37,9 @@ import MiningPlanet from './MiningPlanet.js';
 import DomeInterior from './DomeInterior.js';
 import Expressway from './Expressway.js';
 import MazePlanet from './MazePlanet.js';
+import Spaceship from './Spaceship.js';
+import TetrisPlanet from './TetrisPlanet.js';
+import ZumaPlanet from './ZumaPlanet.js';
 
 const World = {};
 
@@ -48,6 +51,9 @@ World.SHOW = {
   expressway: true,      // the expressway and its entries/exits
   missileOutposts: true,
   mazePlanet: true,      // the maze planet and its entry beam
+  spaceship: true,       // Bob's spaceship and its two beams
+  tetrisPlanet: true,    // the Tetris planet and its two beams
+  zumaPlanet: true,      // the Zuma planet and its two beams
 };
 
 World.HOME_CELL_COL = SkyDome.HOME_CELL_COL;
@@ -107,6 +113,9 @@ World.build = function () {
   const expresswayEntry = SHOW.expressway ? Expressway.build() : null;
   if (SHOW.missileOutposts) buildMissileOutposts();
   if (SHOW.mazePlanet) MazePlanet.addEntryBeam(MazePlanet.build());
+  if (SHOW.spaceship) Spaceship.addBeams(Spaceship.build());
+  if (SHOW.tetrisPlanet) TetrisPlanet.addBeams(TetrisPlanet.build());
+  if (SHOW.zumaPlanet) ZumaPlanet.addBeams(ZumaPlanet.build());
 
   return { dome, expresswayEntry };
 };

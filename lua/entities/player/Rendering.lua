@@ -13,12 +13,24 @@ local TargetLock = require("lua.systems.TargetLock")
 local WaterSystem = require("lua.systems.WaterSystem")
 local PortalGun = require("lua.systems.PortalGun")
 local Tuning = require("lua.entities.player.Tuning")
+local Sprite = require("lua.entities.player.Sprite")
 
 local Player = {}
 
 local BALL_MORPH_SEGMENT_TICKS = Tuning.BALL_MORPH_SEGMENT_TICKS
 local TELEPORT_OUT_TICKS = Tuning.TELEPORT_OUT_TICKS
 local TELEPORT_IN_TICKS = Tuning.TELEPORT_IN_TICKS
+
+-- The rig's left arm (img/bob-rig-leftarm.png) points straight ahead as
+-- drawn — the old left arm was the blaster arm, and the poses turn it from
+-- there — so hanging at his side, it's turned this far (radians; from
+-- tools/bob-sprite-export.html).
+local LEFT_ARM_HANG = 1.5731
+
+-- How quickly his eyes move to where he's aiming, or back to looking
+-- ahead (see drawSprite): the share of the way they've still to go that's
+-- left after each tick.
+local EYE_EASE = 0.75
 
 -- How long, once the door-opening intro ends (state.introLocked flips
 -- false), the rigid intro pose (arms/head — see drawFullBody's own
@@ -145,6 +157,17 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
   local shoulderX = originPos.x + wx * s
   local shoulderY = originPos.y + wy * s
 
+  return self:worldAngleToLocalRotation(self:aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign), orientation, dirSign)
+end
+
+-- Where his blaster arm, turning round (shoulderX, shoulderY), should
+-- point: at the locked target, the pull target, the right stick's aim or
+-- the mouse (or straight ahead, on a gamepad with nothing to aim at),
+-- no further round from straight ahead than maxAimFromForward unless
+-- something's locked. Returns that as a world angle, and keeps it (and
+-- the shoulder) for the muzzle and the head (see getMuzzlePosition and
+-- computeHeadLookTilt).
+function Player:aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign)
   local forwardAngle = dirSign > 0 and orientation or (orientation + math.pi)
 
   -- Re-checked every frame — the moment a lock stops being valid
@@ -211,7 +234,7 @@ function Player:computeLeftArmAimAngle(orientation, dirSign, originPos)
   self.aimRelativeAngle = relative
   self.aimAnchorPos = self.pos:clone()
 
-  return self:worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign)
+  return clampedTargetAngle
 end
 
 function Player:computeHeadLookTilt(orientation, dirSign)
@@ -223,6 +246,20 @@ end
 ------------------------------------------------------------------
 -- Drawing
 ------------------------------------------------------------------
+
+-- Draws one of the rig's images (state.characterImages — the same
+-- arguments love.graphics.draw takes after the image), lit by the sun
+-- from its normal map (state.characterNormals), the same lighting the
+-- sprite gets (see Sprite.lightHere).
+function Player:drawRigImage(img, ...)
+  local normal = nil
+  for key, image in pairs(state.characterImages or {}) do
+    if image == img then normal = state.characterNormals and state.characterNormals[key] break end
+  end
+  local lit = normal and Sprite.lightHere(self.pos.x, self.pos.y, normal)
+  love.graphics.draw(img, ...)
+  if lit then love.graphics.setShader() end
+end
 
 function Player:drawLimb(img, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal)
   if not img then return end
@@ -237,7 +274,7 @@ function Player:drawLimb(img, offsetX, offsetY, jointX, jointY, angle, orientati
   if flipHorizontal then
     love.graphics.scale(-1, 1)
   end
-  love.graphics.draw(img, -jointX * s, -jointY * s, 0, s, s)
+  self:drawRigImage(img, -jointX * s, -jointY * s, 0, s, s)
   love.graphics.pop()
 end
 
@@ -279,7 +316,7 @@ function Player:drawWallSlidePose(orientation, originPos)
     love.graphics.push()
     love.graphics.translate(originPos.x, originPos.y)
     love.graphics.rotate(orientation)
-    love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s)
+    self:drawRigImage(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s)
     love.graphics.pop()
   end
 
@@ -293,7 +330,7 @@ function Player:drawWallSlidePose(orientation, originPos)
     love.graphics.push()
     love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s)
     love.graphics.rotate(orientation + pose.headAngle)
-    love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s)
+    self:drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s)
     love.graphics.pop()
   end
 
@@ -311,9 +348,10 @@ end
 -- happened to be playing the instant the transition began, same
 -- "just cut to a fixed pose" convention WALL_SLIDE_POSE above already
 -- uses rather than blending from arbitrary live state.
+-- (His left arm hanging: see LEFT_ARM_HANG.)
 local BALL_MORPH_STANDING_POSE = {
   leftBootX = 111,   leftBootY = 241, leftBootAngle = 0,
-  leftArmX  = 136,   leftArmY  = 9,   leftArmAngle  = 0,
+  leftArmX  = 136,   leftArmY  = 9,   leftArmAngle  = LEFT_ARM_HANG,
   bodyY = 115,
   rightBootX = -142, rightBootY = 241, rightBootAngle = 0,
   rightArmX  = -186, rightArmY  = -14, rightArmAngle  = 0,
@@ -450,7 +488,7 @@ function Player:drawBallMorphPose(orientation, originPos, pose)
     love.graphics.push()
     love.graphics.translate(originPos.x, originPos.y)
     love.graphics.rotate(orientation)
-    love.graphics.draw(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s)
+    self:drawRigImage(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s)
     love.graphics.pop()
   end
 
@@ -465,7 +503,7 @@ function Player:drawBallMorphPose(orientation, originPos, pose)
     love.graphics.push()
     love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s)
     love.graphics.rotate(orientation + pose.headAngle)
-    love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s)
+    self:drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s)
     love.graphics.pop()
   end
 end
@@ -610,7 +648,7 @@ function Player:drawFullBody(orientation, originPos)
     local swayAngle = (self.onSurface and self.isWalking)
       and (walkAngle * self.armSwingScale)
       or (math.sin(love.timer.getTime() * 1.5) * 0.15)
-    leftArmAngle = swayAngle
+    leftArmAngle = LEFT_ARM_HANG + swayAngle
     rightArmAngle = swayAngle
   else
     leftArmAngle = aimAngle
@@ -681,7 +719,7 @@ function Player:drawFullBody(orientation, originPos)
     love.graphics.push()
     love.graphics.translate(originPos.x, originPos.y)
     love.graphics.rotate(orientation)
-    love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s)
+    self:drawRigImage(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s)
     love.graphics.pop()
   end
 
@@ -701,7 +739,7 @@ function Player:drawFullBody(orientation, originPos)
     love.graphics.push()
     love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s)
     love.graphics.rotate(orientation + headTilt)
-    love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s)
+    self:drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s)
     love.graphics.pop()
   end
 end
@@ -909,8 +947,14 @@ function Player:draw()
     if phase ~= 0 then return end
   end
 
-  -- Sun shading on every piece of the rig — see getBodyShadingShader.
+  -- Sun shading — see getBodyShadingShader — for the ball. (Standing, the
+  -- sprite and the rig's parts light themselves, from their normal maps:
+  -- see drawSprite and drawRigImage.)
   local function drawShaded()
+    if self.morphState or not self.isBall then
+      self:drawRig()
+      return
+    end
     local shadingShader = self:applyBodyShading()
     self:drawRig()
     if shadingShader then love.graphics.setShader() end
@@ -964,8 +1008,24 @@ function Player:drawRig()
   local downAngle = math.atan2(downDir.y, downDir.x)
   local orientation = downAngle - math.pi / 2
 
+  -- The posable rig is built at the old rig's size: drawn bigger, round
+  -- his soles, to match the sprite (see Sprite.RIG_SCALE). Curling into a
+  -- ball, it shrinks back as he goes (the ball's its own size).
+  local function atSpriteSize(amount, draw)
+    local k = 1 + (Sprite.RIG_SCALE - 1) * amount
+    local feetX, feetY = self.pos.x + downDir.x * self.baseRadius, self.pos.y + downDir.y * self.baseRadius
+    love.graphics.push()
+    love.graphics.translate(feetX, feetY)
+    love.graphics.scale(k, k)
+    love.graphics.translate(-feetX, -feetY)
+    draw()
+    love.graphics.pop()
+  end
+
   if self.morphState then
-    self:drawBallMorphTransition(orientation)
+    local done = math.min(1, self.morphElapsed / (2 * BALL_MORPH_SEGMENT_TICKS))
+    local standing = self.morphState == "toBall" and 1 - done or done
+    atSpriteSize(standing, function() self:drawBallMorphTransition(orientation) end)
     return
   end
 
@@ -973,6 +1033,19 @@ function Player:drawRig()
     self:drawBallMode(orientation)
     return
   end
+
+  if self:drawsAsSprite() then
+    self:drawSprite(orientation, downDir)
+    return
+  end
+  -- (The old rig's own blaster: see getMuzzlePosition.)
+  self.spriteMuzzleX, self.spriteMuzzleY = nil, nil
+
+  atSpriteSize(1, function() self:drawRigPose(orientation, downDir) end)
+end
+
+-- The posable rig, in whichever pose (see drawFullBody).
+function Player:drawRigPose(orientation, downDir)
 
   local outwardDir = downDir:multiply(-1)
   local visualPos = self.pos:clone():add(outwardDir:multiply(self.groundOffset * self.bodyScale))
@@ -989,6 +1062,58 @@ function Player:drawRig()
   self:drawFullBody(orientation, visualPos)
 
   love.graphics.pop()
+end
+
+-- Whether he's drawn from the sprite sheets (see lua/entities/player/
+-- Sprite.lua): walking, standing and in the air. The poses the sheets
+-- don't have — the wall slide, the ground pound, the swim stroke and
+-- standing to attention behind the shelter door (and curling into a
+-- ball) — use the posable rig (the same drawing, a part at a time).
+function Player:drawsAsSprite()
+  if not Sprite.available() then return false end
+  if self.isWallSliding or self.swimStrokeTimer > 0 then return false end
+  if self.isGroundPounding or self.groundPoundImpactTimer > 0 or (self.wasGroundPounding and self.onSurface) then return false end
+  if state.spaceShelter and not state.spaceShelter.playerInFront and not state.titleScreen then return false end
+  return true
+end
+
+-- Him, from the sprite sheets: his soles on the ground under him, the
+-- walk frame his stride's at with his arms swinging along, his pupils
+-- looking where he's aiming, and — Mega Man rules — his ordinary arms,
+-- unless he's aiming or shooting, when the blaster arm takes his left
+-- arm's place, aimed.
+function Player:drawSprite(orientation, downDir)
+  local dirSign = self.facingDirection < 0 and -1 or 1
+  local feetX, feetY = self.pos.x + downDir.x * self.radius, self.pos.y + downDir.y * self.radius
+  local frame, rightArm, leftArm, breath, airLook = Sprite.pose(self, -(self.vel.x * downDir.x + self.vel.y * downDir.y))
+  local shoulderX, shoulderY = Sprite.blasterShoulder(frame, feetX, feetY, orientation, dirSign)
+
+  -- Where he's aiming, back out of his turn and his mirroring into the
+  -- picture's own frame (x forward, y down).
+  local aimAngle = self:aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign)
+  local towards = aimAngle - orientation
+  if dirSign < 0 then towards = math.pi - towards end
+  -- The blaster arm turned to point there, measured from the way it's drawn.
+  local aimed = towards - Sprite.ARM_REST_ANGLE
+  aimed = math.atan2(math.sin(aimed), math.cos(aimed))
+  -- Shots leave from the muzzle with the arm aimed, even on the frame it
+  -- swings up (see getMuzzlePosition).
+  self.spriteMuzzleX, self.spriteMuzzleY = Sprite.muzzleOffset(orientation, dirSign, aimed)
+
+  -- Aiming (the mouse, the right stick, a lock or a pull) or just fired.
+  local aiming = not self.mouseIdle or self.pullTarget ~= nil or self:isUsingBlaster()
+
+  -- His eyes too: on where he's aiming only while he's aiming, otherwise
+  -- looking straight ahead — or, in the air, up on the way up and down on
+  -- the way down — easing over between them, not snapping.
+  local lookX, lookY = 0, airLook or 0
+  if aiming then lookX, lookY = math.cos(towards), math.sin(towards) end
+  local ease = 1 - EYE_EASE ^ (state.timeScale or 1)
+  self.eyeLookX = (self.eyeLookX or 0) + (lookX - (self.eyeLookX or 0)) * ease
+  self.eyeLookY = (self.eyeLookY or 0) + (lookY - (self.eyeLookY or 0)) * ease
+
+  Sprite.draw(feetX, feetY, orientation, dirSign, frame, rightArm, leftArm, aiming and aimed or nil,
+    self.eyeLookX, self.eyeLookY, breath)
 end
 
 return Player

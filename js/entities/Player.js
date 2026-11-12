@@ -228,17 +228,20 @@ class Player {
     this.armSwingScale = 0.5;
     this.maxAimFromForward = (90 + 5) * Math.PI / 180;
     this.headLookScale = 0.6;
-    this.headPivotFraction = 0.9;
+    // (The joints below and this are from tools/bob-sprite-export.html, for
+    // the rig's images, img/bob-rig-*.png; the offsets are where the old rig
+    // put each part, which every pose is written against.)
+    this.headPivotFraction = 0.8752;
     this.blasterMuzzleLength = 300;
     this.blasterAngleOffset = -5 * Math.PI / 180;
 
     this.bodyPartsConfig = {
       bodyY: 115,
       headY: -150,
-      leftArmX: 136, leftArmY: 9, leftArmJointX: 73, leftArmJointY: 199,
-      rightArmX: -186, rightArmY: -14, rightArmJointX: 119, rightArmJointY: 40,
-      leftBootX: 111, leftBootY: 241, leftBootJointX: 83, leftBootJointY: 15,
-      rightBootX: -142, rightBootY: 241, rightBootJointX: 77, rightBootJointY: 15,
+      leftArmX: 136, leftArmY: 9, leftArmJointX: 57, leftArmJointY: 139.8,
+      rightArmX: -186, rightArmY: -14, rightArmJointX: 146.5, rightArmJointY: 63.1,
+      leftBootX: 111, leftBootY: 241, leftBootJointX: 119.7, leftBootJointY: 51.1,
+      rightBootX: -142, rightBootY: 241, rightBootJointX: 76.1, rightBootJointY: 51.1,
     };
 
     // How far above this.pos (world units) the very TOP of his visual
@@ -282,6 +285,7 @@ class Player {
     if (this.isBall || this.morphState || state.dialogueActive || this.isTeleporting || this.isDying) return;
     if (this.isCannonRiding()) return;
     if (state.vatsActive) return; // in V.A.T.S. he only picks a target and pulls to it
+    if (this.inInterior) return; // (already a ball in the maze and on the pinball table; on his feet in the spaceship, where Down drops through a floor)
     this.morphState = 'toBall';
     this.morphElapsed = 0;
     if (state.audioManager) state.audioManager.playMorphBall();
@@ -296,6 +300,16 @@ class Player {
   forceBallMode() {
     this.isBall = true;
     this.radius = this.baseRadius * BALL_RADIUS_MULTIPLIER;
+    this.morphState = null;
+    this.morphElapsed = 0;
+  }
+
+  // Instantly stands back up — the other way round from forceBallMode, for
+  // arriving somewhere already standing: beamed out of the maze (see
+  // MazeInterior.arriveOutside), mid-teleport, which exitBallMode won't run in.
+  forceStandMode() {
+    this.isBall = false;
+    this.radius = this.baseRadius;
     this.morphState = null;
     this.morphElapsed = 0;
   }

@@ -91,6 +91,30 @@ local PLACES = {
     return { x = start.x, y = start.y, interior = state.mazePlanet.interior }
   end,
 
+  ship = function()
+    if not state.spaceship then return false end
+    local pad = state.spaceship.interior:getPortalPosition()
+    return { x = pad.x, y = pad.y, interior = state.spaceship.interior }
+  end,
+
+  zuma = function()
+    local planet = state.zumaPlanet
+    if not planet then return false end
+    -- Just above its surface, a little left of the beam in on top.
+    local a = -math.pi / 2 - 0.3
+    local dist = planet.radius + constants.PLAYER_RADIUS + 20
+    return { x = planet.pos.x + math.cos(a) * dist, y = planet.pos.y + math.sin(a) * dist }
+  end,
+
+  tetris = function()
+    local planet = state.tetrisPlanet
+    if not planet then return false end
+    -- Just above its surface, a little left of the beam in on top.
+    local a = -math.pi / 2 - 0.3
+    local dist = planet.radius + constants.PLAYER_RADIUS + 20
+    return { x = planet.pos.x + math.cos(a) * dist, y = planet.pos.y + math.sin(a) * dist }
+  end,
+
   expressway = function()
     if not expresswayEntry then return false end
     -- Standing a little round from the cannon, not in it.
@@ -116,6 +140,9 @@ local TELEPORT_PLACES = {
   { key = "pinball", label = "PINBALL TABLE" },
   { key = "expressway", label = "EXPRESSWAY" },
   { key = "maze", label = "MAZE PLANET" },
+  { key = "ship", label = "SPACESHIP" },
+  { key = "tetris", label = "TETRIS PLANET" },
+  { key = "zuma", label = "ZUMA PLANET" },
 }
 
 -- Called by love.load once every planet exists.

@@ -16,6 +16,7 @@ import { cellOf, inGrid, isSolid, blocked, addWater } from './LevelGrid.js';
 import { planetIndex, planetCellCenter, planetCellOf, planetGridAt } from './PlanetGrids.js';
 import { spawnSplash, spawnSteam } from './Effects.js';
 import { removeFrom, planetTileCells, pourLava } from './Obsidian.js';
+import { depthOf } from './Oceans.js';
 
 // Functions it adds to WaterSystem (copied on in js/systems/WaterSystem.js).
 const WaterSystem = {};
@@ -37,6 +38,13 @@ const WaterSystem = {};
 //     the lava turns to obsidian (see "Lava meeting water").
 //   * into an Ooomba: it's frozen in an ice cube (Ice.encase) — stock still
 //     and harmless, and on the level's terrain, a block to stand on.
+//   * into a round planet's water layer (a water planet's, or water sprayed
+//     onto any round planetoid — see Oceans.js): an ice floe freezes there
+//     (Ice.freezeOcean), out of that much of the water — right where the
+//     bolt is, deep down if that's where it was shot — and floats up to the
+//     surface, to ride there a quarter of it out, bobbing. It's a raft: a walkable,
+//     slippery surface (in state.planetoids, like a level block's top) for
+//     as long as it lasts. One spot holds one floe.
 // Ice floats: a block sunk in water rises a cell at a time (the water
 // flowing in under it) until it's riding at the surface, a quarter of it
 // out; with nothing at all under it, it drops. (On a dirt planet, a whole
@@ -48,6 +56,9 @@ const WaterSystem = {};
 //   kind 'level': c0, r0 (its top-left cell), x0, y0, size, wall;
 //   kind 'planet': g (the planet's grid), planet, ring, j (its tile);
 //   kind 'ooomba': o (the frozen Ooomba), size, and on the level a wall;
+//   kind 'ocean': owner (the planetoid whose water it's in), angle (where
+//     round it, out from its middle), phase (its bob), surface and wall (see
+//     Ice.freezeOcean), and top (how far out its top is, as of this frame);
 // and water (cells' worth it'll melt back into).
 
 Ice.TUNING = {
@@ -59,6 +70,17 @@ Ice.TUNING = {
   CUBE_MARGIN: 16,      // world units an Ooomba's cube is bigger than it
   CUBE_WATER: 2,        // cells' worth of water a melted cube leaves
   ALPHA: 0.92,          // how solid ice looks (its art's own see-through on top)
+  // A floe on a planet's water: how many tiles wide it is (a tile thick),
+  // how much of it floats above the water, and its bob (world units, and
+  // radians a second).
+  FLOE_TILES: 2,
+  FLOE_ABOVE: 0.25,
+  FLOE_BOB: 3,
+  FLOE_BOB_SPEED: 1.6,
+  // Floating up from where it froze: how fast it speeds up (world units a
+  // second, each second) and its top speed.
+  FLOE_RISE_ACCEL: 140,
+  FLOE_RISE_MAX: 240,
 };
 
 let iceImage = null;
@@ -235,6 +257,13 @@ Ice.melt = function (e) {
     const a = ring.offset + (e.j + 0.5) * ring.step + e.planet.rotationAngle;
     upX = Math.cos(a); upY = Math.sin(a);
     cx = e.planet.pos.x + upX * ring.mid; cy = e.planet.pos.y + upY * ring.mid;
+  } else if (e.kind === 'ocean') {
+    // (Back into the water it froze out of, if that's still there.)
+    const o = shared.oceans.get(e.owner);
+    if (o) o.volume += e.water;
+    upX = Math.cos(e.angle); upY = Math.sin(e.angle);
+    const r = e.top ?? e.owner.radius;
+    cx = e.owner.pos.x + upX * r; cy = e.owner.pos.y + upY * r;
   } else {
     const o = e.o;
     o.frozen = false; o.iceBlock = null;
@@ -400,7 +429,128 @@ Ice.update = function () {
     if (e.kind === 'level' && levelDue && shared.grid) Ice.stepLevelBlock(e);
     else if (e.kind === 'planet' && planetDue && shared.planetGrids.get(e.planet) === e.g) Ice.stepPlanetBlock(e);
     else if (e.kind === 'ooomba' && e.o.isSquashing) Ice.melt(e);
+    // (Riding its water as it rises and falls; gone with it.)
+    else if (e.kind === 'ocean') {
+      if (shared.oceans.has(e.owner)) Ice.placeFloe(e, (state.timeScale ?? 1) / 60); else Ice.melt(e);
+    }
   }
+};
+
+// ---------------------------------------------------------------------
+// Ice floes on a planet's water
+// ---------------------------------------------------------------------
+
+// A floe's size: [width, thickness] — FLOE_TILES tiles wide, a tile thick.
+function floeSize() {
+  const tile = Ice.TUNING.SIZE * CELL;
+  return [Ice.TUNING.FLOE_TILES * tile, tile];
+}
+
+// Where floe e's top is when it's floating: FLOE_ABOVE of it out of its
+// water, bobbing (never down into the planet itself, if the water's
+// shallow).
+function floatingTop(e) {
+  const p = e.owner, o = shared.oceans.get(e.owner);
+  const [, thick] = floeSize();
+  const surface = p.radius + depthOf(p, o.volume);
+  const bob = Math.sin(shared.age * Ice.TUNING.FLOE_BOB_SPEED + e.phase) * Ice.TUNING.FLOE_BOB;
+  return Math.max(p.radius + thick, surface + thick * Ice.TUNING.FLOE_ABOVE + bob);
+}
+
+// Puts floe e where it is now (dt: seconds since it was last put): rising
+// from wherever it froze, faster and faster (up to FLOE_RISE_MAX), till
+// it's afloat; then riding its water's surface. Its walkable top is a
+// straight surface across it, square to the way out from the planet there.
+Ice.placeFloe = function (e, dt) {
+  const p = e.owner;
+  const [width] = floeSize();
+  const float = floatingTop(e);
+  if (!e.afloat && e.top < float) {
+    e.riseSpeed = Math.min(Ice.TUNING.FLOE_RISE_MAX, e.riseSpeed + Ice.TUNING.FLOE_RISE_ACCEL * dt);
+    e.top = Math.min(float, e.top + e.riseSpeed * dt);
+  } else {
+    e.afloat = true;
+    e.top = float;
+  }
+  const top = e.top;
+  const ux = Math.cos(e.angle), uy = Math.sin(e.angle);
+  const tx = -uy, ty = ux; // (along it: its open side is then out from the planet)
+  const cx = p.pos.x + ux * top, cy = p.pos.y + uy * top;
+  const half = width / 2;
+  e.surface.moveTo(cx - tx * half, cy - ty * half, cx + tx * half, cy + ty * half);
+};
+
+// An ice bolt's reached planetoid p's water layer (o) at (x, y): a floe
+// freezes there, out of that much of its water, and starts floating up —
+// unless the water's too shallow to float one, or there's a floe that way
+// already. Returns whether it froze one.
+Ice.freezeOcean = function (p, o, x, y) {
+  const [width, thick] = floeSize();
+  const depth = depthOf(p, o.volume);
+  const angle = Math.atan2(y - p.pos.y, x - p.pos.x);
+  const surfaceRadius = p.radius + depth;
+  if (depth < thick) {
+    IceBolt.burst(p.pos.x + Math.cos(angle) * surfaceRadius, p.pos.y + Math.sin(angle) * surfaceRadius, 10);
+    return false;
+  }
+  for (const other of Ice.blocks) {
+    if (other.kind === 'ocean' && other.owner === p) {
+      const apart = Math.abs((((angle - other.angle + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI);
+      if (apart * surfaceRadius < width) return false;
+    }
+  }
+
+  const water = width * thick / (CELL * CELL);
+  o.volume = Math.max(0, o.volume - water);
+  // Its top: a surface he lands on and walks along (turned to the
+  // planet, not kept upright like level ground), slippery, and melted by
+  // a fireball that hits it (see WaterSystem.fireHitsWall).
+  const s = TiledTerrain.newMovingSurface(0, 0, 1, 0);
+  s.forceUprightJump = false;
+  s.isIce = true;
+  const e = {
+    kind: 'ocean', owner: p, angle, water, phase: Math.random() * Math.PI * 2, surface: s,
+    top: null, riseSpeed: 0, afloat: false,
+  };
+  // (Its middle where it froze — as far down as that is, but not into the
+  // planet, nor above where it'll float.)
+  const hitR = Math.hypot(x - p.pos.x, y - p.pos.y);
+  e.top = Math.min(floatingTop(e), Math.max(p.radius + thick, hitR + thick / 2));
+  e.wall = { surface: s, ice: e };
+  s.blockWall = e.wall;
+  s.draw = () => Ice.drawFloe(e);
+  // (Placed twice: the first time leaves it looking as if it had just
+  // moved there, which a landing check would take for motion.)
+  Ice.placeFloe(e, 0);
+  Ice.placeFloe(e, 0);
+  state.planetoids = state.planetoids ?? [];
+  state.planetoids.push(s);
+  Ice.blocks.push(e);
+  IceBolt.burst(x, y, 22);
+  return true;
+};
+
+// A floe: FLOE_TILES of the ice tile side by side, turned to the planet
+// (drawn with the planetoids, under the water, so what's under its
+// surface looks under it).
+Ice.drawFloe = function (e) {
+  if (e.top == null) return;
+  const [width, thick] = floeSize();
+  const image = Ice.getImage();
+  const p = e.owner;
+  const ux = Math.cos(e.angle), uy = Math.sin(e.angle);
+  const tx = -uy, ty = ux;
+  const mid = e.top - thick / 2;
+  const n = Ice.TUNING.FLOE_TILES;
+  const sx = thick / image.getWidth(), sy = thick / image.getHeight();
+  love.graphics.setColor(1, 1, 1, Ice.TUNING.ALPHA);
+  for (let k = 1; k <= n; k++) {
+    const along = (k - 0.5) * thick - width / 2;
+    const x = p.pos.x + ux * mid + tx * along;
+    const y = p.pos.y + uy * mid + ty * along;
+    love.graphics.draw(image, x, y, e.angle + Math.PI / 2, sx, sy, image.getWidth() / 2, image.getHeight() / 2);
+  }
+  love.graphics.setColor(1, 1, 1, 1);
 };
 
 // Ice bolt b (see js/entities/IceBolt.js) reaching water or lava this
@@ -416,6 +566,21 @@ WaterSystem.iceBoltHit = function (b) {
   const steps = Math.max(1, Math.ceil(dist / (CELL * 0.5)));
   for (let s = 0; s <= steps; s++) {
     const x = x0 + (x1 - x0) * s / steps, y = y0 + (y1 - y0) * s / steps;
+    // A round planet's water layer: a floe freezes there (if there's room
+    // for one — the bolt's spent either way).
+    for (const [p, o] of shared.oceans) {
+      if (p.isRoundedRect) continue;
+      if (Math.hypot(x - p.pos.x, y - p.pos.y) - p.radius < depthOf(p, o.volume)) {
+        // (Half a floe on along the bolt's way: shot from under water, it
+        // forms just past the blaster, not round it.)
+        const speed = Math.hypot(b.vel.x, b.vel.y);
+        const ahead = Ice.TUNING.SIZE * CELL * 0.6;
+        const fx = speed > 0 ? x + (b.vel.x / speed) * ahead : x;
+        const fy = speed > 0 ? y + (b.vel.y / speed) * ahead : y;
+        Ice.freezeOcean(p, o, fx, fy);
+        return true;
+      }
+    }
     const pg = planetGridAt(x, y);
     if (pg) {
       const [c, r] = planetCellOf(pg, x, y);

@@ -194,4 +194,45 @@ DialogueBox.draw = function (pageText, hasMore) {
   }
 };
 
+// A question with options to pick from (see js/ui/Conversation.js):
+// the question on the first line, the options side by side on the line
+// under it, and a bobbing arrow beside the one that's picked (drawn in
+// gold; the others dimmer).
+const CHOICE_INDENT = 40;  // screen px the options sit in from the text's left edge (room for the arrow)
+const CHOICE_GAP = 70;     // screen px between one option and the next
+const CHOICE_ARROW = 12;   // the arrow's size
+const COLOR_CHOSEN = [1, 0.84, 0.35, 1];
+const COLOR_NOT_CHOSEN = [1, 1, 1, 0.6];
+
+DialogueBox.drawChoice = function (question, labels, selected) {
+  const g = love.graphics;
+  if (!state.textboxTexture) return;
+  DialogueBox.draw(question, false);
+
+  const [boxX, boxY] = DialogueBox.computeBoxRect();
+  const font = DialogueBox.getFont();
+  const prevFont = g.getFont();
+  g.setFont(font);
+
+  let x = boxX + TEXTBOX_TEXT_PAD_X + CHOICE_INDENT;
+  const y = boxY + TEXTBOX_TEXT_PAD_Y + font.getHeight();
+  labels.forEach((label, i) => {
+    const chosen = i === selected;
+    if (chosen) {
+      const nudge = Math.sin(love.timer.getTime() * 6) * 3;
+      const ax = x - 14 + nudge, ay = y + font.getHeight() / 2;
+      g.setColor(COLOR_CHOSEN);
+      g.polygon('fill', ax, ay, ax - CHOICE_ARROW, ay - CHOICE_ARROW * 0.8, ax - CHOICE_ARROW, ay + CHOICE_ARROW * 0.8);
+    }
+    g.setColor(0, 0, 0, 0.65);
+    g.print(label, x + TEXTBOX_SHADOW_OFFSET, y + TEXTBOX_SHADOW_OFFSET);
+    g.setColor(chosen ? COLOR_CHOSEN : COLOR_NOT_CHOSEN);
+    g.print(label, x, y);
+    x += font.getWidth(label) + CHOICE_GAP;
+  });
+
+  g.setFont(prevFont);
+  g.setColor(1, 1, 1, 1);
+};
+
 export default DialogueBox;

@@ -1118,7 +1118,13 @@ function WaterSystem.draw()
     if next(g.lava) then drawPlanetWater(g, LAVA) end
   end
   drawLavaEmbers()
+  love.graphics.setColor(1, 1, 1, 1)
+end
 
+-- The water blaster's spray (and anything else flying loose — a portal's
+-- jet), and its splashes. Drawn before Bob, not over him with the water
+-- (see main.lua), so it comes out from behind his blaster's barrel.
+function WaterSystem.drawSpray()
   love.graphics.setLineWidth(2.5)
   for _, d in ipairs(shared.droplets) do
     local speed = math.sqrt(d.vx * d.vx + d.vy * d.vy)

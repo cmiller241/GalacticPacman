@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bob Sprite Export</title>
+<style>
+  body { margin: 0; padding: 20px; background: #16181d; color: #e6e8ec; font: 14px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p { color: #9aa1ad; max-width: 70ch; margin: 0 0 12px; }
+  code { color: #f6d370; }
+  #status { margin: 12px 0; color: #f6d370; }
+  .sheet { margin: 16px 0; }
+  .sheet img { display: block; max-width: 100%; background: repeating-conic-gradient(#3a3d45 0 25%, #2a2d34 0 50%) 0 0/16px 16px; }
+  .sheet h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #9aa1ad; margin: 0 0 6px; }
+  button { background: #2b2f38; color: #e6e8ec; border: 1px solid #333843; border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; margin: 6px 6px 0 0; }
+  pre { background: #20232a; padding: 12px; border-radius: 6px; overflow: auto; }
+  iframe { position: fixed; left: 0; top: 0; width: 1100px; height: 800px; opacity: 0.01; pointer-events: none; z-index: -1; border: 0; }
+</style>
+</head>
+<body>
+<h1>Bob Sprite Export</h1>
+<p>Makes the in-game Bob from <code>img/astronaut2.svg</code>, posed and lit exactly as
+<code>tools/arm-animator.html</code> does it (walk frames, leg swing, buckle slide, cast shadows,
+normal maps), with its default settings. Run <code>npm run serve</code> and open this page from it.</p>
+<p>Save the four images into <code>img/</code> under the names shown, and paste the numbers into
+<code>DATA</code> in <code>lua/entities/player/Sprite.lua</code> and <code>js/entities/player/Sprite.js</code>.</p>
+<div id="status">Loading the arm animator…</div>
+<div id="out"></div>
+<pre id="meta"></pre>
+<iframe id="tool" src="arm-animator.html?frame=1"></iframe>
+<script>
+// How tall (pixels) standing Bob is, sole to antenna, in the exported frames.
+const STAND_HEIGHT_PX = 300;
+// Which walk frame (1-6) the standing pose borrows its buckle from (its
+// arms are the plain "Right Arm" and "Left Arm" layers, and its legs are straight).
+const STAND_BUCKLE_FRAME = 3;
+// In the air (the sheet's last frame): the last walk frame's pose, with
+// the legs swung this far apart (degrees each way; the walk uses the
+// animator's own "Leg swing").
+const AIR_LEG_ANGLE = 38;
+// Transparent pixels left round each frame (and between frames in the sheet).
+const MARGIN = 6;
+
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $('status').textContent = s; };
+
+function loadImage(src) {
+  return new Promise((resolve) => { const i = new Image(); i.onload = () => resolve(i); i.src = src; });
+}
+
+function alphaOf(img) {
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+  return g.getImageData(0, 0, c.width, c.height);
+}
+
+// The box round every pixel at least `min` opaque.
+function opaqueBox(data, min = 8) {
+  const { width: w, height: h, data: d } = data;
+  let x1 = w, y1 = h, x2 = -1, y2 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (d[(y * w + x) * 4 + 3] >= min) { if (x < x1) x1 = x; if (x > x2) x2 = x; if (y < y1) y1 = y; if (y > y2) y2 = y; }
+  }
+  return x2 < 0 ? null : { x1, y1, x2, y2 };
+}
+
+async function run() {
+  // Wait for the animator to load the SVG and draw it once.
+  const ready = () => {
+    try { return $('tool').contentWindow.eval('typeof svg !== "undefined" && !!svg && Object.keys(sets).length > 0'); } catch (e) { return false; }
+  };
+  for (let t = 0; t < 300 && !ready(); t++) await new Promise((r) => setTimeout(r, 100));
+  if (!ready()) throw new Error('the arm animator never loaded the SVG');
+  const w = $('tool').contentWindow;
+  status('Posing and lighting…');
+
+  // Everything below runs inside the animator's own page.
+  const grabbed = await w.eval(`(async () => {
+    setPlaying(false);
+    // Only the arm set's own frame is ever shown (it's hidden again below:
+    // the arms are drawn separately in the game, so they can swing and aim).
+    $('otherArm').checked = false;
+    // The animator draws the irises live, over the top: they're measured
+    // here instead, and drawn by the game, looking where he aims.
+    eyeOverlay = [];
+    const shots = [];
+    HTMLCanvasElement.prototype.toBlob = function () { shots.push(this.toDataURL('image/png')); };
+    async function grab() {
+      shots.length = 0;
+      Lighting.invalidate();
+      await Lighting.downloadFrame();
+      return { normal: shots[0], color: shots[1] };
+    }
+    const vb = svg.viewBox.baseVal, k = 900 / Math.max(vb.width, vb.height);
+    // A shape's box, in the exported image's pixels: its middle and half-size.
+    function pixelBox(el) {
+      const b = el.getBBox();
+      const m = svg.getScreenCTM().inverse().multiply(el.getScreenCTM());
+      const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]]
+        .map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+      const xs = pts.map((p) => (p.x - vb.x) * k), ys = pts.map((p) => (p.y - vb.y) * k);
+      const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
+      return { x: (x1 + x2) / 2, y: (y1 + y2) / 2, rx: (x2 - x1) / 2, ry: (y2 - y1) / 2 };
+    }
+    const all = () => [...svg.querySelectorAll('*')];
+    const byLabel = (l) => all().find((el) => labelOf(el) === l);
+    const group = (l) => topGroups.find((g) => labelOf(g) === l);
+    const show = (g) => { g.style.display = 'inline'; g.style.opacity = g.dataset.origOpacity || '1'; };
+    const irises = ['Left Eye Iris', 'Right Eye Iris'].map(byLabel).filter(Boolean);
+    // How far down the whole of him has dropped in this pose (his legs
+    // angled: see the animator's "Body bob"), in pixels.
+    const drop = () => { const t = wrap.transform.baseVal.consolidate(); return t ? t.matrix.f * k : 0; };
+
+    // A body pose: no arms, no irises.
+    async function bodyPose(i) {
+      idx = i; render();
+      sets[current][i].el.style.display = 'none';
+      irises.forEach((el) => { el.dataset.wasDisplay = el.style.display; el.style.display = 'none'; });
+      const pose = await grab();
+      irises.forEach((el) => { el.style.display = el.dataset.wasDisplay; });
+      pose.drop = drop();
+      return pose;
+    }
+
+    const out = { walk: [] };
+    const frames = sets[current];
+    for (let i = 0; i < frames.length; i++) out.walk.push(await bodyPose(i));
+
+    // Standing idle: legs straight.
+    $('legAngle').value = 0;
+    out.stand = await bodyPose(${STAND_BUCKLE_FRAME - 1});
+    out.bodyCenter = pixelBox(byLabel('Body Outline'));
+    out.eyes = ['Left Eye', 'Right Eye'].map((name) => {
+      const eye = byLabel(name), iris = byLabel(name + ' Iris');
+      if (!eye || !iris) return null;
+      return { eye: pixelBox(eye), iris: pixelBox(iris), color: getComputedStyle(iris).fill };
+    }).filter(Boolean);
+
+    // In the air: legs wide — and his body where it is standing, not
+    // dropped to keep his boots on the ground (the animator's "Body bob"),
+    // so he doesn't sink as he leaves it.
+    const bob = $('bob').value;
+    $('legAngle').value = ${AIR_LEG_ANGLE};
+    $('bob').value = 0;
+    out.air = await bodyPose(frames.length - 1);
+    $('legAngle').value = 0;
+    $('bob').value = bob;
+
+    // The arms, alone, where they hang on him standing: "Right Arm" (in
+    // front), "Left Arm" (behind) and "Left Arm - Blaster" (in the left
+    // arm's place, while he aims).
+    $('showBody').checked = false;
+    idx = 0; render();
+    frames[0].el.style.display = 'none';
+    out.arms = [];
+    for (const name of ['Right Arm', 'Left Arm', 'Left Arm - Blaster']) {
+      const g = group(name) || byLabel(name);
+      show(g);
+      out.arms.push(await grab());
+      g.style.display = 'none';
+    }
+
+    // The rest of the parts, alone, for the game's posable rig (its wall
+    // slide, ground pound, curling into a ball): his head (pupils as they
+    // rest), body and boots.
+    out.parts = {};
+    for (const name of ['Head', 'Body', 'Stationary Left Boot', 'Stationary Right Boot']) {
+      const g = group(name);
+      show(g);
+      out.parts[name] = await grab();
+      g.style.display = 'none';
+    }
+    return out;
+  })()`);
+
+  status('Cropping and building the sheets…');
+  const poses = [...grabbed.walk, grabbed.stand, grabbed.air];
+  const all = [...poses, ...grabbed.arms];
+  for (const g of [...all, ...Object.values(grabbed.parts)]) { g.colorImg = await loadImage(g.color); g.normalImg = await loadImage(g.normal); }
+
+  // One crop for every frame (so they all line up), round everything opaque.
+  let box = null;
+  for (const g of all) {
+    const b = opaqueBox(alphaOf(g.colorImg));
+    if (!b) continue;
+    box = box ? { x1: Math.min(box.x1, b.x1), y1: Math.min(box.y1, b.y1), x2: Math.max(box.x2, b.x2), y2: Math.max(box.y2, b.y2) } : b;
+  }
+  const standBox = opaqueBox(alphaOf(grabbed.stand.colorImg), 128);
+  const scale = STAND_HEIGHT_PX / (standBox.y2 + 1 - standBox.y1);
+  const cropX = box.x1, cropY = box.y1;
+  const frameW = Math.ceil((box.x2 + 1 - box.x1) * scale) + MARGIN * 2;
+  const frameH = Math.ceil((box.y2 + 1 - box.y1) * scale) + MARGIN * 2;
+  const toFrame = (p) => ({ x: (p.x - cropX) * scale + MARGIN, y: (p.y - cropY) * scale + MARGIN });
+
+  // rows: lists of frames, one row each.
+  function sheet(rows, key) {
+    const c = document.createElement('canvas');
+    c.width = frameW * rows[0].length; c.height = frameH * rows.length;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    rows.forEach((row, r) => row.forEach((f, i) => {
+      const img = f[key];
+      g.drawImage(img, -cropX * scale + MARGIN + i * frameW, -cropY * scale + MARGIN + r * frameH, img.width * scale, img.height * scale);
+    }));
+    return c;
+  }
+  const outputs = [
+    ['bob-sprite.png', sheet([poses], 'colorImg'), 'Body (no arms): walk frames 1-6, standing, then in the air'],
+    ['bob-sprite_normal.png', sheet([poses], 'normalImg'), 'Body normal map'],
+    ['bob-arms.png', sheet([grabbed.arms], 'colorImg'), 'Arms: right, left, blaster'],
+    ['bob-arms_normal.png', sheet([grabbed.arms], 'normalImg'), 'Arms normal map'],
+  ];
+
+  // Each arm's ends, measured from its picture. A plain arm turns round
+  // its upper end (the middle of the rounded joint there); the blaster
+  // arm turns round its white joint, and its muzzle is the dark end.
+  const armsData = outputs[2][1].getContext('2d').getImageData(0, 0, frameW * 3, frameH);
+  function armEnds(index, blaster) {
+    const solid = [];
+    for (let y = 0; y < frameH; y++) for (let x = 0; x < frameW; x++) {
+      if (armsData.data[(y * armsData.width + index * frameW + x) * 4 + 3] >= 128) solid.push([x, y]);
+    }
+    const centroid = (pts) => pts.reduce((a, p) => ({ x: a.x + p[0] / pts.length, y: a.y + p[1] / pts.length }), { x: 0, y: 0 });
+    const farthest = (from) => solid.reduce((best, p) => {
+      const d = (p[0] - from.x) ** 2 + (p[1] - from.y) ** 2;
+      return d > best.d ? { p, d } : best;
+    }, { p: null, d: -1 }).p;
+    const near = (at, r) => solid.filter((p) => (p[0] - at[0]) ** 2 + (p[1] - at[1]) ** 2 <= r * r);
+    const brightness = (pts) => pts.reduce((sum, [x, y]) => {
+      const i = (y * armsData.width + index * frameW + x) * 4;
+      return sum + armsData.data[i] + armsData.data[i + 1] + armsData.data[i + 2];
+    }, 0) / Math.max(1, pts.length);
+    let endA = farthest(centroid(solid));
+    let endB = farthest({ x: endA[0], y: endA[1] });
+    // (The joint is about a fifth of the arm's length across.)
+    const length = Math.hypot(endA[0] - endB[0], endA[1] - endB[1]);
+    const swap = blaster
+      ? brightness(near(endA, length * 0.2)) < brightness(near(endB, length * 0.2))
+      : endA[1] > endB[1];
+    if (swap) [endA, endB] = [endB, endA];
+    return { shoulder: centroid(near(endA, length * 0.2)), tip: centroid(near(endB, 8)) };
+  }
+  const right = armEnds(0, false), left = armEnds(1, false), blaster = armEnds(2, true);
+
+  const sole = toFrame({ x: 0, y: standBox.y2 + 1 });
+  const top = toFrame({ x: 0, y: standBox.y1 });
+  const center = toFrame(grabbed.bodyCenter);
+  const r = (v) => Math.round(v * 10) / 10;
+  const pt = (p) => ({ x: r(p.x), y: r(p.y) });
+  const rgb = (css) => (css.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map((v) => Math.round(v / 255 * 1000) / 1000);
+  const meta = {
+    frameW, frameH, walkFrames: grabbed.walk.length, standFrame: grabbed.walk.length + 1, airFrame: grabbed.walk.length + 2,
+    centerX: r(center.x), soleY: r(sole.y), topY: r(top.y),
+    drop: poses.map((p) => r(p.drop * scale)),
+    rightShoulder: pt(right.shoulder), leftShoulder: pt(left.shoulder),
+    blasterShoulder: pt(blaster.shoulder), muzzle: pt(blaster.tip),
+    eyes: grabbed.eyes.map((e) => {
+      const c = toFrame(e.iris);
+      return {
+        x: r(c.x), y: r(c.y), rx: r(e.iris.rx * scale), ry: r(e.iris.ry * scale),
+        travelX: r(Math.max(0, e.eye.rx - e.iris.rx) * scale), travelY: r(Math.max(0, e.eye.ry - e.iris.ry) * scale),
+      };
+    }),
+    irisColor: rgb(grabbed.eyes[0] ? grabbed.eyes[0].color : 'rgb(0,0,0)'),
+  };
+
+  // ---- The posable rig: one image per part, for the game's poses that
+  // aren't in the sheets (lua/entities/player/Rendering.lua's wall slide,
+  // ground pound, curling into a ball, swim stroke). Those poses place
+  // each part in the old rig's own units (its bodyPartsConfig and pose
+  // tables), so each image is drawn in those units, sized so standing Bob
+  // is the old rig's height, and made so that, put where the old rig puts
+  // that part, it lands where this drawing has it.
+  const RIG = {
+    height: 1349.5,     // soles to antenna, standing (the old images: boots' bottom at 538, head top at -811.5)
+    sole: 538,          // the soles, below the rig's origin
+    headY: -150,        // the head hangs from (half its width, headPivotFraction of its height), put this far below the origin
+    bodyY: 115,         // the body's middle, below the origin
+    bootY: 241,         // where each boot's joint is put, below the origin...
+    leftBootX: 111, rightBootX: -142, // ...and across
+    margin: 8,
+  };
+  const toolSole = standBox.y2 + 1, toolCenterX = grabbed.bodyCenter.x;
+  const u = RIG.height / (toolSole - standBox.y1); // rig units per animator pixel
+  // A point in the rig's units (from its origin) -> the animator's pixels.
+  const rigToTool = (x, y) => ({ x: toolCenterX + x / u, y: toolSole + (y - RIG.sole) / u });
+  // A sheet-frame point -> the animator's pixels.
+  const frameToTool = (p) => ({ x: (p.x - MARGIN) / scale + cropX, y: (p.y - MARGIN) / scale + cropY });
+
+  // One part's picture, in rig units, with `pivot` (animator pixels) at
+  // `place` = (fraction across, fraction down) of the image — or, with
+  // place left out, the image cropped round the part with the pivot
+  // wherever that leaves it (returned as `joint`). `turn`: the picture
+  // turned this far round the pivot (radians), normal map included.
+  function rigPart(grab, pivot, place, turn = 0) {
+    const b = opaqueBox(alphaOf(grab.colorImg));
+    const c = Math.cos(turn), s = Math.sin(turn);
+    const corners = [[b.x1, b.y1], [b.x2 + 1, b.y1], [b.x1, b.y2 + 1], [b.x2 + 1, b.y2 + 1]].map(([x, y]) => {
+      const dx = (x - pivot.x) * u, dy = (y - pivot.y) * u;
+      return [dx * c - dy * s, dx * s + dy * c];
+    });
+    const minX = Math.min(...corners.map((p) => p[0])) - RIG.margin, maxX = Math.max(...corners.map((p) => p[0])) + RIG.margin;
+    const minY = Math.min(...corners.map((p) => p[1])) - RIG.margin, maxY = Math.max(...corners.map((p) => p[1])) + RIG.margin;
+    // (Either fraction can be null: that way's just cropped.)
+    let w, h, jx, jy;
+    if (place && place[0] != null) {
+      w = Math.ceil(Math.max(-minX / place[0], maxX / (1 - place[0]))); jx = w * place[0];
+    } else {
+      w = Math.ceil(maxX - minX); jx = -minX;
+    }
+    if (place && place[1] != null) {
+      h = Math.ceil(Math.max(-minY / place[1], maxY / (1 - place[1]))); jy = h * place[1];
+    } else {
+      h = Math.ceil(maxY - minY); jy = -minY;
+    }
+    const draw = (img) => {
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      const g = cv.getContext('2d');
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+      g.translate(jx, jy); g.rotate(turn); g.scale(u, u); g.translate(-pivot.x, -pivot.y);
+      g.drawImage(img, 0, 0);
+      return cv;
+    };
+    const color = draw(grab.colorImg), normal = draw(grab.normalImg);
+    if (turn) {
+      // Turn the normals with the picture (the map's y is up).
+      const g = normal.getContext('2d'), d = g.getImageData(0, 0, w, h);
+      for (let i = 0; i < d.data.length; i += 4) {
+        if (!d.data[i + 3]) continue;
+        const nx = d.data[i] / 127.5 - 1, ny = -(d.data[i + 1] / 127.5 - 1);
+        d.data[i] = (nx * c - ny * s + 1) * 127.5;
+        d.data[i + 1] = (-(nx * s + ny * c) + 1) * 127.5;
+      }
+      g.putImageData(d, 0, 0);
+    }
+    return { color, normal, joint: { x: r(jx), y: r(jy) }, h };
+  }
+
+  const P = grabbed.parts;
+  const rig = {
+    head: rigPart(P['Head'], rigToTool(0, RIG.headY), [0.5, null]),
+    body: rigPart(P['Body'], rigToTool(0, RIG.bodyY), [0.5, 0.5]),
+    rightarm: rigPart(grabbed.arms[0], frameToTool(right.shoulder)),
+    // (Turned to point straight ahead: the old left arm was the blaster
+    // arm, and the poses turn it from there.)
+    leftarm: rigPart(grabbed.arms[1], frameToTool(left.shoulder), null,
+      -Math.atan2(left.tip.y - left.shoulder.y, left.tip.x - left.shoulder.x)),
+  };
+  for (const [key, label, x] of [['leftboot', 'Stationary Left Boot', RIG.leftBootX], ['rightboot', 'Stationary Right Boot', RIG.rightBootX]]) {
+    // Turning round the top of the boot, where the rig puts it — set so its
+    // sole lands on the ground.
+    const b = opaqueBox(alphaOf(P[label].colorImg));
+    const bootSole = b.y2 + 1;
+    rig[key] = rigPart(P[label], { x: rigToTool(x, 0).x, y: bootSole - (RIG.sole - RIG.bootY) / u });
+  }
+  for (const [key, part] of Object.entries(rig)) {
+    outputs.push([`bob-rig-${key}.png`, part.color, `Posable rig: ${key}`]);
+    outputs.push([`bob-rig-${key}_normal.png`, part.normal, `Posable rig: ${key} normal map`]);
+  }
+  meta.rig = {
+    // How far round from pointing straight ahead the left arm hangs (the
+    // poses' standing angle for it).
+    leftArmHangAngle: Math.round(Math.atan2(left.tip.y - left.shoulder.y, left.tip.x - left.shoulder.x) * 10000) / 10000,
+    headPivotFraction: Math.round(rig.head.joint.y / rig.head.h * 10000) / 10000,
+    leftArmJointX: rig.leftarm.joint.x, leftArmJointY: rig.leftarm.joint.y,
+    rightArmJointX: rig.rightarm.joint.x, rightArmJointY: rig.rightarm.joint.y,
+    leftBootJointX: rig.leftboot.joint.x, leftBootJointY: rig.leftboot.joint.y,
+    rightBootJointX: rig.rightboot.joint.x, rightBootJointY: rig.rightboot.joint.y,
+  };
+
+  for (const [name, canvas, title] of outputs) {
+    const div = document.createElement('div'); div.className = 'sheet';
+    const url = canvas.toDataURL('image/png');
+    div.innerHTML = `<h2>${title} — <code>img/${name}</code></h2>`;
+    const img = document.createElement('img'); img.id = name.replace(/\W/g, '_'); img.src = url; div.appendChild(img);
+    const btn = document.createElement('button'); btn.textContent = 'Download ' + name;
+    btn.onclick = () => { const a = document.createElement('a'); a.href = url; a.download = name; a.click(); };
+    div.appendChild(btn);
+    $('out').appendChild(div);
+  }
+  $('meta').textContent = JSON.stringify(meta, null, 2);
+  status('Done.');
+  document.title = 'DONE';
+}
+
+run().catch((e) => { status('Failed: ' + e.message); console.error(e); });
+</script>
+</body>
+</html>

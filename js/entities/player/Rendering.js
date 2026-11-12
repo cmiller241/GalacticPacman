@@ -15,6 +15,7 @@ import TargetLock from '../../systems/TargetLock.js';
 import WaterSystem from '../../systems/WaterSystem.js';
 import PortalGun from '../../systems/PortalGun.js';
 import Tuning from './Tuning.js';
+import Sprite from './Sprite.js';
 
 const { BALL_MORPH_SEGMENT_TICKS, TELEPORT_OUT_TICKS, TELEPORT_IN_TICKS } = Tuning;
 
@@ -23,6 +24,17 @@ const { BALL_MORPH_SEGMENT_TICKS, TELEPORT_OUT_TICKS, TELEPORT_IN_TICKS } = Tuni
 // poseBlend) takes to ease back into whatever the normal pose would
 // be, rather than snapping there in one frame.
 const INTRO_POSE_TRANSITION_SECONDS = 0.6;
+
+// The rig's left arm (img/bob-rig-leftarm.png) points straight ahead as
+// drawn — the old left arm was the blaster arm, and the poses turn it from
+// there — so hanging at his side, it's turned this far (radians; from
+// tools/bob-sprite-export.html).
+const LEFT_ARM_HANG = 1.5731;
+
+// How quickly his eyes move to where he's aiming, or back to looking ahead
+// (see drawSprite): the share of the way they've still to go that's left
+// after each tick.
+const EYE_EASE = 0.75;
 const BLASTER_IN_USE_LINGER = 0.6; // seconds after a shot his blaster arm stays aimed (see isUsingBlaster)
 
 // Ground pound pose (see GROUND_POUND_POSE / Player.getGroundPoundSeatDrop below).
@@ -141,6 +153,17 @@ class Rendering {
     const shoulderX = originPos.x + wx * s;
     const shoulderY = originPos.y + wy * s;
 
+    return this.worldAngleToLocalRotation(this.aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign), orientation, dirSign);
+  }
+
+  // Where his blaster arm, turning round (shoulderX, shoulderY), should
+  // point: at the locked target, the pull target, the right stick's aim or
+  // the mouse (or straight ahead, on a gamepad with nothing to aim at), no
+  // further round from straight ahead than maxAimFromForward unless
+  // something's locked. Returns that as a world angle, and keeps it (and
+  // the shoulder) for the muzzle and the head (see getMuzzlePosition and
+  // computeHeadLookTilt).
+  aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign) {
     const forwardAngle = dirSign > 0 ? orientation : (orientation + Math.PI);
 
     // Re-checked every frame — the moment a lock stops being valid
@@ -198,7 +221,7 @@ class Rendering {
     this.aimRelativeAngle = relative;
     this.aimAnchorPos = this.pos.clone();
 
-    return this.worldAngleToLocalRotation(clampedTargetAngle, orientation, dirSign);
+    return clampedTargetAngle;
   }
 
   computeHeadLookTilt(orientation, dirSign) {
@@ -211,6 +234,20 @@ class Rendering {
   // Drawing
   // ----------------------------------------------------------------
 
+  // Draws one of the rig's images (state.characterImages — the same
+  // arguments love.graphics.draw takes after the image), lit by the sun from
+  // its normal map (state.characterNormals), the same lighting the sprite
+  // gets (see Sprite.lightHere).
+  drawRigImage(img, ...args) {
+    let normal = null;
+    for (const [key, image] of Object.entries(state.characterImages ?? {})) {
+      if (image === img) { normal = state.characterNormals ? state.characterNormals[key] : null; break; }
+    }
+    const lit = normal && Sprite.lightHere(this.pos.x, this.pos.y, normal);
+    love.graphics.draw(img, ...args);
+    if (lit) love.graphics.setShader();
+  }
+
   drawLimb(img, offsetX, offsetY, jointX, jointY, angle, orientation, originPos, cosO, sinO, flipHorizontal) {
     if (!img) return;
     const s = this.bodyScale;
@@ -222,7 +259,7 @@ class Rendering {
     love.graphics.translate(originPos.x + wx * s, originPos.y + wy * s);
     love.graphics.rotate(orientation + angle);
     if (flipHorizontal) love.graphics.scale(-1, 1);
-    love.graphics.draw(img, -jointX * s, -jointY * s, 0, s, s);
+    this.drawRigImage(img, -jointX * s, -jointY * s, 0, s, s);
     love.graphics.pop();
   }
 
@@ -247,7 +284,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x, originPos.y);
       love.graphics.rotate(orientation);
-      love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
+      this.drawRigImage(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
       love.graphics.pop();
     }
 
@@ -261,7 +298,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
       love.graphics.rotate(orientation + pose.headAngle);
-      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      this.drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s);
       love.graphics.pop();
     }
 
@@ -325,7 +362,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x, originPos.y);
       love.graphics.rotate(orientation);
-      love.graphics.draw(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s);
+      this.drawRigImage(images.body, -bodyW * s / 2, pose.bodyY * s - bodyH * s / 2, 0, s, s);
       love.graphics.pop();
     }
 
@@ -340,7 +377,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
       love.graphics.rotate(orientation + pose.headAngle);
-      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      this.drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s);
       love.graphics.pop();
     }
   }
@@ -468,7 +505,7 @@ class Rendering {
       const swayAngle = (this.onSurface && this.isWalking)
         ? (walkAngle * this.armSwingScale)
         : (Math.sin(love.timer.getTime() * 1.5) * 0.15);
-      leftArmAngle = swayAngle;
+      leftArmAngle = LEFT_ARM_HANG + swayAngle;
       rightArmAngle = swayAngle;
     } else {
       leftArmAngle = aimAngle;
@@ -519,7 +556,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x, originPos.y);
       love.graphics.rotate(orientation);
-      love.graphics.draw(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
+      this.drawRigImage(images.body, -bodyW * s / 2, cfg.bodyY * s - bodyH * s / 2, 0, s, s);
       love.graphics.pop();
     }
 
@@ -539,7 +576,7 @@ class Rendering {
       love.graphics.push();
       love.graphics.translate(originPos.x + headWX * s, originPos.y + headWY * s);
       love.graphics.rotate(orientation + headTilt);
-      love.graphics.draw(images.head, -headW * s / 2, -pivotY, 0, s, s);
+      this.drawRigImage(images.head, -headW * s / 2, -pivotY, 0, s, s);
       love.graphics.pop();
     }
   }
@@ -672,8 +709,14 @@ class Rendering {
       if (phase !== 0) return;
     }
 
-    // Sun shading on every piece of the rig — see getBodyShadingShader.
+    // Sun shading — see getBodyShadingShader — for the ball. (Standing, the
+    // sprite and the rig's parts light themselves, from their normal maps:
+    // see drawSprite and drawRigImage.)
     const drawShaded = () => {
+      if (this.morphState || !this.isBall) {
+        this.drawRig();
+        return;
+      }
       const shadingShader = this.applyBodyShading();
       this.drawRig();
       if (shadingShader) love.graphics.setShader();
@@ -721,8 +764,24 @@ class Rendering {
     const downAngle = Math.atan2(downDir.y, downDir.x);
     const orientation = downAngle - Math.PI / 2;
 
+    // The posable rig is built at the old rig's size: drawn bigger, round
+    // his soles, to match the sprite (see Sprite.RIG_SCALE). Curling into a
+    // ball, it shrinks back as he goes (the ball's its own size).
+    const atSpriteSize = (amount, draw) => {
+      const k = 1 + (Sprite.RIG_SCALE - 1) * amount;
+      const feetX = this.pos.x + downDir.x * this.baseRadius, feetY = this.pos.y + downDir.y * this.baseRadius;
+      love.graphics.push();
+      love.graphics.translate(feetX, feetY);
+      love.graphics.scale(k, k);
+      love.graphics.translate(-feetX, -feetY);
+      draw();
+      love.graphics.pop();
+    };
+
     if (this.morphState) {
-      this.drawBallMorphTransition(orientation);
+      const done = Math.min(1, this.morphElapsed / (2 * BALL_MORPH_SEGMENT_TICKS));
+      const standing = this.morphState === 'toBall' ? 1 - done : done;
+      atSpriteSize(standing, () => this.drawBallMorphTransition(orientation));
       return;
     }
 
@@ -731,6 +790,18 @@ class Rendering {
       return;
     }
 
+    if (this.drawsAsSprite()) {
+      this.drawSprite(orientation, downDir);
+      return;
+    }
+    // (The old rig's own blaster: see getMuzzlePosition.)
+    this.spriteMuzzleX = null; this.spriteMuzzleY = null;
+
+    atSpriteSize(1, () => this.drawRigPose(orientation, downDir));
+  }
+
+  // The posable rig, in whichever pose (see drawFullBody).
+  drawRigPose(orientation, downDir) {
     const outwardDir = downDir.multiply(-1);
     const visualPos = this.pos.clone().add(outwardDir.multiply(this.groundOffset * this.bodyScale));
 
@@ -746,6 +817,57 @@ class Rendering {
     this.drawFullBody(orientation, visualPos);
 
     love.graphics.pop();
+  }
+
+  // Whether he's drawn from the sprite sheets (see js/entities/player/
+  // Sprite.js): walking, standing and in the air. The poses the sheets
+  // don't have — the wall slide, the ground pound, the swim stroke and
+  // standing to attention behind the shelter door (and curling into a
+  // ball) — use the posable rig (the same drawing, a part at a time).
+  drawsAsSprite() {
+    if (!Sprite.available()) return false;
+    if (this.isWallSliding || this.swimStrokeTimer > 0) return false;
+    if (this.isGroundPounding || this.groundPoundImpactTimer > 0 || (this.wasGroundPounding && this.onSurface)) return false;
+    if (state.spaceShelter && !state.spaceShelter.playerInFront && !state.titleScreen) return false;
+    return true;
+  }
+
+  // Him, from the sprite sheets: his soles on the ground under him, the
+  // walk frame his stride's at with his arms swinging along, his pupils
+  // looking where he's aiming, and — Mega Man rules — his ordinary arms,
+  // unless he's aiming or shooting, when the blaster arm takes his left
+  // arm's place, aimed.
+  drawSprite(orientation, downDir) {
+    const dirSign = this.facingDirection < 0 ? -1 : 1;
+    const feetX = this.pos.x + downDir.x * this.radius, feetY = this.pos.y + downDir.y * this.radius;
+    const [frame, rightArm, leftArm, breath, airLook] = Sprite.pose(this, -(this.vel.x * downDir.x + this.vel.y * downDir.y));
+    const [shoulderX, shoulderY] = Sprite.blasterShoulder(frame, feetX, feetY, orientation, dirSign);
+
+    // Where he's aiming, back out of his turn and his mirroring into the
+    // picture's own frame (x forward, y down).
+    const aimAngle = this.aimBlasterFrom(shoulderX, shoulderY, orientation, dirSign);
+    let towards = aimAngle - orientation;
+    if (dirSign < 0) towards = Math.PI - towards;
+    // The blaster arm turned to point there, measured from the way it's drawn.
+    let aimed = towards - Sprite.ARM_REST_ANGLE;
+    aimed = Math.atan2(Math.sin(aimed), Math.cos(aimed));
+    // Shots leave from the muzzle with the arm aimed, even on the frame it
+    // swings up (see getMuzzlePosition).
+    [this.spriteMuzzleX, this.spriteMuzzleY] = Sprite.muzzleOffset(orientation, dirSign, aimed);
+
+    // Aiming (the mouse, the right stick, a lock or a pull) or just fired.
+    const aiming = !this.mouseIdle || !!this.pullTarget || this.isUsingBlaster();
+
+    // His eyes too: on where he's aiming only while he's aiming, otherwise
+    // looking straight ahead — or, in the air, up on the way up and down on
+    // the way down — easing over between them, not snapping.
+    const lookX = aiming ? Math.cos(towards) : 0, lookY = aiming ? Math.sin(towards) : (airLook ?? 0);
+    const ease = 1 - Math.pow(EYE_EASE, state.timeScale ?? 1);
+    this.eyeLookX = (this.eyeLookX ?? 0) + (lookX - (this.eyeLookX ?? 0)) * ease;
+    this.eyeLookY = (this.eyeLookY ?? 0) + (lookY - (this.eyeLookY ?? 0)) * ease;
+
+    Sprite.draw(feetX, feetY, orientation, dirSign, frame, rightArm, leftArm, aiming ? aimed : null,
+      this.eyeLookX, this.eyeLookY, breath);
   }
 }
 
@@ -768,9 +890,10 @@ const WALL_SLIDE_POSE = {
 
 // Neutral standing pose — what the curl-in animation blends FROM (and
 // the stand-back-up animation blends BACK TO).
+// (His left arm hanging: see LEFT_ARM_HANG.)
 const BALL_MORPH_STANDING_POSE = {
   leftBootX: 111, leftBootY: 241, leftBootAngle: 0,
-  leftArmX: 136, leftArmY: 9, leftArmAngle: 0,
+  leftArmX: 136, leftArmY: 9, leftArmAngle: LEFT_ARM_HANG,
   bodyY: 115,
   rightBootX: -142, rightBootY: 241, rightBootAngle: 0,
   rightArmX: -186, rightArmY: -14, rightArmAngle: 0,

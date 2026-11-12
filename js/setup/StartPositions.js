@@ -89,6 +89,30 @@ const PLACES = {
     return { x: start.x, y: start.y, interior: state.mazePlanet.interior };
   },
 
+  ship() {
+    if (!state.spaceship) return null;
+    const pad = state.spaceship.interior.getPortalPosition();
+    return { x: pad.x, y: pad.y, interior: state.spaceship.interior };
+  },
+
+  zuma() {
+    const planet = state.zumaPlanet;
+    if (!planet) return null;
+    // Just above its surface, a little left of the beam in on top.
+    const a = -Math.PI / 2 - 0.3;
+    const dist = planet.radius + constants.PLAYER_RADIUS + 20;
+    return { x: planet.pos.x + Math.cos(a) * dist, y: planet.pos.y + Math.sin(a) * dist };
+  },
+
+  tetris() {
+    const planet = state.tetrisPlanet;
+    if (!planet) return null;
+    // Just above its surface, a little left of the beam in on top.
+    const a = -Math.PI / 2 - 0.3;
+    const dist = planet.radius + constants.PLAYER_RADIUS + 20;
+    return { x: planet.pos.x + Math.cos(a) * dist, y: planet.pos.y + Math.sin(a) * dist };
+  },
+
   expressway() {
     if (!expresswayEntry) return null;
     // Standing a little round from the cannon, not in it.
@@ -114,6 +138,9 @@ const TELEPORT_PLACES = [
   { key: 'pinball', label: 'PINBALL TABLE' },
   { key: 'expressway', label: 'EXPRESSWAY' },
   { key: 'maze', label: 'MAZE PLANET' },
+  { key: 'ship', label: 'SPACESHIP' },
+  { key: 'tetris', label: 'TETRIS PLANET' },
+  { key: 'zuma', label: 'ZUMA PLANET' },
 ];
 
 const StartPositions = {};

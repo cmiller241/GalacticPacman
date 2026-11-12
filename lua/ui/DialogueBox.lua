@@ -257,4 +257,44 @@ function DialogueBox.draw(pageText, hasMore)
   end
 end
 
+-- A question with options to pick from (see lua/ui/Conversation.lua):
+-- the question on the first line, the options side by side on the line
+-- under it, and a bobbing arrow beside the one that's picked (drawn in
+-- gold; the others dimmer).
+local CHOICE_INDENT = 40  -- screen px the options sit in from the text's left edge (room for the arrow)
+local CHOICE_GAP = 70     -- screen px between one option and the next
+local CHOICE_ARROW = 12   -- the arrow's size
+local COLOR_CHOSEN = { 1, 0.84, 0.35, 1 }
+local COLOR_NOT_CHOSEN = { 1, 1, 1, 0.6 }
+
+function DialogueBox.drawChoice(question, labels, selected)
+  if not state.textboxTexture then return end
+  DialogueBox.draw(question, false)
+
+  local boxX, boxY = DialogueBox.computeBoxRect()
+  local font = DialogueBox.getFont()
+  local prevFont = love.graphics.getFont()
+  love.graphics.setFont(font)
+
+  local x = boxX + TEXTBOX_TEXT_PAD_X + CHOICE_INDENT
+  local y = boxY + TEXTBOX_TEXT_PAD_Y + font:getHeight()
+  for i, label in ipairs(labels) do
+    local chosen = i == selected
+    if chosen then
+      local nudge = math.sin(love.timer.getTime() * 6) * 3
+      local ax, ay = x - 14 + nudge, y + font:getHeight() / 2
+      love.graphics.setColor(COLOR_CHOSEN)
+      love.graphics.polygon("fill", ax, ay, ax - CHOICE_ARROW, ay - CHOICE_ARROW * 0.8, ax - CHOICE_ARROW, ay + CHOICE_ARROW * 0.8)
+    end
+    love.graphics.setColor(0, 0, 0, 0.65)
+    love.graphics.print(label, x + TEXTBOX_SHADOW_OFFSET, y + TEXTBOX_SHADOW_OFFSET)
+    love.graphics.setColor(chosen and COLOR_CHOSEN or COLOR_NOT_CHOSEN)
+    love.graphics.print(label, x, y)
+    x = x + font:getWidth(label) + CHOICE_GAP
+  end
+
+  love.graphics.setFont(prevFont)
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
 return DialogueBox

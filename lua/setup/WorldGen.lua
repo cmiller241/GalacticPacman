@@ -588,6 +588,14 @@ function worldGen.cellIntersectsLandmark(col, row)
   local x1 = x0 + worldGen.CELL_SIZE
   local y1 = y0 + worldGen.CELL_SIZE
   for _, p in ipairs(state.planetoids) do
+    -- (A landmark can keep whole cells clear too: its own and the ones
+    -- within spawnExclusionCells of it — the Zuma planet, so nothing's
+    -- made anywhere near its game. See ZumaPlanet.lua.)
+    if p.spawnExclusionCells then
+      local pc = worldGen.cellCoordFor(p.pos.x, p.pos.y)
+      local n = p.spawnExclusionCells
+      if math.abs(col - pc.col) <= n and math.abs(row - pc.row) <= n then return true end
+    end
     if p.isSpawnExclusion then
       local hw, hh = p.halfWidth or p.radius, p.halfHeight or p.radius
       -- A turning landmark sweeps a whole circle, corner to corner.

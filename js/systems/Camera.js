@@ -20,6 +20,9 @@ const Camera = {};
 Camera.ZOOM_MIN = 0.6;
 Camera.ZOOM_MAX = 2.5;
 const ZOOM_MIN = Camera.ZOOM_MIN, ZOOM_MAX = Camera.ZOOM_MAX;
+// An interior that frames itself can ask to see more than the player can
+// zoom out to on his own (the Tetris planet's whole field, the ship flying).
+const FRAMED_ZOOM_MIN = 0.2;
 const ZOOM_STEP_PER_FRAME = 0.02;
 // Zoom easing (zoom windows, cannon shots): fraction of the remaining
 // distance to the target zoom covered each frame, and how close counts
@@ -130,7 +133,7 @@ Camera.update = function (dt) {
   }
 
   if (state.zoomTarget != null && !CameraDirector.isActive()) {
-    const target = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, state.zoomTarget));
+    const target = Math.min(ZOOM_MAX, Math.max(framing ? FRAMED_ZOOM_MIN : ZOOM_MIN, state.zoomTarget));
     state.zoom += (target - state.zoom) * ZOOM_WINDOW_EASE_PER_FRAME;
     if (Math.abs(target - state.zoom) < ZOOM_WINDOW_SNAP) {
       state.zoom = target;

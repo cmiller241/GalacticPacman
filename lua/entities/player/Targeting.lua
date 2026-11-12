@@ -16,6 +16,7 @@ local Player = {}
 function Player:trySelectPullTarget(explicitTarget)
   if self.mode ~= "space" or self.isBall or self.isTeleporting or self.isDying then return end
   if self:isCannonRiding() then return end
+  if self.inInterior then return end -- (nothing to pull to from inside the spaceship)
 
   local best = nil
   if explicitTarget then
@@ -129,15 +130,22 @@ end
 -- pull beam (lua/effects/PullBeam.lua). Falls back to his own position
 -- before he has ever been drawn.
 function Player:getMuzzlePosition()
-  -- Exact muzzle pixel within leftarm.png (602x256) — NOT the old
-  -- fixed-distance-along-the-aim-angle approximation (blasterMuzzleLength),
-  -- which only ever put the origin somewhere along the right ray, not
-  -- necessarily where the blaster's own muzzle actually is once the arm's
-  -- real rotation/scale/mirroring are accounted for.
-  local MUZZLE_PX_X, MUZZLE_PX_Y = 530, 120
+  -- (Drawn as the posable rig — see Rendering.lua — shots come from the
+  -- end of his left arm's fist: this pixel of img/bob-rig-leftarm.png.)
+  local MUZZLE_PX_X, MUZZLE_PX_Y = 476, 139.8
 
   local originX, originY
-  if self.aimShoulderPos then
+  if self.aimShoulderPos and self.spriteMuzzleX then
+    -- Drawn from the sprite sheets (see Rendering.lua's drawSprite): the
+    -- muzzle's offset from the shoulder was worked out as he was drawn.
+    -- (The shoulder carried along by his move since, as below.)
+    local sx, sy = self.aimShoulderPos.x, self.aimShoulderPos.y
+    if self.aimAnchorPos then
+      sx = sx + (self.pos.x - self.aimAnchorPos.x)
+      sy = sy + (self.pos.y - self.aimAnchorPos.y)
+    end
+    originX, originY = sx + self.spriteMuzzleX, sy + self.spriteMuzzleY
+  elseif self.aimShoulderPos then
     local cfg = self.bodyPartsConfig
     local s = self.bodyScale
     local dirSign = self.facingDirection < 0 and -1 or 1
@@ -201,6 +209,7 @@ function Player:shootFireball()
   if self.isBall or self.isTeleporting or self.isDying then return end
   if self:isCannonRiding() then return end
   if state.vatsActive then return end -- in V.A.T.S. he only picks a target and pulls to it (see main.lua's own V.A.T.S. rules)
+  if self.inInterior then return end -- (no shooting inside the spaceship: the shots would fly out through its walls)
 
   local now = love.timer.getTime()
   self.lastShotTime = self.lastShotTime or 0
@@ -229,6 +238,7 @@ function Player:shootIceBolt()
   if self.isBall or self.isTeleporting or self.isDying then return end
   if self:isCannonRiding() then return end
   if state.vatsActive then return end
+  if self.inInterior then return end -- (see shootFireball)
 
   local now = love.timer.getTime()
   if now - (self.lastShotTime or 0) < ICE_FIRE_COOLDOWN then return end

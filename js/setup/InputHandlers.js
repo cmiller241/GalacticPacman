@@ -167,6 +167,13 @@ function attachInputHandlers() {
       state.player.exitBallMode();
     }
 
+    // The arrows move the cursor while a textbox is asking a question
+    // (see WorldObjects.moveChoice).
+    if (state.dialogueActive && !isrepeat) {
+      if (key === 'ArrowLeft' || key === 'ArrowUp') WorldObjects.moveChoice(-1);
+      if (key === 'ArrowRight' || key === 'ArrowDown') WorldObjects.moveChoice(1);
+    }
+
     // Interact: NPCs, levers, cranks, signs, beams (see WorldObjects.interact).
     if (key === 'Enter' && !riding) WorldObjects.interact(state.player);
 

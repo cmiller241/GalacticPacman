@@ -67,12 +67,15 @@ local Profiler = require("lua.debug.Profiler")
 --                 tunnel (curl into a ball to roll through it)
 --   "pinball"     on the pinball table's plunger, already a ball
 --   "maze"        at the maze planet's start, already a ball
+--   "ship"        inside Bob's spaceship, at its beam pad
+--   "tetris"      on top of the Tetris planet, beside its beam in
+--   "zuma"        on top of the Zuma planet, beside its beam in
 --   "expressway"  on the expressway's entry planet, beside its cannon
 --                 (needs World.SHOW.expressway — see lua/levels/World.lua)
 --
 -- If the planet you pick is switched off, he starts at the shelter and
 -- the console says why. T in game opens a list of the same places.
-local START_AT = "fisherman"
+local START_AT = "tetris"
 local TILED_START_COLUMN = 146 -- counting from 0, like Tiled (146: over the middle of Level2's cracked, poundable column)
 
 local collisionSystem
@@ -292,8 +295,34 @@ local function updateTimeScale(dt)
   state.timeScale = state.vatsMultiplier * frameNorm * Cannon.timeFactor()
 end
 
--- Drifting planetoids move and bounce off the edges of the world.
+-- A drifting planetoid that's come up against a landmark's keep-out ring
+-- (keepOutRadius round it — the Zuma planet's, round its whole game) is
+-- put back on the ring and bounced off it, the way it bounces off the
+-- world's edges.
+local function bounceOffKeepOuts(p, keepOuts)
+  for _, zone in ipairs(keepOuts) do
+    local dx, dy = p.pos.x - zone.pos.x, p.pos.y - zone.pos.y
+    local limit = zone.keepOutRadius + p.radius
+    local d2 = dx * dx + dy * dy
+    if d2 < limit * limit and d2 > 0 then
+      local d = math.sqrt(d2)
+      local nx, ny = dx / d, dy / d
+      p.pos.x, p.pos.y = zone.pos.x + nx * limit, zone.pos.y + ny * limit
+      local inward = p.vel.x * nx + p.vel.y * ny
+      if inward < 0 then
+        p.vel.x, p.vel.y = p.vel.x - 2 * inward * nx, p.vel.y - 2 * inward * ny
+      end
+    end
+  end
+end
+
+-- Drifting planetoids move and bounce off the edges of the world (and
+-- off any landmark's keep-out ring).
 local function updatePlanetoidsPhysics()
+  local keepOuts = {}
+  for _, p in ipairs(state.planetoids) do
+    if p.keepOutRadius then keepOuts[#keepOuts + 1] = p end
+  end
   for _, p in ipairs(state.planetoids) do
     if p.recalling then
       -- Rewinding: Recall.update moves it (see lua/systems/Recall.lua).
@@ -318,6 +347,7 @@ local function updatePlanetoidsPhysics()
         p.pos.y = state.sceneHeight - p.radius
         p.vel.y = -p.vel.y
       end
+      if #keepOuts > 0 then bounceOffKeepOuts(p, keepOuts) end
     end
   end
 end
@@ -368,10 +398,16 @@ local function movePlayer(player)
     or player.inCannon or player.cannonFlight
   -- Standing, he can't walk or run into a gap lower than he is tall — a
   -- ball tunnel (see TiledTerrain.lua's Level:headroomAt) — unless he's
-  -- already somewhere that low.
+  -- already somewhere that low. (Not while he's running round a wall
+  -- climb's curve: the headroom check looks for his head straight up the
+  -- screen, and on the wall it's off to the side — near the top, the
+  -- ceiling cap above him read as no room, and he ran on the spot instead
+  -- of round onto the ceiling. The curve keeps him clear itself.)
   local level = state.tiledLevels and state.tiledLevels[1]
   local px, py, parc = player.pos.x, player.pos.y, player.surfaceArcPos
-  local hadRoom = level and player.onSurface and not player.isBall and level:headroomAt(px, py, player.radius)
+  local onWallClimb = player.currentPlanet and player.currentPlanet.isWallClimb
+  local hadRoom = level and player.onSurface and not player.isBall and not onWallClimb
+    and level:headroomAt(px, py, player.radius)
   player:move(noSteering and {} or state.keys)
   if hadRoom and player.onSurface and not player.isBall and not level:headroomAt(player.pos.x, player.pos.y, player.radius) then
     player.pos.x, player.pos.y, player.surfaceArcPos = px, py, parc
@@ -776,6 +812,14 @@ local function drawActors()
   -- behind the player.
   PortalGun.draw()
 
+  -- His blaster's shots — fireballs, ice bolts, the water spray and the
+  -- pull beam — behind him, so they come out from behind the blaster's
+  -- barrel (it's drawn side-on, the muzzle out of sight: see
+  -- lua/entities/player/Sprite.lua).
+  WorldObjects.draw("shots")
+  WaterSystem.drawSpray()
+  PullBeam.draw()
+
   -- (Split across the two portals while he's going through one.)
   Cannon.drawFlightTrail(state.player)
   PortalGun.drawPlayer(state.player)
@@ -787,7 +831,7 @@ local function drawActors()
     GrassBlades.draw(level.grassBlades, true)
   end
 
-  -- Water and spray, over him, so he looks like he's in it when swimming.
+  -- Water, over him, so he looks like he's in it when swimming.
   WaterSystem.draw()
 
   DebugDraw.collisionShapes()
@@ -815,10 +859,7 @@ local function drawForeground()
     state.spaceShelter:drawDoor()
   end
 
-  PullBeam.draw()
-
-  -- Fireballs, ice bolts, particles, element pieces, explosions,
-  -- wall-jump rings.
+  -- Particles, element pieces, explosions, wall-jump rings.
   WorldObjects.draw("effects")
 
   if state.skyDomePlanet then
@@ -849,10 +890,17 @@ local function drawInterface()
 
   -- Blaster selector, lower-left (see lua/ui/WeaponBar.lua). Hidden
   -- while a conversation textbox is up, so the box has the bottom of the
-  -- screen to itself.
-  if not state.dialogueActive then
+  -- screen to itself, and while he's at a game planet's controls (see
+  -- lua/interiors/ControlRoom.lua), so it doesn't cover the game.
+  local atControls = state.player and state.player.inInterior and state.player.inInterior.controlling
+  if not state.dialogueActive and not atControls then
     WeaponBar.draw()
   end
+
+  -- Whatever he's inside may put something on the screen too (the Tetris
+  -- planet's next shape: see ControlRoom:drawHud).
+  local inside = state.player and state.player.inInterior
+  if inside and inside.drawHud then inside:drawHud() end
 
   -- Conversation textboxes — after the minimap, so the box covers it.
   WorldObjects.drawDialogues()

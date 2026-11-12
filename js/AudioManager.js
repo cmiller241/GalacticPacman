@@ -64,6 +64,12 @@ class AudioManager {
     // Curling into a ball and back (made by tools/gen-morph-sounds.mjs).
     this.morphBallAudio = love.audio.newSource('sounds/morph-ball.wav', 'static');
     this.morphUnballAudio = love.audio.newSource('sounds/morph-unball.wav', 'static');
+    // A Tetris planet row clearing (made by tools/gen-tetris-sounds.mjs).
+    this.tetrisClearAudio = love.audio.newSource('sounds/tetris-clear.wav', 'static');
+    // The Zuma planet: balls popping and the cannon firing (made by
+    // tools/gen-zuma-sounds.mjs).
+    this.zumaPopAudio = love.audio.newSource('sounds/zuma-pop.wav', 'static');
+    this.zumaShootAudio = love.audio.newSource('sounds/zuma-shoot.wav', 'static');
 
     this.sprayAudio = love.audio.newSource(SPRAY_PATH, 'static');
     this.sprayAudio.setLooping(true);
@@ -74,7 +80,8 @@ class AudioManager {
       this.eatDotAudio0, this.eatDotAudio1, this.deathAudio, this.jumpAudio,
       this.jumpSmallAudio, this.bangLarge, this.bangMedium, this.bangSmall,
       this.goombaStompAudio, this.fireballAudio, this.groundPoundAudio,
-      this.morphBallAudio, this.morphUnballAudio,
+      this.morphBallAudio, this.morphUnballAudio, this.tetrisClearAudio,
+      this.zumaPopAudio, this.zumaShootAudio,
     ];
     for (const source of allSources) source.setVolume(0.5);
 
@@ -125,6 +132,23 @@ class AudioManager {
   // exitBallMode).
   playMorphBall() { cloneAndPlay(this.morphBallAudio); }
   playMorphUnball() { cloneAndPlay(this.morphUnballAudio); }
+
+  // chain: 1 for balls a shot cleared, 2 and up for each clear that set
+  // off another; each step up is pitched higher.
+  playZumaPop(chain = 1) {
+    const instance = this.zumaPopAudio.clone();
+    instance.setPitch(1 + 0.15 * (chain - 1));
+    instance.play();
+  }
+
+  playZumaShoot() { cloneAndPlay(this.zumaShootAudio); }
+
+  // rows: how many rows cleared at once; each one more pitches it up a step.
+  playTetrisClear(rows = 1) {
+    const instance = this.tetrisClearAudio.clone();
+    instance.setPitch(1 + 0.12 * (rows - 1));
+    instance.play();
+  }
 
   playBang(size, position) {
     let audioSource;
