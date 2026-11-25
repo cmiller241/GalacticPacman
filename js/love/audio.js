@@ -2,12 +2,18 @@
 //
 // love.audio on top of WebAudio. Sounds are decoded up front (see
 // love/index.js's preloading), so newSource() is synchronous like LÖVE's.
+// Music is the exception: it loads in the background after the game
+// starts, so a source made for it early has no sound yet. It looks for
+// its file again whenever it's played, and play() does nothing until the
+// file has arrived (AudioManager.js calls play() every frame until the
+// music is playing, so it starts as soon as it can).
 // Browsers keep audio suspended until the first click/key press; the
 // context is resumed on the first input event.
 
 let ctx = null;
 let master = null;
 let bufferLookup = null;
+let isStillLoading = null; // (path) -> true while its file is loading in the background
 const playing = new Set();
 
 function getContext() {
@@ -20,8 +26,9 @@ function getContext() {
 }
 
 class Source {
-  constructor(buffer, type = 'static') {
+  constructor(buffer, type = 'static', path = null) {
     this.buffer = buffer;
+    this.path = path; // to find its file later, if it wasn't loaded yet
     this.sourceType = type;
     this.volume = 1;
     this.pitch = 1;
@@ -34,12 +41,13 @@ class Source {
   }
   type() { return 'Source'; }
   clone() {
-    const s = new Source(this.buffer, this.sourceType);
+    const s = new Source(this.buffer, this.sourceType, this.path);
     s.volume = this.volume; s.pitch = this.pitch; s.looping = this.looping;
     return s;
   }
   play() {
     if (this.isPlaying()) return true;
+    if (!this.buffer && this.path && bufferLookup) this.buffer = bufferLookup(this.path) || null;
     if (!this.buffer) return false;
     const c = getContext();
     const node = c.createBufferSource();
@@ -108,8 +116,10 @@ class Source {
 const audio = {
   newSource(path, type) {
     const buf = bufferLookup && bufferLookup(path);
-    if (!buf) console.warn(`love.audio.newSource: "${path}" was not preloaded`);
-    return new Source(buf || null, type);
+    if (!buf && !(isStillLoading && isStillLoading(path))) {
+      console.warn(`love.audio.newSource: "${path}" was not preloaded`);
+    }
+    return new Source(buf || null, type, path);
   },
   setVolume(v) { getContext(); master.gain.value = v; },
   getVolume() { getContext(); return master.gain.value; },
@@ -129,7 +139,7 @@ const audio = {
   },
   getActiveSourceCount() { return playing.size; },
   _context: getContext,
-  _setBufferLookup(fn) { bufferLookup = fn; },
+  _setBufferLookup(lookup, stillLoading = null) { bufferLookup = lookup; isStillLoading = stillLoading; },
   _resume() { const c = getContext(); if (c.state === 'suspended') c.resume(); },
 };
 

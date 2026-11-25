@@ -1,0 +1,17 @@
+{
+  "name": "satankong",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild js/game.js --bundle --sourcemap --outfile=dist/bundle.js",
+    "watch": "esbuild js/game.js --bundle --sourcemap --outfile=dist/bundle.js --watch",
+    "deploy": "sh tools/deploy.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "esbuild": "^0.27.3"
+  }
+}

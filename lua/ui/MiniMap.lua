@@ -143,12 +143,30 @@ function Minimap:draw()
   if state.player and state.player.pos then cx, cy = state.player.pos.x, state.player.pos.y end
   self.viewX, self.viewY = cx - self.viewSpan / 2, cy - self.viewSpan / 2
 
+  self:drawWorld(x0, y0, { clip = true, showPlayer = true })
+  self:drawFrame(x0, y0)
+end
+
+-- Everything inside the minimap's frame: the background, the grid, the
+-- belt, the sun, the planets and the cannon routes (and the player, with
+-- options.showPlayer), for the window self.viewX/viewY/viewSpan, drawn
+-- self.size across with its top-left at (x0, y0). options.clip cuts it
+-- off at the frame (a screen-space scissor, so only when nothing's
+-- scaling the drawing; lua/debug/MapExport.lua draws it scaled up into
+-- an image of exactly this size, which cuts it off anyway).
+function Minimap:drawWorld(x0, y0, options)
+  options = options or {}
+  local worldGen = require("lua.setup.WorldGen")
+  local cellSize = worldGen.CELL_SIZE or 3000
+
   love.graphics.setColor(self.backgroundColor)
   love.graphics.rectangle("fill", x0, y0, self.size, self.size)
 
   -- Everything in the world is cut off at the minimap's own frame.
   love.graphics.push("all")
-  love.graphics.setScissor(x0, y0, self.size, self.size)
+  if options.clip then
+    love.graphics.setScissor(x0, y0, self.size, self.size)
+  end
 
   -- The world's own cell boundaries, scrolling with it.
   love.graphics.setColor(self.gridColor)
@@ -238,13 +256,16 @@ function Minimap:draw()
     end
   end
 
-  if state.player and state.player.pos then
+  if options.showPlayer and state.player and state.player.pos then
     local px, py = self:worldToMapPoint(state.player.pos.x, state.player.pos.y, x0, y0)
     self:drawGlowDot(px, py, self.playerRadius, self.playerColor, self.playerGlowColor)
   end
 
   love.graphics.pop()
+end
 
+-- The frame round it: its border, corner brackets and label.
+function Minimap:drawFrame(x0, y0)
   love.graphics.setColor(self.borderColor)
   love.graphics.setLineWidth(1.5)
   love.graphics.rectangle("line", x0, y0, self.size, self.size)

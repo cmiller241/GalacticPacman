@@ -1,0 +1,103 @@
+/* No browser touch gestures anywhere on the page — no double-tap zoom, no
+   pinch zoom, no scrolling. (iPhones ignore the viewport's "no zoom"
+   setting, and don't reliably pass touch-action down to child elements,
+   so it's set on everything. See also blockZoomGestures in
+   js/input/Controls.js.) */
+html, body, body * {
+    touch-action: none;
+}
+body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+    /* Same sky as js/world/Starfield.js, for screens without the starfield. */
+    background: linear-gradient(to bottom, rgb(23,33,77), rgb(8,11,28));
+}
+canvas,
+.touch-controls {
+    /* Touches go to the game, not to the browser's scrolling, zooming,
+       text selection, long-press menu or tap highlight. */
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+}
+canvas {
+    display: block;
+}
+
+/* ---- Touch buttons (js/input/Controls.js) ----
+   See-through circles in the planets' pale blue (the influence rings and
+   glow), so the game shows through them. Only shown in touch mode: after
+   a touch, hidden again by any key press. */
+.touch-controls {
+    --btn: 68px;          /* button size */
+    --gap: 14px;          /* space between ◀ and ▶ */
+    --edge: 22px;         /* distance from the screen edges */
+    --ink: 173, 216, 230; /* pale blue, as rgb parts */
+    display: none;
+    position: fixed;
+    inset: 0;
+    pointer-events: none; /* only the buttons themselves take touches */
+}
+body.touch-mode .touch-controls {
+    display: block;
+}
+.touch-pad,
+.touch-jump {
+    position: absolute;
+    /* Clear of notches, rounded corners and the home bar. */
+    bottom: calc(var(--edge) + env(safe-area-inset-bottom));
+    pointer-events: auto;
+}
+.touch-pad {
+    left: calc(var(--edge) + env(safe-area-inset-left));
+    display: flex;
+    gap: var(--gap);
+    /* The pad's own area (gap included) all counts, so a thumb sliding
+       between the two buttons never falls through. */
+    padding: 10px;
+    margin: -10px;
+}
+.touch-btn.touch-jump {
+    right: calc(var(--edge) + env(safe-area-inset-right));
+    /* A little bigger: it's the button pressed hardest and fastest. */
+    width: calc(var(--btn) * 1.15);
+    height: calc(var(--btn) * 1.15);
+}
+.touch-btn {
+    box-sizing: border-box;
+    width: var(--btn);
+    height: var(--btn);
+    border-radius: 50%;
+    border: 2px solid rgba(var(--ink), 0.55);
+    background: rgba(var(--ink), 0.10);
+    color: rgba(255, 255, 255, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.75;
+    transition: transform 70ms ease-out, background 70ms ease-out, opacity 70ms ease-out;
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+}
+.touch-btn svg {
+    width: 46%;
+    height: 46%;
+}
+.touch-btn.pressed {
+    opacity: 1;
+    background: rgba(var(--ink), 0.32);
+    border-color: rgba(var(--ink), 0.9);
+    transform: scale(0.93);
+    box-shadow: 0 0 18px rgba(var(--ink), 0.35);
+}
+/* Smaller in portrait, where the screen is narrow. */
+@media (orientation: portrait) {
+    .touch-controls {
+        --btn: 60px;
+        --gap: 12px;
+        --edge: 18px;
+    }
+}

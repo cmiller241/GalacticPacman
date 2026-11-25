@@ -8,6 +8,11 @@
 //
 // Images and sounds are preloaded before love.load() runs, because
 // LÖVE's newImage/newSource are synchronous and the game relies on that.
+// The exception is music (anything in sounds/music/): it's big, slow to
+// decode and never needed in the first moments, so it loads in the
+// background once the game has started. A source made for it before then
+// stays silent and starts the first time it's played after its file
+// arrives (see audio.js).
 
 import graphics, { ImageData } from './graphics.js';
 import audio from './audio.js';
@@ -271,10 +276,19 @@ love.boot = async function boot({ canvas, images: imagePaths = [], sounds: sound
     graphics._init(canvas);
   } catch (e) { showError(e); return; }
 
-  graphics._setAssetLookup((p) => images.get(normalizePath(p)));
-  audio._setBufferLookup((p) => sounds.get(normalizePath(p)));
+  // Music waits until the game's running (see the top of this file).
+  const isMusic = (p) => normalizePath(p).startsWith('sounds/music/');
+  const laterSoundPaths = soundPaths.filter(isMusic);
+  soundPaths = soundPaths.filter((p) => !isMusic(p));
+  const laterSounds = new Set(laterSoundPaths.map(normalizePath));
 
-  // Preload everything in parallel.
+  graphics._setAssetLookup((p) => images.get(normalizePath(p)));
+  audio._setBufferLookup(
+    (p) => sounds.get(normalizePath(p)),
+    (p) => laterSounds.has(normalizePath(p)),
+  );
+
+  // Preload everything else in parallel.
   const total = imagePaths.length + soundPaths.length;
   let done = 0;
   const tick = () => { done++; if (onProgress) onProgress(done, total); };
@@ -294,6 +308,16 @@ love.boot = async function boot({ canvas, images: imagePaths = [], sounds: sound
       }),
     ]);
   } catch (e) { showError(e); return; }
+
+  // Now the music, without holding anything up. (Not awaited: love.load
+  // and the first frames go ahead while it downloads and decodes.)
+  for (const p of laterSoundPaths) {
+    const key = normalizePath(p);
+    loadSound(key)
+      .then((buf) => { sounds.set(key, buf); knownFiles.add(key); })
+      .catch((e) => console.warn(e))
+      .finally(() => laterSounds.delete(key));
+  }
 
   let firstInput = true;
   attach(canvas, love, () => {

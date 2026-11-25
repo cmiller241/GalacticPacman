@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "node tools/gen-asset-list.mjs && esbuild js/main.js --bundle --sourcemap --outfile=dist/bundle.js",
+    "build": "node tools/gen-asset-list.mjs && esbuild js/main.js --bundle --minify --sourcemap --outfile=dist/bundle.js",
     "watch": "node tools/gen-asset-list.mjs && esbuild js/main.js --bundle --sourcemap --outfile=dist/bundle.js --watch",
     "serve": "node tools/serve.mjs",
     "maps": "node tools/tiled-lua-to-js.mjs",

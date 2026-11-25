@@ -90,16 +90,30 @@ local EYE_FOLLOW = 0.5
 -- image space: y down).
 Sprite.ARM_REST_ANGLE = math.atan2(DATA.muzzle.y - DATA.blasterShoulder.y, DATA.muzzle.x - DATA.blasterShoulder.x)
 
+-- Kept soft on purpose: he's flat cartoon line art, and strong gloss and
+-- rim light turned his white suit into grey chrome. (Was ambient 0.42,
+-- diffuse 0.72, specular 0.55, shininess 36, rimLight 0.9.)
 local LIGHTING = {
   shadingStrength = 0.7, -- how much of all this shows: 0 = the plain art, 1 = full lighting
-  ambient = 0.42,        -- brightness with no sunlight on it at all
-  diffuse = 0.72,        -- added where the surface faces the sun full on
-  specular = 0.55,       -- the glossy highlight's strength...
-  shininess = 36,        -- ...and tightness (higher: smaller, sharper)
-  rimLight = 0.9,        -- the reflected light on the edge away from the sun (0: none)...
+  ambient = 0.62,        -- brightness with no sunlight on it at all
+  diffuse = 0.45,        -- added where the surface faces the sun full on
+  specular = 0.15,       -- the glossy highlight's strength...
+  shininess = 20,        -- ...and tightness (higher: smaller, sharper)
+  rimLight = 0.25,       -- the reflected light on the edge away from the sun (0: none)...
   rimWidth = 1.8,        -- ...and how tightly it hugs the edge (higher: thinner)
   sunElevation = 0.5,    -- how much the sun also lights him from the front (0: purely from the side)
 }
+
+-- His ink (the dark navy outline, belt and visor ring) isn't lit at all —
+-- lit, it smeared grey on the sun side — and is drawn in this lighter
+-- slate instead, since the navy vanished against the dark of space. A
+-- pixel counts as ink when none of its channels is brighter than
+-- INK_THRESHOLD and it's bluish (not black or grey); the darkest ink becomes INK_COLOR * INK_DARKEST, the
+-- lightest INK_COLOR itself. INK_RECOLOR = false keeps the original navy.
+local INK_RECOLOR = true
+local INK_THRESHOLD = 0.36
+local INK_COLOR = { 0.24, 0.30, 0.52 } -- #3D4D85
+local INK_DARKEST = 0.6
 
 local images = nil
 local bodyQuads, armQuads = nil, nil
@@ -182,9 +196,21 @@ local function getShader()
     extern float rimLight;
     extern float rimWidth;
     extern float shadingStrength;
+    extern float inkRecolor;
+    extern float inkThreshold;
+    extern vec3 inkColor;
+    extern float inkDarkest;
 
     vec4 effect(vec4 color, Image tex, vec2 uv, vec2 screen) {
       vec4 texel = Texel(tex, uv) * color;
+      // Ink: recolored and left unlit (see INK_RECOLOR).
+      float brightest = max(texel.r, max(texel.g, texel.b));
+      // (Navy only: blue well above red, so the rig head's black pupils
+      // and the blaster's grey barrel are left alone.)
+      if (inkRecolor > 0.5 && brightest < inkThreshold && texel.b - texel.r > 0.08) {
+        float k = brightest / inkThreshold;
+        return vec4(inkColor * (inkDarkest + (1.0 - inkDarkest) * k), texel.a);
+      }
       vec4 nt = Texel(normalMap, uv);
       if (nt.a < 0.01) return texel;
       vec3 n = normalize(nt.rgb * 2.0 - 1.0);
@@ -210,6 +236,10 @@ local function getShader()
   for _, name in ipairs({ "ambient", "diffuse", "specular", "shininess", "rimLight", "rimWidth", "shadingStrength" }) do
     shader:send(name, LIGHTING[name])
   end
+  shader:send("inkRecolor", INK_RECOLOR and 1 or 0)
+  shader:send("inkThreshold", INK_THRESHOLD)
+  shader:send("inkColor", INK_COLOR)
+  shader:send("inkDarkest", INK_DARKEST)
   return shader
 end
 

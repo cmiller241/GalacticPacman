@@ -222,6 +222,17 @@ function love.load()
   -- Pointed at the player from the very first frame (love.update keeps
   -- it current from here on).
   Camera.pointAtPlayer()
+
+  -- `lovec . --export-map`: save a picture of the whole map and quit
+  -- (see lua/debug/MapExport.lua).
+  if firstLoad then
+    for _, a in ipairs(arg or {}) do
+      if a == "--export-map" then
+        require("lua.debug.MapExport").run(love.filesystem.getSource() .. "/img/guides/world_map.png")
+        love.event.quit()
+      end
+    end
+  end
 end
 
 -- =====================================================================

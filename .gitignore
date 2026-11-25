@@ -38,3 +38,7 @@ desktop.ini
 # Songs rendered by the composer (re-exportable from composer/songs/; the
 # game uses the .ogg/.mp3 copies in sounds/music/).
 /composer/exports/*.wav
+
+# --- Secrets ---
+# Deploy credentials (server login). Never commit.
+.env
